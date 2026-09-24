@@ -27,10 +27,13 @@ htmlcov/
 logs/
 *.log
 
-# Data
+# Data (keep the nextjs frontend scaffold json tracked)
 *.csv
 *.json
 !config/*.json
+!frontend/package.json
+!frontend/package-lock.json
+!frontend/tsconfig.json
 
 # Database
 *.db
