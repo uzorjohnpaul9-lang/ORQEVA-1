@@ -1,0 +1,16 @@
+Testing Free tier 3-signal limit...
+
+Signal 1 (AAPL): Can send = True
+  Sent! Count: 1/3
+
+Signal 2 (MSFT): Can send = True
+  Sent! Count: 2/3
+
+Signal 3 (GOOGL): Can send = True
+  Sent! Count: 3/3
+
+Signal 4 (AMZN): Can send = False
+  BLOCKED - Limit reached!
+
+Signal 5 (NVDA): Can send = False
+  BLOCKED - Limit reached!

@@ -1,0 +1,16 @@
+# API-only reverse proxy + automatic HTTPS (frontend stays on Cloudflare Pages).
+# Replace api.yourdomain.com with your real API sub-domain.
+
+api.yourdomain.com {
+    reverse_proxy backend:8001
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+
+    encode gzip zstd
+}

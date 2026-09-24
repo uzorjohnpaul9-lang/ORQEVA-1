@@ -1,0 +1,21 @@
+# Adds HTTPS reverse proxy in front of the backend container.
+# Apply with: docker compose -f deploy/docker-compose.backend.yml -f deploy/docker-compose.proxy.yml up -d
+# Edit deploy/Caddyfile.api first: replace api.yourdomain.com with your real domain.
+services:
+  backend:
+    ports: !reset []   # stop exposing raw :8001 when behind the proxy
+
+  proxy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile.api:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+  caddy-config:

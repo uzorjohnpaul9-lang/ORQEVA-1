@@ -1,0 +1,31 @@
+# Automatic HTTPS via Let's Encrypt. Replace the domain, or for local testing:
+#   caddy run --config deploy/Caddyfile
+#   (uses internal CA; browsers will warn unless you trust it)
+
+yourdomain.com {
+    # Frontend
+    handle /* {
+        reverse_proxy frontend:3000
+    }
+
+    # API + docs
+    handle /api/* {
+        reverse_proxy backend:8001
+    }
+    handle /docs* {
+        reverse_proxy backend:8001
+    }
+    handle /openapi.json {
+        reverse_proxy backend:8001
+    }
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+
+    encode gzip zstd
+}

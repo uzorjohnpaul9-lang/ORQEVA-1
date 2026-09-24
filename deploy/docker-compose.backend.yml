@@ -1,0 +1,50 @@
+# Backend-only stack for the VPS (frontend is served statically by Cloudflare Pages).
+# Usage:
+#   copy your real keys into a .env file on the VPS (values shown = examples)
+#   then:  docker compose -f deploy/docker-compose.backend.yml up -d --build
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: Dockerfile.backend
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      - DEBUG=false
+      - APP_BASE_URL=${APP_BASE_URL:-https://orqeva.pages.dev}
+      - CORS_ORIGINS=["https://orqeva.pages.dev","https://f46b0780.orqeva.pages.dev","https://localhost:3000"]
+      # ---- Supabase (modern keys) ----
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_PUBLISHABLE_KEY=${SUPABASE_PUBLISHABLE_KEY}
+      - SUPABASE_SECRET_KEY=${SUPABASE_SECRET_KEY}
+      # ---- App secrets (generate fresh on the VPS, never reuse local dev values blindly) ----
+      - SECRET_KEY=${SECRET_KEY}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@demo.com}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      # ---- Market data ----
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY}
+      - ALPACA_BASE_URL=${ALPACA_BASE_URL:-https://paper-api.alpaca.markets}
+      - TWELVE_DATA_API_KEY=${TWELVE_DATA_API_KEY}
+      # ---- Engine scheduler (free Twelve Data tier = 800 req/day -> scan hourly) ----
+      - SCAN_ENABLED=${SCAN_ENABLED:-1}
+      - SCAN_INTERVAL_MINUTES=${SCAN_INTERVAL_MINUTES:-60}
+      - SCAN_COOLDOWN_HOURS=${SCAN_COOLDOWN_HOURS:-4}
+      # ---- Auto-trading is OFF until Phase 4 ----
+      - TRADING_ENABLED=${TRADING_ENABLED:-false}
+      # ---- Optional: Telegram + email (leave empty to disable) ----
+      - TELEGRAM_BOT_TOKEN_FREE=${TELEGRAM_BOT_TOKEN_FREE:-}
+      - TELEGRAM_BOT_TOKEN_PREMIUM=${TELEGRAM_BOT_TOKEN_PREMIUM:-}
+      - TELEGRAM_BOT_TOKEN_VIP=${TELEGRAM_BOT_TOKEN_VIP:-}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM=${SMTP_FROM:-ORQEVA <no-reply@orqeva.com>}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,urllib.request;urllib.request.urlopen('http://127.0.0.1:8001/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

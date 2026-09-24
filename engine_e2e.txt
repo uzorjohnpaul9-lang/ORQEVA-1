@@ -1,0 +1,22 @@
+Forex market open: True
+Forex symbols: ['EUR/USD', 'GBP/USD', 'USD/JPY', 'USD/CHF', 'AUD/USD', 'USD/CAD', 'NZD/USD']
+FX EUR/USD: None
+FX GBP/USD: None
+FX USD/JPY: None
+FX USD/CHF: None
+FX AUD/USD: None
+FX USD/CAD: None
+FX NZD/USD: None
+
+Forex run_cycle: 0 signals
+
+Crypto market open: True
+CR BTC/USD: None
+CR ETH/USD: None
+CR SOL/USD: None
+CR BNB/USD: None
+CR XRP/USD: None
+CR ADA/USD: None
+CR DOGE/USD: None
+CR AVAX/USD: None
+Crypto run_cycle: 0 signals

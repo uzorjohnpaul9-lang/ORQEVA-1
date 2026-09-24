@@ -1,0 +1,64 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    environment:
+      - SECRET_KEY=${SECRET_KEY:?set a strong SECRET_KEY in .env}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      - SUPABASE_URL=${SUPABASE_URL:?set SUPABASE_URL in .env}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:?set SUPABASE_SERVICE_KEY in .env}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY:-}
+      - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET:-}
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@orqeva.com}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM=${SMTP_FROM:-ORQEVA <no-reply@orqeva.com>}
+      - APP_BASE_URL=${APP_BASE_URL:-http://localhost:3000}
+      - TELEGRAM_BOT_TOKEN_FREE=${TELEGRAM_BOT_TOKEN_FREE:-}
+      - TELEGRAM_BOT_TOKEN_PREMIUM=${TELEGRAM_BOT_TOKEN_PREMIUM:-}
+      - TELEGRAM_BOT_TOKEN_VIP=${TELEGRAM_BOT_TOKEN_VIP:-}
+      - TWELVEDATA_API_KEY=${TWELVEDATA_API_KEY:-}
+      - CORS_ORIGINS=${CORS_ORIGINS:-["http://localhost:3000"]}
+      - DEBUG=false
+    volumes:
+      - db-data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8001/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://backend:8001}
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  proxy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - backend
+      - frontend
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  caddy-data:
+  caddy-config:

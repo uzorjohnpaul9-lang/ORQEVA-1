@@ -1,0 +1,20 @@
+
+AAPL: $316.83 | RSI:37.5 | MACD:-318.3368 | Trend:down
+  Bollinger: 290.88 - 316.04 - 341.20
+  No signal
+
+NVDA: $217.56 | RSI:71.9 | MACD:-212.5278 | Trend:up
+  Bollinger: 190.08 - 212.38 - 234.68
+  SIGNAL: SELL (55.0%) - RSI overbought (72) + MACD bearish + -3.4% 5d momentum
+
+TSLA: $351.12 | RSI:76.6 | MACD:-341.0001 | Trend:up
+  Bollinger: 297.53 - 324.38 - 351.23
+  SIGNAL: SELL (65.0%) - RSI overbought (77) + MACD bearish + Near upper Bollinger
+
+META: $546.03 | RSI:52.3 | MACD:-595.3063 | Trend:down
+  Bollinger: 543.11 - 581.76 - 620.41
+  No signal
+
+AMD: $466.42 | RSI:45.4 | MACD:-491.9740 | Trend:up
+  Bollinger: 438.87 - 487.06 - 535.26
+  No signal

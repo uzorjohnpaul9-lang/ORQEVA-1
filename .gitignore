@@ -1,0 +1,41 @@
+# Environment
+.env
+.env.local
+.env.production
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Logs
+logs/
+*.log
+
+# Data
+*.csv
+*.json
+!config/*.json
+
+# Database
+*.db
+*.sqlite3
+
+# Security
+*.pem
+*.key

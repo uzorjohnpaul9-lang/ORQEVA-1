@@ -1,0 +1,7 @@
+RSI: 100.0
+MACD: {'macd': 3.5, 'signal': 112.5, 'histogram': -109.0}
+Bollinger: {'upper': 115.5162812973354, 'middle': 109.75, 'lower': 103.9837187026646}
+Result: {'direction': 'SELL', 'confidence': 0.65, 'reasons': ['RSI overbought (100)', 'MACD bearish', 'Near upper Bollinger']}
+Price: 114.5
+Bollinger lower: 103.9837187026646
+Bollinger upper: 115.5162812973354

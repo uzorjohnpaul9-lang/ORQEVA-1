@@ -1,0 +1,4 @@
+Testing forex data...
+EUR/USD data: 30 bars
+Current: 1.16834
+Signal: SELL @ 1.16834 (65.0%)

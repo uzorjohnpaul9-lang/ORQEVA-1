@@ -1,0 +1,23 @@
+API key set: True
+Universe size: 50
+Can scan: True — OK
+
+Running discovery scan...
+Found 8 coins:
+
+1. BTC/USD — $71,734.92 | RSI=82 | 5d=+13.7% | Score=75% | BUY
+   +13.7% 5d momentum, +12.1% 10d momentum, RSI extreme overbought (82)
+2. ETH/USD — $2,279.05 | RSI=88 | 5d=+21.1% | Score=75% | BUY
+   +21.1% 5d momentum, +21.7% 10d momentum, RSI extreme overbought (88)
+3. SOL/USD — $86.48 | RSI=86 | 5d=+14.8% | Score=75% | BUY
+   +14.8% 5d momentum, +13.8% 10d momentum, RSI extreme overbought (86)
+4. XRP/USD — $1.23 | RSI=78 | 5d=+22.6% | Score=55% | BUY
+   +22.6% 5d momentum, +21.5% 10d momentum, MACD divergence (bullish)
+5. DOGE/USD — $0.078040 | RSI=76 | 5d=+12.1% | Score=55% | BUY
+   +12.1% 5d momentum, +12.0% 10d momentum, MACD divergence (bullish)
+6. BNB/USD — $642.80 | RSI=79 | 5d=+5.8% | Score=40% | BUY
+   +5.8% 5d momentum, MACD divergence (bullish), Near upper Bollinger (breakout)
+7. AVAX/USD — $6.95 | RSI=71 | 5d=+9.8% | Score=40% | BUY
+   +9.8% 5d momentum, MACD divergence (bullish), Near upper Bollinger (breakout)
+8. ADA/USD — $0.194100 | RSI=42 | 5d=+10.0% | Score=30% | BUY
+   +10.0% 5d momentum, MACD divergence (bullish)
