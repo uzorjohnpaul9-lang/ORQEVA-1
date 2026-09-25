@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Card, CardHeader, CardTitle, StatCard } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -10,6 +9,7 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useRouter } from "next/navigation";
 import { BillingAdmin } from "@/components/admin/BillingAdmin";
+import { AdminCard, AdminCardHeader, AdminCardTitle, AdminStatCard } from "@/components/admin/AdminCard";
 import { clsx } from "clsx";
 
 interface AdminUser {
@@ -74,21 +74,44 @@ export default function AdminPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className="text-2xl font-bold">Admin</h1>
-        <div className="flex gap-1.5">
-          {TABS.map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={clsx(
-                "px-3 py-1.5 rounded-lg text-sm font-medium transition-colors",
-                tab === t ? "bg-green text-bg-primary" : "bg-bg-tertiary text-text-secondary hover:text-text-primary"
-              )}
-            >
-              {t}
-            </button>
-          ))}
+      {/* Distinct admin chrome — purple accent, banner header */}
+      <div className="relative overflow-hidden rounded-xl bg-gradient-to-r from-bg-secondary via-bg-tertiary to-bg-secondary border border-purple/30">
+        <div className="absolute inset-y-0 left-0 w-1 bg-purple" />
+        <div className="flex items-center justify-between flex-wrap gap-3 px-5 py-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-purple/20 border border-purple/40 flex items-center justify-center text-purple">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+              </svg>
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-xl font-bold text-purple">Admin Console</h1>
+                <span className="text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded bg-purple/20 text-purple border border-purple/30">
+                  Restricted
+                </span>
+              </div>
+              <p className="text-xs text-text-muted mt-0.5">
+                Signed in as <span className="text-text-secondary font-medium">{user.email}</span> — all actions are audited
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-1.5">
+            {TABS.map((t) => (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                className={clsx(
+                  "px-3 py-1.5 rounded-lg text-sm font-medium transition-colors",
+                  tab === t
+                    ? "bg-purple text-bg-primary"
+                    : "bg-bg-tertiary text-text-secondary hover:text-text-primary hover:bg-bg-hover"
+                )}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -127,25 +150,25 @@ function OverviewTab({ token }: { token: string }) {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-        <StatCard label="Revenue" value={billing ? `$${billing.revenue_usd.toLocaleString()}` : "-"} />
-        <StatCard label="Pending Invoices" value={billing ? `${billing.pending_invoices}` : "-"} />
-        <StatCard label="Active Subs" value={billing ? `${billing.active_subscriptions}` : "-"} />
-        <StatCard label="Scanning" value={system?.scheduler.enabled ? "ON" : "OFF"} />
+        <AdminStatCard label="Revenue" value={billing ? `$${billing.revenue_usd.toLocaleString()}` : "-"} />
+        <AdminStatCard label="Pending Invoices" value={billing ? `${billing.pending_invoices}` : "-"} />
+        <AdminStatCard label="Active Subs" value={billing ? `${billing.active_subscriptions}` : "-"} />
+        <AdminStatCard label="Scanning" value={system?.scheduler.enabled ? "ON" : "OFF"} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card>
-          <CardHeader><CardTitle>Scheduler</CardTitle></CardHeader>
+        <AdminCard>
+          <AdminCardHeader><AdminCardTitle>Scheduler</AdminCardTitle></AdminCardHeader>
           <div className="space-y-2 text-sm">
             <Row k="Interval" v={system ? `${system.scheduler.interval_minutes} min` : "-"} />
             <Row k="Cooldown" v={system ? `${system.scheduler.cooldown_hours} h` : "-"} />
             <Row k="Last scan" v={system?.last_scan?.at ? new Date(system.last_scan.at).toLocaleString() : "never"} />
             <Row k="Signals (last)" v={system?.last_scan?.signals_generated != null ? `${system.last_scan.signals_generated}` : "-"} />
           </div>
-        </Card>
+        </AdminCard>
 
-        <Card>
-          <CardHeader><CardTitle>Integrations</CardTitle></CardHeader>
+        <AdminCard>
+          <AdminCardHeader><AdminCardTitle>Integrations</AdminCardTitle></AdminCardHeader>
           <div className="space-y-2 text-sm">
             <Row k="Trading enabled" v={system?.integrations ? (system.integrations.trading_enabled ? "YES" : "no") : "-"} />
             <Row k="Telegram Free" v={system?.integrations ? (system.integrations.telegram_free_configured ? "OK" : "not set") : "-"} />
@@ -154,10 +177,10 @@ function OverviewTab({ token }: { token: string }) {
             <Row k="SMTP" v={system?.integrations ? (system.integrations.smtp_configured ? "OK" : "not set") : "-"} />
             <Row k="Supabase" v={system?.supabase_reachable != null ? (system.supabase_reachable ? "reachable" : "DOWN") : "-"} />
           </div>
-        </Card>
+        </AdminCard>
 
-        <Card>
-          <CardHeader><CardTitle>Recent Users</CardTitle></CardHeader>
+        <AdminCard>
+          <AdminCardHeader><AdminCardTitle>Recent Users</AdminCardTitle></AdminCardHeader>
           <div className="space-y-2 text-sm">
             {users.map((u) => (
               <div key={u.id} className="flex items-center justify-between border-b border-border/50 pb-2 last:border-0 last:pb-0">
@@ -173,11 +196,11 @@ function OverviewTab({ token }: { token: string }) {
             ))}
             {users.length === 0 && <p className="text-xs text-text-muted">No users.</p>}
           </div>
-        </Card>
+        </AdminCard>
       </div>
 
-      <Card>
-        <CardHeader><CardTitle>Recent Admin Activity</CardTitle></CardHeader>
+      <AdminCard>
+        <AdminCardHeader><AdminCardTitle>Recent Admin Activity</AdminCardTitle></AdminCardHeader>
         {audit.length === 0 ? (
           <p className="text-sm text-text-muted py-4 text-center">No admin actions recorded yet.</p>
         ) : (
@@ -194,7 +217,7 @@ function OverviewTab({ token }: { token: string }) {
             ))}
           </div>
         )}
-      </Card>
+      </AdminCard>
     </div>
   );
 }
@@ -259,11 +282,11 @@ function UsersTab({ token }: { token: string }) {
         <Button variant="secondary" onClick={() => load()}>Refresh</Button>
       </div>
 
-      <Card padding={false}>
+      <AdminCard padding={false}>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-border text-left text-text-muted">
+              <tr className="border-b border-purple/25 text-left text-text-muted">
                 <th className="px-4 py-2 font-medium">User</th>
                 <th className="px-4 py-2 font-medium">Tier</th>
                 <th className="px-4 py-2 font-medium">Role</th>
@@ -320,7 +343,7 @@ function UsersTab({ token }: { token: string }) {
             </tbody>
           </table>
         </div>
-      </Card>
+      </AdminCard>
     </div>
   );
 }
@@ -355,15 +378,15 @@ function SignalsTab({ token }: { token: string }) {
   return (
     <div className="space-y-4">
       {error && <p className="text-sm text-red">{error}</p>}
-      <Card padding={false}>
+      <AdminCard padding={false}>
         <div className="px-4 pt-4 flex items-center justify-between">
-          <CardTitle>All Signals (every tier)</CardTitle>
+          <AdminCardTitle>All Signals (every tier)</AdminCardTitle>
           <Button size="sm" variant="secondary" onClick={load}>Refresh</Button>
         </div>
         <div className="overflow-x-auto mt-2">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-border text-left text-text-muted">
+              <tr className="border-b border-purple/25 text-left text-text-muted">
                 <th className="px-4 py-2 font-medium">Symbol</th>
                 <th className="px-4 py-2 font-medium">Market</th>
                 <th className="px-4 py-2 font-medium">Direction</th>
@@ -397,7 +420,7 @@ function SignalsTab({ token }: { token: string }) {
             </tbody>
           </table>
         </div>
-      </Card>
+      </AdminCard>
     </div>
   );
 }
@@ -448,8 +471,8 @@ function SystemTab({ token }: { token: string }) {
       {notice && <p className="text-sm text-green">{notice}</p>}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card>
-          <CardHeader><CardTitle>Scheduler</CardTitle></CardHeader>
+        <AdminCard>
+          <AdminCardHeader><AdminCardTitle>Scheduler</AdminCardTitle></AdminCardHeader>
           <div className="space-y-2 text-sm">
             <Row k="Enabled" v={system?.scheduler.enabled != null ? (system.scheduler.enabled ? "yes" : "no") : "-"} />
             <Row k="Interval" v={system ? `${system.scheduler.interval_minutes} min` : "-"} />
@@ -459,25 +482,25 @@ function SystemTab({ token }: { token: string }) {
               <p className="text-xs text-red mt-2">Last scan errors: {String(system.last_scan.errors).slice(0, 160)}</p>
             )}
           </div>
-        </Card>
+        </AdminCard>
 
-        <Card>
-          <CardHeader><CardTitle>Engines</CardTitle></CardHeader>
+        <AdminCard>
+          <AdminCardHeader><AdminCardTitle>Engines</AdminCardTitle></AdminCardHeader>
           <div className="space-y-2 text-sm">
             <Row k="Stocks" v={engine?.stock ? (engine.stock.active ? "market open" : "closed") : "-"} />
             <Row k="Forex" v={engine?.forex ? (engine.forex.active ? "market open" : "closed") : "-"} />
             <Row k="Crypto" v={engine?.crypto ? (engine.crypto.active ? "active" : "idle") : "-"} />
           </div>
-        </Card>
+        </AdminCard>
 
-        <Card>
-          <CardHeader><CardTitle>Actions</CardTitle></CardHeader>
+        <AdminCard>
+          <AdminCardHeader><AdminCardTitle>Actions</AdminCardTitle></AdminCardHeader>
           <div className="space-y-3">
             <Button className="w-full" onClick={runScan}>Run Engine Scan Now</Button>
             <Button className="w-full" variant="secondary" onClick={resetDaily}>Reset Daily Counters</Button>
             <Button className="w-full" variant="ghost" onClick={load}>Refresh</Button>
           </div>
-        </Card>
+        </AdminCard>
       </div>
     </div>
   );

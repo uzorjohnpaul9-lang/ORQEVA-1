@@ -1,11 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Card, CardHeader, CardTitle, StatCard } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { api } from "@/lib/api";
+import { AdminCard, AdminCardHeader, AdminCardTitle, AdminStatCard } from "@/components/admin/AdminCard";
 
 interface Invoice {
   id: string; tier: string; method: string; network: string | null;
@@ -84,10 +84,10 @@ export function BillingAdmin({ token }: { token: string }) {
       {notice && <p className="text-sm text-green">{notice}</p>}
 
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-        <StatCard label="Revenue" value={stats ? `$${stats.revenue_usd.toLocaleString()}` : "-"} />
-        <StatCard label="Refunded" value={stats ? `$${stats.refunded_usd.toLocaleString()}` : "-"} />
-        <StatCard label="Pending Invoices" value={stats ? `${stats.pending_invoices}` : "-"} />
-        <StatCard label="Active Subs" value={stats ? `${stats.active_subscriptions}` : "-"} />
+        <AdminStatCard label="Revenue" value={stats ? `$${stats.revenue_usd.toLocaleString()}` : "-"} />
+        <AdminStatCard label="Refunded" value={stats ? `$${stats.refunded_usd.toLocaleString()}` : "-"} />
+        <AdminStatCard label="Pending Invoices" value={stats ? `${stats.pending_invoices}` : "-"} />
+        <AdminStatCard label="Active Subs" value={stats ? `${stats.active_subscriptions}` : "-"} />
       </div>
 
       {stats && stats.revenue_by_tier && Object.keys(stats.revenue_by_tier).length > 0 && (
@@ -103,8 +103,8 @@ export function BillingAdmin({ token }: { token: string }) {
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card>
-          <CardHeader><CardTitle>Create Promo</CardTitle></CardHeader>
+        <AdminCard>
+          <AdminCardHeader><AdminCardTitle>Create Promo</AdminCardTitle></AdminCardHeader>
           <form onSubmit={createPromo} className="space-y-3">
             <Input label="Code" value={newPromo.code} onChange={(e) => setNewPromo((p) => ({ ...p, code: e.target.value.toUpperCase() }))} required minLength={3} />
             <Input label="Discount %" type="number" min="1" max="100" value={newPromo.discount_pct} onChange={(e) => setNewPromo((p) => ({ ...p, discount_pct: e.target.value }))} required />
@@ -123,14 +123,14 @@ export function BillingAdmin({ token }: { token: string }) {
             ))}
             {promos.length === 0 && <p className="text-xs text-text-muted">No promo codes yet.</p>}
           </div>
-        </Card>
+        </AdminCard>
 
-        <Card className="lg:col-span-2" padding={false}>
-          <div className="px-4 pt-4"><CardTitle>All Invoices</CardTitle></div>
+        <AdminCard className="lg:col-span-2" padding={false}>
+          <div className="px-4 pt-4"><AdminCardTitle>All Invoices</AdminCardTitle></div>
           <div className="overflow-x-auto mt-2">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-border text-left text-text-muted">
+                <tr className="border-b border-purple/25 text-left text-text-muted">
                   <th className="px-4 py-2 font-medium">User</th>
                   <th className="px-4 py-2 font-medium">Tier</th>
                   <th className="px-4 py-2 font-medium">Amount</th>
@@ -166,7 +166,7 @@ export function BillingAdmin({ token }: { token: string }) {
               </tbody>
             </table>
           </div>
-        </Card>
+        </AdminCard>
       </div>
     </div>
   );
