@@ -53,6 +53,48 @@ WALLET_ADDRESSES = {
 # Admin config
 ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "")
 
+PAYMENT_CONFIG_FILE = PAYMENTS_DIR / "payment_config.json"
+
+DEFAULT_PAYMENT_CONFIG = {
+    "bank_card": {
+        "bank_name": "",
+        "account_name": "",
+        "account_number": "",
+        "branch": "",
+        "instructions": "",
+    }
+}
+
+
+def load_payment_config() -> dict:
+    """Load admin-configurable payment config (bank/card receiving details)."""
+    if PAYMENT_CONFIG_FILE.exists():
+        try:
+            with open(PAYMENT_CONFIG_FILE, "r") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except (json.JSONDecodeError, OSError):
+            logger.warning("payment_config.json unreadable; resetting to defaults")
+    return {k: dict(v) for k, v in DEFAULT_PAYMENT_CONFIG.items()}
+
+
+def save_payment_config(data: dict) -> dict:
+    """Persist admin-configurable payment config."""
+    cleaned = {
+        "bank_card": {
+            "bank_name": str((data.get("bank_card") or {}).get("bank_name") or "").strip()[:120],
+            "account_name": str((data.get("bank_card") or {}).get("account_name") or "").strip()[:120],
+            "account_number": str((data.get("bank_card") or {}).get("account_number") or "").strip()[:60],
+            "branch": str((data.get("bank_card") or {}).get("branch") or "").strip()[:120],
+            "instructions": str((data.get("bank_card") or {}).get("instructions") or "").strip()[:500],
+        }
+    }
+    PAYMENT_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(PAYMENT_CONFIG_FILE, "w") as f:
+        json.dump(cleaned, f, indent=2)
+    return cleaned
+
 
 class PaymentManager:
     """Handle crypto and manual payments."""

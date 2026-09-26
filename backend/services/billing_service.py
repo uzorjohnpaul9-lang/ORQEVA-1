@@ -14,7 +14,12 @@ from backend.db.models import (
     gen_uuid,
 )
 from backend.db.supabase import SupabaseDB, now_iso, parse_dt
-from payments.payment_manager import PAYMENT_CONFIG, WALLET_ADDRESSES
+from payments.payment_manager import (
+    PAYMENT_CONFIG,
+    WALLET_ADDRESSES,
+    load_payment_config,
+    save_payment_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +46,16 @@ def plans() -> list[dict]:
             "duration_days": cfg["duration_days"],
         })
     return out
+
+
+def bank_card_details() -> dict:
+    """Admin-configured receiving details for the manual (bank/card) method."""
+    return (load_payment_config().get("bank_card") or {})
+
+
+async def admin_set_bank_card_details(data: dict) -> dict:
+    """Persist admin-configured receiving details for the manual method."""
+    return save_payment_config({"bank_card": data})
 
 
 async def validate_promo(db: SupabaseDB, code: str | None) -> tuple[dict | None, float]:

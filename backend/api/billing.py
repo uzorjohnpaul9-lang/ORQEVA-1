@@ -43,7 +43,7 @@ class ProcessReason(BaseModel):
 @router.get("/plans")
 async def get_plans(user: dict = Depends(get_current_user)):
     check_rate_limit(user["id"], user.get("tier", "free"))
-    return {"plans": billing.plans(), "current_tier": user.get("tier")}
+    return {"plans": billing.plans(), "current_tier": user.get("tier"), "bank_card": billing.bank_card_details()}
 
 
 @router.get("/subscription")
@@ -256,3 +256,26 @@ async def stats(
     user: dict = Depends(require_admin),
 ):
     return await billing.admin_stats(db)
+
+
+class BankCardDetails(BaseModel):
+    bank_name: str = Field(default="", max_length=120)
+    account_name: str = Field(default="", max_length=120)
+    account_number: str = Field(default="", max_length=60)
+    branch: str = Field(default="", max_length=120)
+    instructions: str = Field(default="", max_length=500)
+
+
+@router.get("/admin/payment-details")
+async def admin_payment_details(
+    user: dict = Depends(require_admin),
+):
+    return billing.bank_card_details()
+
+
+@router.put("/admin/payment-details")
+async def admin_update_payment_details(
+    body: BankCardDetails,
+    user: dict = Depends(require_admin),
+):
+    return await billing.admin_set_bank_card_details(body.model_dump())

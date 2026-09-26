@@ -14,6 +14,10 @@ interface Invoice {
   created_at: string; expires_at: string; user_email?: string;
 }
 interface Promo { code: string; discount_pct: number; max_uses: number; uses_count: number; active: boolean }
+interface BankCard {
+  bank_name: string; account_name: string; account_number: string;
+  branch: string; instructions: string;
+}
 interface Stats {
   revenue_usd: number; refunded_usd: number; net_usd: number;
   pending_invoices: number; approved_invoices: number;
@@ -30,6 +34,7 @@ export function BillingAdmin({ token }: { token: string }) {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [promos, setPromos] = useState<Promo[]>([]);
   const [newPromo, setNewPromo] = useState({ code: "", discount_pct: "20", max_uses: "100" });
+  const [bank, setBank] = useState<BankCard>({ bank_name: "", account_name: "", account_number: "", branch: "", instructions: "" });
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -48,6 +53,26 @@ export function BillingAdmin({ token }: { token: string }) {
   }, [token]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  useEffect(() => {
+    if (!token) return;
+    api<BankCard>("/api/billing/admin/payment-details", { token })
+      .then((b) => setBank({ bank_name: b.bank_name ?? "", account_name: b.account_name ?? "", account_number: b.account_number ?? "", branch: b.branch ?? "", instructions: b.instructions ?? "" }))
+      .catch(() => { /* keep defaults */ });
+  }, [token]);
+
+  async function saveBank(e: React.FormEvent) {
+    e.preventDefault();
+    try {
+      await api("/api/billing/admin/payment-details", {
+        method: "PUT", token,
+        body: JSON.stringify(bank),
+      });
+      setNotice("Payment details saved"); setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Save failed");
+    }
+  }
 
   async function action(id: string, kind: "approve" | "reject" | "refund") {
     try {
@@ -101,6 +126,29 @@ export function BillingAdmin({ token }: { token: string }) {
           ))}
         </div>
       )}
+
+      <AdminCard>
+        <AdminCardHeader><AdminCardTitle>Payment Details (shown on invoices)</AdminCardTitle></AdminCardHeader>
+        <form onSubmit={saveBank} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Input label="Bank name" value={bank.bank_name} onChange={(e) => setBank((b) => ({ ...b, bank_name: e.target.value }))} placeholder="e.g. UBA" />
+          <Input label="Account name" value={bank.account_name} onChange={(e) => setBank((b) => ({ ...b, account_name: e.target.value }))} placeholder="e.g. John Paul Muna" />
+          <Input label="Account number" value={bank.account_number} onChange={(e) => setBank((b) => ({ ...b, account_number: e.target.value }))} placeholder="e.g. 1234567890" />
+          <Input label="Branch" value={bank.branch} onChange={(e) => setBank((b) => ({ ...b, branch: e.target.value }))} placeholder="e.g. Lagos" />
+          <div className="sm:col-span-2 space-y-1.5">
+            <label className="block text-sm font-medium text-text-secondary">Payment instructions</label>
+            <textarea
+              className="w-full bg-bg-tertiary border border-border rounded-lg px-3 py-2.5 text-sm text-text-primary placeholder-text-muted outline-none focus:border-green/50 focus:ring-1 focus:ring-green/20 transition-colors"
+              rows={3}
+              value={bank.instructions}
+              onChange={(e) => setBank((b) => ({ ...b, instructions: e.target.value }))}
+              placeholder="e.g. Use your invoice ID as reference, then submit proof below."
+            />
+          </div>
+          <div className="sm:col-span-2">
+            <Button type="submit" className="w-full sm:w-auto">Save Payment Details</Button>
+          </div>
+        </form>
+      </AdminCard>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <AdminCard>

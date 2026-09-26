@@ -10,6 +10,7 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 
 interface Plan { tier: string; name: string; price_usd: number; duration_days: number }
+interface BankCard { bank_name: string; account_name: string; account_number: string; branch: string; instructions: string }
 interface Sub {
   tier?: string; status: string; auto_renew?: boolean;
   started_at?: string; expires_at?: string; days_left?: number; lifetime_spend_usd?: number;
@@ -28,6 +29,7 @@ const STATUS_VARIANT: Record<string, "green" | "red" | "yellow" | "gray" | "blue
 export default function BillingPage() {
   const { token, user } = useAuth();
   const [plans, setPlans] = useState<Plan[]>([]);
+  const [bankCard, setBankCard] = useState<BankCard | null>(null);
   const [sub, setSub] = useState<Sub | null>(null);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -46,11 +48,12 @@ export default function BillingPage() {
     if (!token) return;
     try {
       const [p, s, inv] = await Promise.all([
-        api<{ plans: Plan[] }>("/api/billing/plans", { token }),
+        api<{ plans: Plan[]; bank_card?: BankCard }>("/api/billing/plans", { token }),
         api<Sub>("/api/billing/subscription", { token }),
         api<Invoice[]>("/api/billing/invoices", { token }),
       ]);
       setPlans(p.plans);
+      setBankCard(p.bank_card ?? null);
       setSub(s);
       setInvoices(inv);
       setError(null);
@@ -257,9 +260,22 @@ export default function BillingPage() {
                 <code className="block bg-bg-tertiary rounded p-2 text-xs break-all">{inv.wallet_address}</code>
               </div>
             ) : (
-              <p className="text-sm text-text-secondary mb-4">
-                Manual payment: DM @Johnpaulmuna_83 for bank/card details, then enter the reference here.
-              </p>
+              <div className="space-y-2 mb-4 text-sm">
+                {bankCard?.account_name || bankCard?.account_number ? (
+                  <>
+                    <p className="text-text-secondary">Pay <span className="font-bold font-mono">${inv?.amount_usd}</span> via bank transfer or card to:</p>
+                    <div className="space-y-1 bg-bg-tertiary rounded p-3 text-xs">
+                      {bankCard.bank_name && <p><span className="text-text-muted">Bank:</span> <span className="font-medium">{bankCard.bank_name}</span></p>}
+                      {bankCard.account_name && <p><span className="text-text-muted">Account name:</span> <span className="font-medium">{bankCard.account_name}</span></p>}
+                      {bankCard.account_number && <p><span className="text-text-muted">Account number:</span> <span className="font-medium font-mono">{bankCard.account_number}</span></p>}
+                      {bankCard.branch && <p><span className="text-text-muted">Branch:</span> <span className="font-medium">{bankCard.branch}</span></p>}
+                      {bankCard.instructions && <p className="pt-1 border-t border-border mt-1 text-text-secondary">{bankCard.instructions}</p>}
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-text-secondary">Manual payment: DM @Johnpaulmuna_83 for bank/card details, then enter the reference here.</p>
+                )}
+              </div>
             );
           })()}
           <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
