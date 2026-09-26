@@ -33,8 +33,14 @@ async def seed_admin() -> bool:
     import os
 
     client = await get_service_client()
-    email = os.getenv("ADMIN_EMAIL", "admin@demo.com").strip().lower()
-    password = os.getenv("ADMIN_PASSWORD", "") or "adminpass123"
+    email = os.getenv("ADMIN_EMAIL", "").strip().lower()
+    password = os.getenv("ADMIN_PASSWORD", "")
+    if not email or "CHANGE_ME" in email or "example.com" in email or "orqeva.com" in email:
+        log.error("seed_admin: set a real ADMIN_EMAIL (and ADMIN_PASSWORD) in .env - skipping placeholder admin")
+        return False
+    if not password or password == "change_me" or password == "adminpass123":
+        log.error("seed_admin: set a strong ADMIN_PASSWORD in .env - skipping placeholder-admin seed")
+        return False
 
     try:
         resp = await client.auth.admin.list_users()

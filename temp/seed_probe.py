@@ -11,8 +11,8 @@ from backend.db.supabase import get_anon_client
 async def main():
     ok = await seed_admin()
     print("seed_admin:", ok)
-    email = os.getenv("ADMIN_EMAIL", "admin@demo.com")
-    password = os.getenv("ADMIN_PASSWORD", "adminpass123")
+    email = os.getenv("ADMIN_EMAIL", "") or "CHANGE_ME"
+    password = os.getenv("ADMIN_PASSWORD", "")
     client = await get_anon_client()
     try:
         r = await client.auth.sign_in_with_password({"email": email, "password": password})

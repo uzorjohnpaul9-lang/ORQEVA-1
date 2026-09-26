@@ -17,7 +17,7 @@ def admin_password():
             line = line.strip()
             if line.startswith("ADMIN_PASSWORD="):
                 return line.split("=", 1)[1].strip().strip('"')
-    return "adminpass123"
+    raise SystemExit("no ADMIN_PASSWORD in .env")
 
 def admin_email():
     with open(r"C:\Users\Munachi\ai-trading-system\.env", encoding="utf-8") as fh:
@@ -25,7 +25,7 @@ def admin_email():
             line = line.strip()
             if line.startswith("ADMIN_EMAIL="):
                 return line.split("=", 1)[1].strip().strip('"')
-    return "admin@demo.com"
+    raise SystemExit("no ADMIN_EMAIL in .env")
 
 async def main():
     key = secret_key()

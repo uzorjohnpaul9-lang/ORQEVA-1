@@ -57,11 +57,11 @@
 - Dockerfile.backend pins `--workers 1` with an explanatory comment: rate limiting, login lockout, idempotency dedupe and the scan scheduler are single-process state; scaling out requires moving them to shared storage first.
 - NOTE: use `%TEMP%\opencode\restart_backend.ps1 -Port 8000` (kill-by-port + WMI-detached launch + curl polls) for restarts — inline Start-Process + Invoke-RestMethod freezes the shell session.
 
-**PAUSED 2026-08-22 - resume checklist:** Phases 1-17 + order routing + Phase 20 groundwork complete (85 tests green: `python -m pytest tests -q -p no:warnings` from repo root). Servers via `%TEMP%\opencode\restart_backend.ps1` / `restart_frontend.ps1` (backend :8001, frontend :3000, login admin@demo.com/adminpass123). Remaining before launch: [1] Phase 21 - analytics pipeline (signal performance tracking, user/revenue analytics MRR-churn-LTV, reports); [2] Phase 22 - PWA + GDPR data export/delete + backup automation; [3] Sentry DSN integration hook (optional init in main.py); [4] Phase 18/19 deployment - NEEDS USER: rent VPS (~$5-10/mo Ubuntu), point domain A-record at it, then docker compose up (Dockerfiles/compose/Caddyfile already in repo); [5] post-deploy: uptime monitoring, DB backups, invite-only registration gate. Telegram bots idle until premium/vip users link. Docker not installed on this dev machine.
+**PAUSED 2026-08-22 - resume checklist:** Phases 1-17 + order routing + Phase 20 groundwork complete (85 tests green: `python -m pytest tests -q -p no:warnings` from repo root). Servers via `%TEMP%\opencode\restart_backend.ps1` / `restart_frontend.ps1` (backend :8001, frontend :3000, login = the env-configured ADMIN_EMAIL/ADMIN_PASSWORD from .env). Remaining before launch: [1] Phase 21 - analytics pipeline (signal performance tracking, user/revenue analytics MRR-churn-LTV, reports); [2] Phase 22 - PWA + GDPR data export/delete + backup automation; [3] Sentry DSN integration hook (optional init in main.py); [4] Phase 18/19 deployment - NEEDS USER: rent VPS (~$5-10/mo Ubuntu), point domain A-record at it, then docker compose up (Dockerfiles/compose/Caddyfile already in repo); [5] post-deploy: uptime monitoring, DB backups, invite-only registration gate. Telegram bots idle until premium/vip users link. Docker not installed on this dev machine.
 
 Frontend pages still on demo data: none — `notifications` page and Navbar bell were wired to the live API in Phase 15; all other pages went live Phases 6-12.
 
-**Leftover cleanup 2026-08-22:** strong 64-hex SECRET_KEY appended to .env (backend previously booted on the dev default because .env only had JWT_SECRET_KEY, a name config.py never reads). `trade_warning` badge color added to the notifications page map. Still blocked on user: ADMIN_PASSWORD choice for prod (empty locally keeps adminpass123), SMTP credentials for reset emails, legal text review, VPS + domain, Phase 21/22, Sentry DSN.
+**Leftover cleanup 2026-08-22:** strong 64-hex SECRET_KEY appended to .env (backend previously booted on the dev default because .env only had JWT_SECRET_KEY, a name config.py never reads). `trade_warning` badge color added to the notifications page map. Still blocked on user: ADMIN_PASSWORD choice for prod (now enforced via .env - seed refuses placeholder credentials), SMTP credentials for reset emails, legal text review, VPS + domain, Phase 21/22, Sentry DSN.
 
 ### Debugging notes (Phase 6)
 - If API calls seem slow (~1.1s) from Python test scripts but instant via curl: it's httpx per-client overhead on this machine, not the server. Measure with `curl.exe -w "%{time_total}"`.
@@ -70,7 +70,7 @@ Frontend pages still on demo data: none — `notifications` page and Navbar bell
 ### Debugging notes (Phase 7)
 - **Never run blocking network I/O in async endpoints** — engine scans froze the whole event loop (SSE starved, all endpoints unresponsive). Fixed via `asyncio.to_thread(engine.run_cycle)` in `/api/engine/scan`.
 - SSE gotchas: EventSource can't set headers → JWT goes as `?token=` query param; SQLite returns naive datetimes → keep the feed watermark naive UTC too.
-- `trades.user_id` is NOT NULL — seed trades must reference a real user (used admin@demo.com).
+- `trades.user_id` is NOT NULL — seed trades must reference a real user (use the env-configured admin account).
 
 ---
 

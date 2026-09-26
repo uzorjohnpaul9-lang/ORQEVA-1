@@ -17,8 +17,8 @@ async def main():
     await asyncio.sleep(4.0)
     async with httpx.AsyncClient(timeout=25) as c:
         # login as the seeded admin via /api/auth/login (backend endpoint)
-        email = os.getenv("ADMIN_EMAIL", "admin@demo.com")
-        password = os.getenv("ADMIN_PASSWORD", "adminpass123")
+        email = os.getenv("ADMIN_EMAIL", "") or "CHANGE_ME"
+        password = os.getenv("ADMIN_PASSWORD", "")
         r = await c.post("http://127.0.0.1:8011/api/auth/login", json={"email": email, "password": password})
         print("LOGIN:", r.status_code, r.text[:200])
         if r.status_code != 200:

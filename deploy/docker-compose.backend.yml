@@ -21,8 +21,8 @@ services:
       # ---- App secrets (generate fresh on the VPS, never reuse local dev values blindly) ----
       - SECRET_KEY=${SECRET_KEY}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
-      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@demo.com}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - ADMIN_EMAIL=${ADMIN_EMAIL:?set real ADMIN_EMAIL in .env}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?set strong ADMIN_PASSWORD in .env}
       # ---- Market data ----
       - ALPACA_API_KEY=${ALPACA_API_KEY}
       - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY}
