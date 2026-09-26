@@ -5,17 +5,9 @@ import Link from "next/link";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { NotificationSheet, type Notif } from "@/components/ui/NotificationSheet";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-
-interface Notif {
-  id: string;
-  type: string;
-  title: string;
-  message: string;
-  is_read: boolean;
-  created_at: string;
-}
 
 const typeColors: Record<string, "green" | "red" | "blue" | "yellow" | "purple" | "gray"> = {
   signal: "green", tp: "green", sl: "red", risk: "yellow",
@@ -28,6 +20,7 @@ export default function NotificationsPage() {
   const [unread, setUnread] = useState(0);
   const [filter, setFilter] = useState<"all" | "unread">("all");
   const [loading, setLoading] = useState(true);
+  const [detail, setDetail] = useState<Notif | null>(null);
 
   const refresh = useCallback(async () => {
     if (!token) return;
@@ -101,11 +94,14 @@ export default function NotificationsPage() {
           {notifs.map((n) => (
             <Card
               key={n.id}
-              className={`transition-colors ${!n.is_read ? "border-blue/30 bg-blue/5" : ""}`}
+              className={`cursor-pointer transition-colors hover:bg-bg-hover ${!n.is_read ? "border-blue/30 bg-blue/5" : ""}`}
             >
               <div
-                className={`flex items-start gap-3 ${!n.is_read ? "cursor-pointer" : ""}`}
-                onClick={() => { if (!n.is_read) markRead(n.id); }}
+                className="flex items-start gap-3"
+                onClick={() => {
+                  setDetail(n);
+                  if (!n.is_read) markRead(n.id);
+                }}
               >
                 <Badge variant={typeColors[n.type] || "gray"}>{n.type}</Badge>
                 <div className="flex-1 min-w-0">
@@ -123,6 +119,8 @@ export default function NotificationsPage() {
       <Link href="/settings" className="inline-block text-xs text-text-secondary hover:text-text-primary hover:underline">
         Manage Telegram delivery in Settings →
       </Link>
+
+      <NotificationSheet notif={detail} onClose={() => setDetail(null)} token={token} />
     </div>
   );
 }

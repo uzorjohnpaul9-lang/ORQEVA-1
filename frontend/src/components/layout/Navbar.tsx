@@ -4,15 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
-
-interface Notif {
-  id: string;
-  type: string;
-  title: string;
-  message: string;
-  is_read: boolean;
-  created_at: string;
-}
+import { NotificationSheet, type Notif } from "@/components/ui/NotificationSheet";
 
 export function Navbar() {
   const [showNotifs, setShowNotifs] = useState(false);
@@ -20,6 +12,7 @@ export function Navbar() {
   const { user, token, logout } = useAuth();
   const [notifs, setNotifs] = useState<Notif[]>([]);
   const [unread, setUnread] = useState(0);
+  const [detail, setDetail] = useState<Notif | null>(null);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -86,10 +79,20 @@ export function Navbar() {
                   <p className="px-4 py-6 text-xs text-text-muted text-center">No notifications yet</p>
                 ) : (
                   notifs.map((n) => (
-                    <div key={n.id} className={`px-4 py-3 border-b border-border/50 hover:bg-bg-hover ${!n.is_read ? "bg-blue/5" : ""}`}>
+                    <button
+                      key={n.id}
+                      onClick={() => {
+                        setShowNotifs(false);
+                        setDetail(n);
+                        if (!n.is_read && token) {
+                          api("/api/notifications/read", { method: "POST", token, body: { notification_id: n.id } }).then(load).catch(() => {});
+                        }
+                      }}
+                      className={`w-full text-left px-4 py-3 border-b border-border/50 hover:bg-bg-hover ${!n.is_read ? "bg-blue/5" : ""}`}
+                    >
                       <p className="text-sm font-medium">{n.title}</p>
                       <p className="text-xs text-text-secondary mt-1 line-clamp-2">{n.message}</p>
-                    </div>
+                    </button>
                   ))
                 )}
               </div>
@@ -122,6 +125,8 @@ export function Navbar() {
           )}
         </div>
       </div>
+
+      <NotificationSheet notif={detail} onClose={() => setDetail(null)} token={token} />
     </header>
   );
 }
