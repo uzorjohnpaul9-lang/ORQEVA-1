@@ -200,7 +200,7 @@ export default function BillingPage() {
       <Card padding={false}>
         <div className="px-4 pt-4"><CardTitle>My Invoices</CardTitle></div>
         <div className="overflow-x-auto mt-2">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm min-w-[540px]">
             <thead>
               <tr className="border-b border-border text-left text-text-muted">
                 <th className="px-4 py-2 font-medium">Tier</th>

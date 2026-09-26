@@ -16,7 +16,7 @@ interface DataTableProps<T> {
 export function DataTable<T extends { id: string }>({ columns, data, onRowClick }: DataTableProps<T>) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-sm">
+      <table className="w-full text-sm min-w-[720px]">
         <thead>
           <tr className="border-b border-border">
             {columns.map((col) => (

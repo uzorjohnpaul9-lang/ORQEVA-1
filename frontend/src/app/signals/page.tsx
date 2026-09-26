@@ -211,7 +211,7 @@ export default function SignalsPage() {
               <span className="font-mono font-semibold text-green">{accuracy.overall.win_rate}%</span>
             </p>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm min-w-[600px]">
                 <thead>
                   <tr className="border-b border-border">
                     <th className="text-left text-xs text-text-muted py-2">Strategy</th>

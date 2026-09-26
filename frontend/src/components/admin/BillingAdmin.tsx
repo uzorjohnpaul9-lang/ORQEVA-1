@@ -176,7 +176,7 @@ export function BillingAdmin({ token }: { token: string }) {
         <AdminCard className="lg:col-span-2" padding={false}>
           <div className="px-4 pt-4"><AdminCardTitle>All Invoices</AdminCardTitle></div>
           <div className="overflow-x-auto mt-2">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm min-w-[720px]">
               <thead>
                 <tr className="border-b border-purple/25 text-left text-text-muted">
                   <th className="px-4 py-2 font-medium">User</th>

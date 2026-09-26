@@ -284,7 +284,7 @@ function UsersTab({ token }: { token: string }) {
 
       <AdminCard padding={false}>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm min-w-[720px]">
             <thead>
               <tr className="border-b border-purple/25 text-left text-text-muted">
                 <th className="px-4 py-2 font-medium">User</th>
@@ -384,7 +384,7 @@ function SignalsTab({ token }: { token: string }) {
           <Button size="sm" variant="secondary" onClick={load}>Refresh</Button>
         </div>
         <div className="overflow-x-auto mt-2">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm min-w-[720px]">
             <thead>
               <tr className="border-b border-purple/25 text-left text-text-muted">
                 <th className="px-4 py-2 font-medium">Symbol</th>

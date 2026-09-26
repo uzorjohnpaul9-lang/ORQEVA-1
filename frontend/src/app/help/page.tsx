@@ -83,7 +83,7 @@ export default function HelpPage() {
         <span id="tiers" className="block -mt-20 pt-20" aria-hidden />
         <CardHeader><CardTitle>Plans &amp; Tiers</CardTitle></CardHeader>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm min-w-[540px]">
             <thead>
               <tr className="text-left text-text-muted text-xs uppercase tracking-wider">
                 <th className="pb-2 pr-4">Plan</th>

@@ -189,7 +189,7 @@ export default function AnalyticsPage() {
             </div>
             <div className="px-4 pb-4 mt-3 overflow-x-auto">
               {data.correlation.markets.length >= 2 ? (
-                <table className="w-full text-sm">
+                <table className="w-full text-sm min-w-[540px]">
                   <thead>
                     <tr>
                       <th className="text-left text-xs text-text-muted uppercase py-2 px-3"></th>
