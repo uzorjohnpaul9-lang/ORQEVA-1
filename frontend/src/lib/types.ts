@@ -145,3 +145,27 @@ export interface DiscoveryCoin {
   momentum_5d: number;
   direction: string;
 }
+
+export interface AutoTradeSettings {
+  enabled: boolean;
+  route: "paper" | "live";
+  markets: string[];
+  per_trade_risk_pct: number;
+  min_confidence: number;
+  updated_at?: string | null;
+}
+
+export interface AutoTradeLogEntry {
+  id: string;
+  symbol: string;
+  market: string;
+  direction: "buy" | "sell";
+  confidence: number | null;
+  quantity: number | null;
+  entry_price: number | null;
+  route: "paper" | "live";
+  status: "placed" | "skipped" | "rejected" | "error";
+  reason: string | null;
+  trade_id: string | null;
+  created_at: string;
+}

@@ -6,12 +6,13 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from backend.db.database import get_db
-from backend.db.models import EXCHANGE_CONNECTIONS, IDEMPOTENCY_RECORDS, TRADES, gen_uuid
+from backend.db.models import IDEMPOTENCY_RECORDS, TRADES, gen_uuid
 from backend.db.supabase import SupabaseDB
 from backend.auth import get_current_user
-from backend.services import trade_service, market_service, analytics_service, risk_service, telegram_service
+from backend.services import trade_service, analytics_service, risk_service, telegram_service
 from backend.exchanges import get_adapter
 from backend.services import notification_service as notif_service
+from backend.services.order_executor import active_connection, creds, live_price, place_and_record
 from backend.api.risk import central
 from backend.middleware.rate_limiter import check_rate_limit
 
@@ -34,39 +35,6 @@ class OrderRequest(BaseModel):
 
 class CloseRequest(BaseModel):
     exit_price: float | None = Field(default=None, gt=0)
-
-
-async def _live_price(market: str, symbol: str) -> float | None:
-    """Fetch live price off the event loop; None on failure/timeout."""
-    def fetch(m: str, s: str) -> float | None:
-        q = market_service.get_quote(m, s)
-        return q.get("price") if isinstance(q, dict) else None
-
-    try:
-        return await asyncio.wait_for(asyncio.to_thread(fetch, market, symbol), timeout=10.0)
-    except Exception:
-        return None
-
-
-async def _active_connection(db: SupabaseDB, user_id: str, market: str) -> dict | None:
-    """Newest active connection whose adapter serves this market, or None."""
-    conns = await db.fetch_all(
-        EXCHANGE_CONNECTIONS,
-        where={"user_id": user_id, "is_active": True},
-        order="connected_at.desc",
-    )
-    for conn in conns:
-        adapter = get_adapter(conn.get("exchange"))
-        if adapter and market in adapter.markets:
-            return conn
-    return None
-
-
-def _creds(conn: dict) -> tuple[str, str]:
-    from backend.api.exchanges import security
-    api_key = security.decrypt_data(conn["api_key_encrypted"])
-    api_secret = security.decrypt_data(conn["api_secret_encrypted"]) if conn.get("api_secret_encrypted") else ""
-    return api_key, api_secret
 
 
 async def _idempotency_replay(db: SupabaseDB, user_id: str, key: str) -> dict | None:
@@ -95,12 +63,12 @@ async def _route_close(db: SupabaseDB, user: dict, trade: dict) -> str | None:
     """Close a live-routed position at its broker. Returns error detail or None."""
     if trade.get("exchange") in (None, "", "paper"):
         return None
-    conn = await _active_connection(db, user["id"], trade.get("market"))
+    conn = await active_connection(db, user["id"], trade.get("market"))
     if not conn:
         return f"live trade but no active {trade.get('exchange')} connection - close manually at broker"
     adapter = get_adapter(conn.get("exchange"))
     opposite = "sell" if (trade.get("side") or "").lower() == "buy" else "buy"
-    api_key, api_secret = _creds(conn)
+    api_key, api_secret = creds(conn)
     result = await asyncio.to_thread(
         adapter.place_order, api_key, api_secret, conn.get("is_paper"),
         symbol=trade.get("symbol"), side=opposite,
@@ -135,7 +103,7 @@ async def place_order(
     # Route check first: fail fast before touching price feeds or risk counters.
     conn = None
     if body.route == "live":
-        conn = await _active_connection(db, user["id"], body.market)
+        conn = await active_connection(db, user["id"], body.market)
         if not conn:
             raise HTTPException(
                 status_code=403,
@@ -144,51 +112,23 @@ async def place_order(
     elif body.order_type == "limit" and body.limit_price is None:
         raise HTTPException(status_code=422, detail="limit orders require limit_price")
 
-    price = body.entry_price if body.entry_price is not None else await _live_price(body.market, body.symbol)
+    price = body.entry_price if body.entry_price is not None else await live_price(body.market, body.symbol)
     if not price or price <= 0:
         raise HTTPException(status_code=503, detail="price unavailable - provide entry_price or retry later")
 
-    venue, broker_order_id, filled_price = "paper", None, None
-    protective_error = None
-    if conn is not None:
-        adapter = get_adapter(conn.get("exchange"))
-        api_key, api_secret = _creds(conn)
-        result = await asyncio.to_thread(
-            adapter.place_order, api_key, api_secret, conn.get("is_paper"),
-            symbol=body.symbol.upper(), side=body.side,
-            quantity=body.quantity, order_type=body.order_type,
-            limit_price=body.limit_price,
-            stop_loss=body.stop_loss, take_profit=body.take_profit,
-        )
-        if not result.get("ok"):
-            raise HTTPException(status_code=502, detail=f"broker rejected order: {result.get('detail')}")
-        venue = conn.get("exchange")
-        broker_order_id = result.get("broker_order_id")
-        filled_price = result.get("filled_price")
-        protective_error = result.get("protective_error")
-
-    fill_price = filled_price or float(price)
-    trade = await trade_service.save_trade(
-        db, user_id=user["id"], symbol=body.symbol.upper(), market=body.market,
-        side=body.side, quantity=body.quantity, entry_price=float(fill_price),
-        strategy="manual", exchange=venue, broker_order_id=broker_order_id,
+    result = await place_and_record(
+        db, user=user, symbol=body.symbol.upper(), market=body.market,
+        side=body.side, quantity=body.quantity, entry_price=float(price),
+        route=body.route, conn=conn, order_type=body.order_type,
+        limit_price=body.limit_price,
+        stop_loss=body.stop_loss, take_profit=body.take_profit,
+        strategy="manual",
     )
-    if venue != "paper" and (body.stop_loss or body.take_profit):
-        await db.update(TRADES, {"stop_loss": body.stop_loss, "take_profit": body.take_profit}, where={"id": trade["id"]})
-    await asyncio.to_thread(
-        central.open_position, body.market, trade.get("symbol"),
-        body.side.upper(), body.quantity, float(fill_price),
-    )
-    response = {"status": "filled", "trade_id": trade["id"], "symbol": trade.get("symbol"),
-                "side": trade.get("side"), "quantity": trade.get("quantity"), "entry_price": trade.get("entry_price"),
-                "route": body.route, "venue": venue, "broker_order_id": broker_order_id}
-    if protective_error:
-        warning = (f"Position opened on {venue} but the stop-loss could not be placed: "
-                   f"{protective_error}. Protect it manually at the broker.")
-        response["warning"] = warning
-        await notif_service.create(db, user["id"], "trade_warning",
-                                   "Stop-loss not placed", warning)
-        await telegram_service.notify_user(db, user, "trade_warning", warning)
+    if result.get("status") != "filled":
+        raise HTTPException(status_code=502, detail=result.get("detail", "broker rejected order"))
+    response = {k: result.get(k) for k in ("status", "trade_id", "symbol", "side",
+                                           "quantity", "entry_price", "route", "venue",
+                                           "broker_order_id", "warning") if result.get(k) is not None}
     if body.idempotency_key:
         await _idempotency_store(db, user["id"], body.idempotency_key, response)
     return response

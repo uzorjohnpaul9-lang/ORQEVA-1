@@ -142,6 +142,33 @@ class ExchangeResponse(BaseModel):
         from_attributes = True
 
 
+# ── Auto-Trade ──
+class AutoTradeSettings(BaseModel):
+    enabled: bool = False
+    route: str = Field("paper", pattern="^(paper|live)$")
+    markets: list[str] = Field(default_factory=lambda: ["forex", "crypto", "stock"])
+    per_trade_risk_pct: float = Field(1.0, ge=0.1, le=10.0)
+    min_confidence: float = Field(0.0, ge=0.0, le=1.0)
+
+
+class AutoTradeLogResponse(BaseModel):
+    id: str
+    symbol: str
+    market: str
+    direction: str
+    confidence: float | None
+    quantity: float | None
+    entry_price: float | None
+    route: str
+    status: str
+    reason: str | None
+    trade_id: str | None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 # ── Dashboard Overview ──
 class DashboardOverview(BaseModel):
     total_signals: int

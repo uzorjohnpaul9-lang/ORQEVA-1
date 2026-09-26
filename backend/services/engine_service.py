@@ -71,6 +71,7 @@ async def run_scan(db: SupabaseDB, *, cooldown_hours: int = 0) -> dict:
     saved: list[dict] = []
     if all_signals:
         saved = await signal_service.save_signals_batch(db, all_signals)
+        await _auto_trade(db, saved, errors)
         await _fan_out(db, results, saved, errors)
 
     from backend.middleware.cache import cache
@@ -82,6 +83,15 @@ async def run_scan(db: SupabaseDB, *, cooldown_hours: int = 0) -> dict:
         "errors": errors,
         "saved": saved,
     }
+
+
+async def _auto_trade(db: SupabaseDB, saved: list[dict], errors: list[str]) -> None:
+    """Let Auto-Trade place orders for opted-in users. Failures never break the scan."""
+    try:
+        from backend.services import auto_trade_service
+        await auto_trade_service.run_for_scan(db, saved)
+    except Exception as e:
+        errors.append(f"auto-trade: {str(e)[:150]}")
 
 
 async def _fan_out(db: SupabaseDB, results: dict, saved: list[dict], errors: list) -> None:

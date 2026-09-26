@@ -10,8 +10,7 @@ from backend.db.database import get_db
 from backend.db.models import SIGNALS, USERS
 from backend.db.schemas import SignalResponse
 from backend.db.supabase import SupabaseDB, get_service_client, now_iso, parse_dt
-from backend.auth import get_current_user
-from backend.config import settings
+from backend.auth import get_current_user, resolve_user_from_token
 from backend.services import signal_service
 from backend.middleware.rate_limiter import check_rate_limit
 from backend.middleware.cache import cache
@@ -86,13 +85,8 @@ async def signal_feed(
 ):
     """SSE live feed of new signals, gated by the user's tier."""
     # EventSource cannot send Authorization headers, so the JWT comes as a query param.
-    from jose import jwt as _jwt, JWTError
-    try:
-        payload = _jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        user_id = payload.get("sub")
-        if not user_id:
-            raise ValueError
-    except (JWTError, ValueError):
+    user_id = await resolve_user_from_token(token)
+    if not user_id:
         return StreamingResponse(iter(["event: error\ndata: invalid token\n\n"]), media_type="text/event-stream")
 
     async def event_stream():
