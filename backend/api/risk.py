@@ -89,6 +89,13 @@ async def kill_switch(
     check_rate_limit(user["id"], user.get("tier", "free"))
 
     if body.active:
+        # The shared central engine halts order placement platform-wide, and only
+        # admins may release it -- so only admins may trip it.
+        if not user.get("is_admin"):
+            raise HTTPException(
+                status_code=403,
+                detail="Only an administrator can activate the global kill switch",
+            )
         reason = body.reason or f"Manually activated by {user.get('email')}"
         await risk_service.set_kill_switch(db, user["id"], True)
         await asyncio.to_thread(central.activate_kill_switch, reason)

@@ -47,14 +47,29 @@ class AlpacaAdapter(BaseAdapter):
 
         client = self._client(api_key, api_secret, is_paper)
         order_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL
-        bracket = bool(stop_loss and take_profit)
-
+        # A stop-loss alone is just as important as a full bracket: gating protection
+        # on `stop_loss and take_profit` sent naked orders whenever only an SL
+        # was given, leaving the position unprotected.
+        protective = "none"
         common = {}
-        if bracket:
+        if stop_loss and take_profit:
+            protective = "bracket"
             common = {
                 "order_class": OrderClass.BRACKET,
                 "take_profit": TakeProfitRequest(limit_price=round(float(take_profit), 2)),
                 "stop_loss": StopLossRequest(stop_price=round(float(stop_loss), 2)),
+            }
+        elif stop_loss:
+            protective = "stop_loss"
+            common = {
+                "order_class": OrderClass.OTO,
+                "stop_loss": StopLossRequest(stop_price=round(float(stop_loss), 2)),
+            }
+        elif take_profit:
+            protective = "take_profit"
+            common = {
+                "order_class": OrderClass.OTO,
+                "take_profit": TakeProfitRequest(limit_price=round(float(take_profit), 2)),
             }
 
         if order_type == "limit":
@@ -76,5 +91,5 @@ class AlpacaAdapter(BaseAdapter):
             "broker_order_id": str(resp.id),
             "broker_status": str(getattr(resp, "status", "")),
             "filled_price": float(filled) if filled else None,
-            "protective": "bracket" if bracket else None,
+            "protective": protective,
         }

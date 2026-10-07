@@ -1,50 +1,69 @@
 # AI Trading System - Diagnostic & Fix Progress
-**Date:** 2026-09-04
+**Latest session:** 2026-10-06
 
-## Completed
+## 2026-10-06 — Full test repair, 4-bot Telegram wiring, hardening, Sentry, docs
 
-### 1. Environment
-- Python 3.11.9 confirmed working
-- pip upgraded to 26.2.1
-- All 20 core modules import successfully
+### 1. Telegram (4 new bots)
+- `setup_telegram.py` rewritten: label-based token file reader (`free`/`premium`/`vip`/`admin`),
+  getMe validation, `.env` backup + update, status table. **User runs this manually with real tokens.**
+- Admin bot plumbed through: `payments/admin_bot.py` `_admin_token()`, `live_engine.py`
+  `bot_tokens["admin"]`, `channel_notifier.send_admin_alert` admin preference
+- `.env.example` Telegram section + `TELEGRAM_SETUP.md` rewritten
+- `tests/test_telegram_admin.py` (4 tests)
 
-### 2. Packages Installed
-- `mplfinance` 0.12.10b0
-- `transformers` 5.16.1
-- `xgboost`, `lightgbm`, `nltk`, `vaderSentiment`, `celery`, `sentry-sdk`, `python-json-logger`, `black`, `flake8`, `mypy`, `pre-commit` — all already satisfied
+### 2. Auth root-cause fix
+- `backend/api/auth.py` register passes `"email_confirm": True` — Supabase was returning
+  "Email not confirmed" on every login (401s across the suite)
 
-### 3. Security Fixes (.env)
-- `JWT_SECRET_KEY` — rotated to new 64-char hex
-- `ENCRYPTION_KEY` — rotated to new Fernet key
-- `SECRET_KEY` — rotated to new 64-char hex
-- `ADMIN_PASSWORD` — rotated to new 32-char random string
-- External keys (Alpaca, Telegram, TwelveData, Gmail) zeroed with `REPLACE_WITH_NEW_*` placeholders
-- Instructions added in .env for each service
-- `.gitignore` confirmed excludes `.env` and `logs/`
+### 3. Test suite fully repaired — 114 tests green
+- Rewrote 4 broken files against SupabaseDB: `test_hardening`, `test_monitoring`,
+  `test_order_routing`, `test_protective`
+- Contract fixes: kill-switch activation is admin-only; live orders reject `entry_price` (422,
+  `fixed_live_price` fixture patches `backend.api.trading.live_price`); paper response omits
+  None keys; scheduler returns extra `at` key; cooldown tests clear prior signals;
+  `quiet_fanout` fixture stubs telegram/notification/auto-trade fan-out
+- `tests/conftest.py`: fresh identity per register attempt (4), login retry 5x3s, client
+  timeout 30s, `_clean_state` resets central daily-trade/pnl/position counters
+- New `tests/test_endpoints.py` (10 tests): dashboard, signals (list/stats/accuracy/404/tier
+  gate 403), portfolio empty-state + validation, AI (mocked providers), market (mocked
+  providers), admin (403 guards, self-guards, 404s, system/audit/subscriptions/signals)
 
-### 4. Configuration Fixes
-- `requirements.txt`: fixed `mplfinance>=0.12.10b0` (was `>=0.12.9` with no stable release)
-- `.env`: `TRADING_ENABLED=false` (was `true`)
-- `pytest.ini`: `asyncio_mode = auto` confirmed
+### 4. Reliability hardening (production code)
+- `backend/auth.py`: `resolve_user_from_token` retries once (0.5s) before failing
+- `backend/api/auth.py` login: classifies provider errors — credential rejection = 401 +
+  lockout; transient (429/5xx/transport) = 503 retryable, no lockout
+- `backend/db/database.py` `seed_admin`: create_user retried 3x (2s) + list_users fallback
+  for partial "already registered" creates
+- `backend/db/supabase.py`: `_run(q, safe_to_repeat=)` — transport retries (ConnectError on
+  all ops, other TransportErrors on reads) wired into every CRUD method
+- `live_engine.py`: replaced `sys.stdout = io.TextIOWrapper(...)` (closed pytest capture file
+  → crash) with guarded `sys.stdout.reconfigure(encoding="utf-8")`
 
-### 5. Logs Cleanup
-- Removed stale npm/test files from `logs/` (9 files)
-- Remaining: `trading.log`, `server.log`, `server_err.log`
+### 5. Tier 1 — config/docs cleanup
+- `docker-compose.yml` + `deploy/docker-compose.backend.yml`: added `TRADING_ENABLED`,
+  `SENTRY_DSN`, `TELEGRAM_BOT_TOKEN_ADMIN`, `TELEGRAM_CHANNEL_*`, `TELEGRAM_CHAT_IDS_*`,
+  `TELEGRAM_ADMIN_CHAT_ID` passthrough
+- `requirements.txt`: removed unused alembic, deduped supabase/prometheus-client
+- `requirements.backend.txt`: added `sentry-sdk` (Docker backend + Windows deploy install this)
+- `.env.example`: added `TRADING_ENABLED`, `ADMIN_SEED_FORCE`
+- Desktop README (`ai-trading-system-README.md`) drift fixed: Supabase-only DB story, removed
+  db/backup compose services, `TWELVE_DATA_API_KEY` name, dead default admin creds, 4-bot
+  Telegram section, 114-test counts, no-`pg_dump` backup note
 
-### 6. Tests
-- 48 tests passing (pytest)
+### 6. Tier 2 — dead code, bare excepts, Sentry
+- Deleted `execution/broker_api.py` (zero references) + import from `execution/__init__.py`
+- Bare `except:` eliminated repo-wide (broker_manager x4, live_engine x1) → `except Exception:`
+- Sentry wired: `backend/config.py` `SENTRY_DSN` field + `backend/main.py` init (guarded,
+  no-op without DSN); sentry-sdk 2.71.0 installed locally
+
+## Carried over from 2026-09-04 session
+- Python 3.11.9, pip 26.2.1; security keys rotated in `.env` (JWT/ENCRYPTION/SECRET/ADMIN_PASSWORD)
+- `requirements.txt` mplfinance pin; `TRADING_ENABLED=false`; pytest `asyncio_mode = auto`
+- Logs cleaned (9 stale files)
 
 ## Pending
-
-### TensorFlow Install
-- Blocked: Windows Store Python path too long for TF's internal paths
-- Created `C:\venv\trading` virtual environment as workaround
-- Created `fix-tensorflow.bat` — run when network is stable
-- Also requires network connectivity (DNS was down during session)
-
-### External API Key Rotation
-User must manually regenerate and paste back:
-1. Alpaca: https://app.alpaca.markets/keys/overview
-2. Telegram bots: @BotFather /revoke
-3. Twelve Data: https://twelvedata.com/
-4. Gmail app password: Google account security settings
+1. **User manual:** run `python setup_telegram.py` with real tokens; @BotFather revoke/delete
+   the 3 old bots; add the 4 new tier bots to their channels as posting admins
+2. Final full-suite verification run (114 tests in batches — live Supabase, ~25 min)
+3. TensorFlow install workaround (`C:\venv\trading` + `fix-tensorflow.bat` when network stable)
+4. External API key rotation: Alpaca, Twelve Data, Gmail app password (Telegram tokens are new)

@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
@@ -12,13 +14,20 @@ async def resolve_user_from_token(token: str) -> str | None:
 
     Returns the user id on success, or None if the token is invalid/expired.
     SSE endpoints can't send Authorization headers, so they share this path.
+    One retry absorbs transient auth-provider hiccups (throttling/network)
+    that would otherwise surface as spurious 401s mid-session.
     """
-    try:
-        client = await get_service_client()
-        resp = await client.auth.get_user(token)
-        return resp.user.id
-    except Exception:
-        return None
+    client = await get_service_client()
+    for attempt in range(2):
+        try:
+            resp = await client.auth.get_user(token)
+            return resp.user.id
+        except Exception:
+            if attempt == 0:
+                await asyncio.sleep(0.5)
+                continue
+            return None
+    return None
 
 
 async def get_current_user(

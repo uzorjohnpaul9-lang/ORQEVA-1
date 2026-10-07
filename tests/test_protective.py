@@ -138,9 +138,8 @@ async def test_paper_route_accepts_sl_tp(client):
 
 async def test_paper_trade_does_not_persist_sl_tp(client):
     """SL/TP are broker-side only for live venues — paper trades stay clean."""
-    from sqlalchemy import select
-    from backend.db.database import async_session
-    from backend.db.models import Trade
+    from backend.db.models import TRADES
+    from backend.db.supabase import SupabaseDB, get_service_client
     from tests.conftest import register_and_login
 
     H, _ = await register_and_login(client)
@@ -151,9 +150,10 @@ async def test_paper_trade_does_not_persist_sl_tp(client):
     })
     assert r.status_code == 200
     trade_id = r.json()["trade_id"]
-    async with async_session() as db:
-        t = (await db.execute(select(Trade).where(Trade.id == trade_id))).scalar_one()
-        assert t.stop_loss is None and t.take_profit is None
+    db = SupabaseDB(await get_service_client())
+    t = await db.fetch_one(TRADES, {"id": trade_id})
+    assert t is not None
+    assert not t.get("stop_loss") and not t.get("take_profit")
 
 
 # --- Coinbase partial-failure handling --------------------------------------
@@ -224,25 +224,25 @@ def test_coinbase_entry_failure_never_places_stop(monkeypatch):
 
 async def test_live_route_surfaces_warning_and_notifies(client, monkeypatch):
     """protective_error from an adapter -> 200 + warning in payload + notification."""
-    from datetime import datetime, timezone
-    from sqlalchemy import select
-    from backend.db.database import async_session
-    from backend.db.models import ExchangeConnection, Notification, User
     from backend.api.exchanges import security as sec
+    from backend.db.models import EXCHANGE_CONNECTIONS, NOTIFICATIONS, USERS, gen_uuid
+    from backend.db.supabase import SupabaseDB, get_service_client, now_iso
     from tests.conftest import register_and_login
 
     H, email = await register_and_login(client)
-    async with async_session() as db:
-        u = (await db.execute(
-            select(User).where(User.email == email))).scalar_one()
-        db.add(ExchangeConnection(
-            user_id=u.id, exchange="coinbase",
-            api_key_encrypted=sec.encrypt_data("org/key"),
-            api_secret_encrypted=sec.encrypt_data(_ec_pem()),
-            is_paper=True, is_active=True,
-            connected_at=datetime.now(timezone.utc),
-        ))
-        await db.commit()
+    db = SupabaseDB(await get_service_client())
+    u = await db.fetch_one(USERS, {"email": email})
+    await db.insert(EXCHANGE_CONNECTIONS, {
+        "id": gen_uuid(),
+        "user_id": u["id"],
+        "exchange": "coinbase",
+        "api_key_encrypted": sec.encrypt_data("org/key"),
+        "api_secret_encrypted": sec.encrypt_data(_ec_pem()),
+        "is_paper": True,
+        "is_active": True,
+        "connected_at": now_iso(),
+        "last_checked": now_iso(),
+    })
 
     monkeypatch.setattr(
         CoinbaseAdapter, "_place_order",
@@ -252,9 +252,13 @@ async def test_live_route_surfaces_warning_and_notifies(client, monkeypatch):
          "protective_error": "stop rejected: invalid price"},
     )
 
+    async def _price(market, symbol):
+        return 50000.0
+
+    monkeypatch.setattr("backend.api.trading.live_price", _price)
     r = await client.post("/api/trading/orders", headers=H, json={
         "symbol": "BTCUSDT", "market": "crypto", "side": "buy",
-        "quantity": 0.01, "route": "live", "entry_price": 50000.0,
+        "quantity": 0.01, "route": "live",
         "stop_loss": 45000.0,
     })
     assert r.status_code == 200, r.text
@@ -262,8 +266,5 @@ async def test_live_route_surfaces_warning_and_notifies(client, monkeypatch):
     assert body["venue"] == "coinbase"
     assert "stop-loss could not be placed" in body.get("warning", "")
 
-    async with async_session() as db:
-        u = (await db.execute(select(User).where(User.email == email))).scalar_one()
-        notes = (await db.execute(
-            select(Notification).where(Notification.user_id == u.id))).scalars().all()
-    assert any(n.type == "trade_warning" for n in notes)
+    notes = await db.fetch_all(NOTIFICATIONS, {"user_id": u["id"], "type": "trade_warning"})
+    assert notes

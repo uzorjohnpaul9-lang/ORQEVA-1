@@ -4,7 +4,15 @@ Connects: Market Data → Analysis → Signals → Telegram Channels
 """
 import sys
 import io
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+# Ensure UTF-8 output without replacing the stream: wrapping sys.stdout in a
+# fresh TextIOWrapper would take ownership of the underlying buffer and close
+# it on GC, breaking any host that captured stdout (pytest, uvicorn, pipes).
+try:
+    if getattr(sys.stdout, "encoding", None) and \
+            sys.stdout.encoding.lower().replace("-", "") not in ("utf8",):
+        sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 import os
 import time
@@ -119,6 +127,7 @@ class TelegramNotifier:
             "free": os.getenv("TELEGRAM_BOT_TOKEN_FREE", ""),
             "premium": os.getenv("TELEGRAM_BOT_TOKEN_PREMIUM", ""),
             "vip": os.getenv("TELEGRAM_BOT_TOKEN_VIP", ""),
+            "admin": os.getenv("TELEGRAM_BOT_TOKEN_ADMIN", ""),
         }
         self.channels = {
             "free": os.getenv("TELEGRAM_CHANNEL_FREE", ""),
@@ -321,8 +330,7 @@ class TelegramNotifier:
         if not self.admin_chat_id:
             return
 
-        # Use Free bot for admin messages
-        bot_token = self.bot_tokens.get("free", "")
+        bot_token = self.bot_tokens.get("admin", "") or self.bot_tokens.get("free", "")
         if not bot_token:
             return
 
@@ -333,7 +341,7 @@ class TelegramNotifier:
                 "text": message,
                 "parse_mode": "HTML"
             }, timeout=10)
-        except:
+        except Exception:
             pass
 
 

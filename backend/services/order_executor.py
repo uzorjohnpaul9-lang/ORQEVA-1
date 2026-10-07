@@ -14,6 +14,19 @@ from backend.services import notification_service as notif_service
 from backend.api.risk import central
 
 
+def protection_placed_requested(protective: str | None, stop_loss: float | None,
+                                take_profit: float | None) -> bool:
+    """True when the adapter confirmed protection matching what was requested."""
+    kind = (protective or "").lower()
+    if stop_loss and take_profit:
+        return kind in ("bracket", "oto", "oco")
+    if stop_loss:
+        return kind in ("bracket", "oto", "oco", "stop_loss", "stop")
+    if take_profit:
+        return kind in ("bracket", "oto", "oco", "take_profit")
+    return True
+
+
 async def live_price(market: str, symbol: str) -> float | None:
     """Fetch live price off the event loop; None on failure/timeout."""
     from backend.services import market_service
@@ -63,6 +76,7 @@ async def place_and_record(db: SupabaseDB, *, user: dict, symbol: str, market: s
     price = float(entry_price)
     venue, broker_order_id, filled_price = "paper", None, None
     protective_error = None
+    protective = None
 
     if conn is not None:
         adapter = get_adapter(conn.get("exchange"))
@@ -79,7 +93,14 @@ async def place_and_record(db: SupabaseDB, *, user: dict, symbol: str, market: s
         venue = conn.get("exchange")
         broker_order_id = result.get("broker_order_id")
         filled_price = result.get("filled_price")
+        protective = result.get("protective")
         protective_error = result.get("protective_error")
+        # An adapter that silently omits protection while the caller asked for it
+        # must not leave the position naked.
+        if (stop_loss or take_profit) and not protection_placed_requested(protective, stop_loss, take_profit):
+            protective_error = protective_error or (
+                f"broker accepted the order but reported no {protective or 'protective'} order"
+            )
 
     fill_price = filled_price or float(price)
     trade = await trade_service.save_trade(
@@ -87,8 +108,13 @@ async def place_and_record(db: SupabaseDB, *, user: dict, symbol: str, market: s
         side=side, quantity=quantity, entry_price=float(fill_price),
         strategy=strategy, exchange=venue, broker_order_id=broker_order_id,
     )
+    # Only claim protection the broker actually accepted. Recording an SL/TP that
+    # was never placed shows a stop in the dashboard that does not exist.
+    protection_placed = bool(protective) and protective != "none"
     if venue != "paper":
-        await db.update(TRADES, {"stop_loss": stop_loss, "take_profit": take_profit}, where={"id": trade["id"]})
+        fields = {"stop_loss": stop_loss, "take_profit": take_profit} if protection_placed else {}
+        if fields:
+            await db.update(TRADES, fields, where={"id": trade["id"]})
     if signal_id:
         await db.update(TRADES, {"signal_id": signal_id}, where={"id": trade["id"]})
     await asyncio.to_thread(

@@ -24,6 +24,10 @@ class OrderRequest(BaseModel):
     market: str = Field(pattern="^(stock|forex|crypto|commodity)$")
     side: str = Field(pattern="^(buy|sell)$")
     quantity: float = Field(gt=0)
+    # Advisory only: when present it seeds the paper fill and the risk maths. It is
+    # NEVER trusted on the live route (see place_order) because the broker fills
+    # at the real market price and a client-chosen price would corrupt exposure,
+    # position-size and daily-loss accounting.
     entry_price: float | None = Field(default=None, gt=0)
     order_type: str = Field(default="market", pattern="^(market|limit)$")
     limit_price: float | None = Field(default=None, gt=0)
@@ -42,21 +46,83 @@ async def _idempotency_replay(db: SupabaseDB, user_id: str, key: str) -> dict | 
         IDEMPOTENCY_RECORDS,
         {"user_id": user_id, "endpoint": "orders", "key": key},
     )
-    return json.loads(rec.get("response_json")) if rec else None
+    if not rec:
+        return None
+    # response_json is a jsonb column; postgrest returns it already decoded.
+    stored = rec.get("response_json")
+    if isinstance(stored, dict):
+        return stored
+    try:
+        return json.loads(stored) if stored else None
+    except (TypeError, ValueError):
+        return None
 
 
-async def _idempotency_store(db: SupabaseDB, user_id: str, key: str, response: dict) -> None:
+async def _idempotency_claim(db: SupabaseDB, user_id: str, key: str) -> bool:
+    """Insert a placeholder row to win the key. False = someone else holds it."""
     try:
         await db.insert(IDEMPOTENCY_RECORDS, {
             "id": gen_uuid(),
             "user_id": user_id,
             "endpoint": "orders",
             "key": key,
-            "response_json": json.dumps(response),
+            "response_json": {},
         })
+        return True
     except Exception:
-        # concurrent duplicate insert - the first writer already stored it
+        return False
+
+
+async def _idempotency_release(db: SupabaseDB, user_id: str, key: str) -> None:
+    """Drop an unfulfilled claim so the caller may retry."""
+    try:
+        await db.delete(IDEMPOTENCY_RECORDS,
+                        {"user_id": user_id, "endpoint": "orders", "key": key})
+    except Exception:
         pass
+
+
+async def _idempotency_store(db: SupabaseDB, user_id: str, key: str, response: dict) -> None:
+    try:
+        await db.update(
+            IDEMPOTENCY_RECORDS,
+            {"response_json": response},
+            where={"user_id": user_id, "endpoint": "orders", "key": key},
+        )
+    except Exception:
+        pass
+
+
+def _validate_protective_levels(side: str, entry: float,
+                                stop_loss: float | None, take_profit: float | None) -> None:
+    """A buy needs stop_loss < entry < take_profit; a sell is the mirror.
+
+    Getting this wrong makes the broker fill the protective leg instantly at the
+    worst available price, so it is rejected outright rather than clamped.
+    """
+    is_buy = (side or "").lower() == "buy"
+    if stop_loss is not None:
+        if is_buy and stop_loss >= entry:
+            raise HTTPException(
+                status_code=422,
+                detail=f"stop_loss {stop_loss} must be below the entry price {entry} for a buy",
+            )
+        if not is_buy and stop_loss <= entry:
+            raise HTTPException(
+                status_code=422,
+                detail=f"stop_loss {stop_loss} must be above the entry price {entry} for a sell",
+            )
+    if take_profit is not None:
+        if is_buy and take_profit <= entry:
+            raise HTTPException(
+                status_code=422,
+                detail=f"take_profit {take_profit} must be above the entry price {entry} for a buy",
+            )
+        if not is_buy and take_profit >= entry:
+            raise HTTPException(
+                status_code=422,
+                detail=f"take_profit {take_profit} must be below the entry price {entry} for a sell",
+            )
 
 
 async def _route_close(db: SupabaseDB, user: dict, trade: dict) -> str | None:
@@ -93,28 +159,79 @@ async def place_order(
         if replay is not None:
             return replay
 
-    # Risk gate: kill switch, max positions, daily loss, position size, exposure
-    allowed, reason = await risk_service.pre_trade_check(
-        db, user["id"], body.market, body.quantity, body.entry_price or 0
-    )
-    if not allowed:
-        raise HTTPException(status_code=403, detail=reason)
+    # Claim the key BEFORE the order reaches the broker. The unique index
+    # (user_id, endpoint, key) then serialises concurrent retries, so two racing
+    # requests can never both place an order. A duplicate while the first is still
+    # in flight replays a pending marker instead of placing again.
+    claimed = False
+    if body.idempotency_key:
+        claimed = await _idempotency_claim(db, user["id"], body.idempotency_key)
+        if not claimed:
+            replay = await _idempotency_replay(db, user["id"], body.idempotency_key)
+            return replay or {
+                "status": "pending",
+                "detail": "identical request already in flight",
+                "idempotency_key": body.idempotency_key,
+            }
 
+    try:
+        return await _place_order_inner(db, user, body)
+    except HTTPException:
+        # Failed orders must not burn the key, or a retry of a transient
+        # broker/feed failure would be permanently replayed as an error.
+        if body.idempotency_key and claimed:
+            await _idempotency_release(db, user["id"], body.idempotency_key)
+        raise
+
+
+async def _place_order_inner(db: SupabaseDB, user: dict, body: OrderRequest) -> dict:
     # Route check first: fail fast before touching price feeds or risk counters.
     conn = None
     if body.route == "live":
+        if body.entry_price is not None:
+            raise HTTPException(
+                status_code=422,
+                detail="entry_price is not accepted on the live route - the broker fill price is used",
+            )
         conn = await active_connection(db, user["id"], body.market)
         if not conn:
             raise HTTPException(
                 status_code=403,
                 detail=f"no validated live connection for {body.market} - connect one under /api/exchanges or use route=paper",
             )
-    elif body.order_type == "limit" and body.limit_price is None:
+    if body.order_type == "limit" and body.limit_price is None:
         raise HTTPException(status_code=422, detail="limit orders require limit_price")
 
+    # Resolve the price BEFORE the risk gate. pre_trade_check multiplies by this
+    # value, so a missing/zero price would make every size and exposure cap pass.
     price = body.entry_price if body.entry_price is not None else await live_price(body.market, body.symbol)
     if not price or price <= 0:
         raise HTTPException(status_code=503, detail="price unavailable - provide entry_price or retry later")
+    price = float(price)
+
+    # Stop/target must sit on the correct side of the entry, otherwise the broker
+    # fills the protective leg immediately at the worst possible price.
+    _validate_protective_levels(body.side, price, body.stop_loss, body.take_profit)
+
+    # Risk gate: kill switch, max positions, daily loss, position size, exposure
+    risk_status = await risk_service.get_risk_status(db, user["id"])
+    allowed, reason = await risk_service.pre_trade_check(
+        db, user["id"], body.market, body.quantity, price, status=risk_status
+    )
+    if not allowed:
+        raise HTTPException(status_code=403, detail=reason)
+
+    # Central cross-market engine: global kill switch, drawdown auto-trip, per-market
+    # daily cap, correlation limits. Applies to manual AND live orders.
+    approval = await asyncio.to_thread(
+        central.approve_trade, body.market, body.symbol.upper(), body.side.upper(),
+        body.quantity, price, risk_status["account_value"],
+    )
+    if not getattr(approval, "allowed", False):
+        raise HTTPException(
+            status_code=403,
+            detail=getattr(approval, "reason", "blocked by the central risk engine"),
+        )
 
     result = await place_and_record(
         db, user=user, symbol=body.symbol.upper(), market=body.market,
@@ -157,7 +274,7 @@ async def close_position(
 
     exit_price = body.exit_price if body else None
     if exit_price is None:
-        exit_price = await _live_price(trade.get("market"), trade.get("symbol"))
+        exit_price = await live_price(trade.get("market"), trade.get("symbol"))
     if not exit_price or exit_price <= 0:
         raise HTTPException(status_code=503, detail="exit price unavailable - provide exit_price or retry later")
 

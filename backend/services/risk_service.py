@@ -121,9 +121,19 @@ async def get_risk_status(db: SupabaseDB, user_id: str) -> dict:
 
 
 async def pre_trade_check(db: SupabaseDB, user_id: str, market: str,
-                          quantity: float, price: float) -> tuple[bool, str]:
-    """Gate for placing new orders. Returns (allowed, reason)."""
-    status = await get_risk_status(db, user_id)
+                          quantity: float, price: float,
+                          status: dict | None = None) -> tuple[bool, str]:
+    """Gate for placing new orders. Returns (allowed, reason).
+
+    ``price`` must be a resolved market price: the size and exposure caps below
+    are proportional to ``quantity * price``, so a zero price silently passes.
+    Callers that also need the status (e.g. to feed the central risk engine)
+    can pass a pre-fetched one to avoid a second round of queries.
+    """
+    status = status or await get_risk_status(db, user_id)
+
+    if price is None or price <= 0:
+        return False, "Price unavailable - cannot evaluate position size or exposure"
 
     if status["kill_switch_active"]:
         return False, "Kill switch is active - close positions or disable it first"
@@ -137,16 +147,21 @@ async def pre_trade_check(db: SupabaseDB, user_id: str, market: str,
     if status["trades_today"] >= status["max_daily_trades"]:
         return False, f"Daily trade limit reached ({status['max_daily_trades']} trades today)"
 
+    # A negative/zero account value means capital is exhausted; dividing by it
+    # would produce negative percentages that pass every "> limit" comparison.
+    account_value = float(status["account_value"] or 0)
+    if account_value <= 0:
+        return False, "Account value is exhausted - close positions before trading again"
+
     notional = quantity * price
-    pos_size_pct = notional / status["account_value"] * 100 if status["account_value"] else 0
+    pos_size_pct = notional / account_value * 100
     if pos_size_pct > status["limits"]["max_position_size_pct"]:
         return False, (
             f"Position size {pos_size_pct:.1f}% exceeds "
             f"{status['limits']['max_position_size_pct']}% limit"
         )
 
-    projected_exposure_pct = (status["total_exposure"] + notional) / status["account_value"] * 100 \
-        if status["account_value"] else 0
+    projected_exposure_pct = (status["total_exposure"] + notional) / account_value * 100
     if projected_exposure_pct > 80:
         return False, f"Total exposure would reach {projected_exposure_pct:.0f}% of account"
 

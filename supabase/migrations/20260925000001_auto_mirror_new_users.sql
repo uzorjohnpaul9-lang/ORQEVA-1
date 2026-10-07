@@ -4,11 +4,12 @@
 -- a matching row. Without this, every new signup would 401 on protected routes.
 
 -- Backfill existing auth users that never got a public.users mirror.
+-- Same rule as handle_new_user(): do not promote privileges from user metadata.
 do $$
 declare
   r record;
   meta jsonb;
-  t text;
+  uname text;
 begin
   for r in
     select u.id, u.email
@@ -17,25 +18,29 @@ begin
   loop
     select raw_user_meta_data into meta from auth.users where id = r.id;
 
-    t := lower(coalesce(meta ->> 'tier', 'free'));
-    if t not in ('free','premium','vip') then
-      t := 'free';
-    end if;
+    uname := coalesce(
+      nullif(meta ->> 'username', ''),
+      split_part(r.email, '@', 1)
+    );
 
     insert into public.users (id, email, username, tier, is_active, is_admin, created_at, updated_at)
     values (
       r.id,
       r.email,
-      coalesce(meta ->> 'username', split_part(r.email, '@', 1)),
-      t,
+      left(uname, 100),
+      'free',
       true,
-      coalesce((meta ->> 'is_admin')::boolean, false),
+      false,
       now(), now())
     on conflict (id) do nothing;
   end loop;
 end $$;
 
 -- Trigger function + trigger only: creates mirror rows for NEW signups.
+--
+-- SECURITY: never read is_admin or tier from new.raw_user_meta_data. Signup is
+-- performed browser-side with the publishable (anon) key, so raw_user_meta_data
+-- is attacker-controlled. Only backend/api/admin.py may grant is_admin/tier.
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
@@ -43,18 +48,16 @@ security definer
 set search_path = public
 as $$
 declare
-  uname text := coalesce(new.raw_user_meta_data ->> 'username', split_part(new.email, '@', 1));
-  tier  text := lower(coalesce(new.raw_user_meta_data ->> 'tier', 'free'));
+  uname text := coalesce(
+    nullif(new.raw_user_meta_data ->> 'username', ''),
+    split_part(new.email, '@', 1)
+  );
 begin
-  if tier not in ('free','premium','vip') then
-    tier := 'free';
-  end if;
-
   insert into public.users
     (id, email, username, tier, is_active, is_admin, telegram_chat_id, created_at, updated_at)
   values
-    (new.id, new.email, uname, tier, true,
-     coalesce((new.raw_user_meta_data ->> 'is_admin')::boolean, false),
+    (new.id, new.email, left(uname, 100), 'free', true,
+     false,
      null, now(), now())
   on conflict (id) do nothing;
 

@@ -38,14 +38,25 @@ class Settings(BaseSettings):
     @model_validator(mode="before")
     @classmethod
     def _parse_cors(cls, values):
-        origins = values.get("CORS_ORIGINS")
-        if isinstance(origins, str) and origins.strip().startswith("["):
-            import json
+        """Accept a JSON array or the conventional comma-separated list.
 
-            try:
-                values["CORS_ORIGINS"] = json.loads(origins)
-            except json.JSONDecodeError:
-                pass
+        Comma-separated is what most operators reach for first; rejecting it made
+        a fresh deploy fail at startup with a pydantic validation error.
+        """
+        origins = values.get("CORS_ORIGINS")
+        if isinstance(origins, str):
+            raw = origins.strip()
+            if raw.startswith("["):
+                import json
+
+                try:
+                    values["CORS_ORIGINS"] = json.loads(raw)
+                except json.JSONDecodeError:
+                    values["CORS_ORIGINS"] = [
+                        o.strip() for o in raw.strip("[]").split(",") if o.strip()
+                    ]
+            else:
+                values["CORS_ORIGINS"] = [o.strip() for o in raw.split(",") if o.strip()]
         return values
 
     # Email (any SMTP provider: Gmail app-password, Resend SMTP, Brevo...)
@@ -55,6 +66,9 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: str = ""
     SMTP_FROM: str = "ORQEVA <no-reply@orqeva.com>"
     APP_BASE_URL: str = "http://localhost:3000"
+
+    # Error tracking (optional). Empty = Sentry disabled.
+    SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")
 
     @model_validator(mode="after")
     def _validate_supabase(self):

@@ -19,6 +19,21 @@ if settings.SECRET_KEY.startswith("dev-secret"):
 
     warnings.warn("SECRET_KEY is the development default - set a strong value before deploying")
 
+if settings.SENTRY_DSN:
+    try:
+        import sentry_sdk
+
+        sentry_sdk.init(
+            dsn=settings.SENTRY_DSN,
+            release=settings.APP_VERSION,
+            traces_sample_rate=0.0,
+            send_default_pii=False,
+        )
+    except ImportError:
+        import warnings
+
+        warnings.warn("SENTRY_DSN is set but sentry-sdk is not installed - run pip install sentry-sdk")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

@@ -109,11 +109,17 @@ class CentralRiskEngine:
                 return self._decision_from_checks(checks)
 
             # 5. Total portfolio exposure
+            # NOTE: open_position stores the price under "entry_price", so reading
+            # "price" here would always total 0 and disable this check entirely.
             total_exposure = sum(
-                pos.get("quantity", 0) * pos.get("price", 0)
+                float(pos.get("quantity", 0)) * float(pos.get("entry_price", 0))
                 for pos in self.positions.values()
             )
             new_exposure = total_exposure + (quantity * price)
+            if account_value <= 0:
+                checks.append({"name": "account_value", "allowed": False,
+                               "reason": "Account value is exhausted - no further exposure allowed"})
+                return self._decision_from_checks(checks)
             exposure_pct = new_exposure / account_value
             if exposure_pct > self.max_total_exposure:
                 checks.append({"name": "total_exposure", "allowed": False,
@@ -237,7 +243,7 @@ class CentralRiskEngine:
             market_positions[market] = market_positions.get(market, 0) + 1
 
         total_exposure = sum(
-            pos.get("quantity", 0) * pos.get("price", 0)
+            float(pos.get("quantity", 0)) * float(pos.get("entry_price", 0))
             for pos in self.positions.values()
         )
 

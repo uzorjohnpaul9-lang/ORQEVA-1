@@ -8,19 +8,52 @@ from tests.conftest import register_and_login
 
 
 async def test_env_admin_seeded_and_rotated(client, monkeypatch):
-    """ADMIN_PASSWORD env must (re)apply on every boot via init_db."""
-    from backend.db.database import async_session, init_db
-    from sqlalchemy import select as _sel
-    from backend.db.models import User
-    from backend.auth import verify_password
+    """ADMIN_PASSWORD env must (re)apply on every boot via seed_admin."""
+    import uuid as _uuid
 
+    from backend.db.database import seed_admin
+    from backend.db.models import USER_PREFERENCES, USERS
+    from backend.db.supabase import SupabaseDB, get_anon_client, get_service_client
+
+    email = f"seedadmin{_uuid.uuid4().hex[:8]}@test.dev"
+    monkeypatch.setenv("ADMIN_EMAIL", email)
     monkeypatch.setenv("ADMIN_PASSWORD", "RotatedPass123!")
-    await init_db()
+    monkeypatch.setenv("ADMIN_SEED_FORCE", "1")
 
-    async with async_session() as db:
-        u = (await db.execute(_sel(User).where(User.email == "admin@demo.com"))).scalar_one()
-        assert verify_password("RotatedPass123!", u.hashed_password)
-        assert u.is_admin
+    svc = await get_service_client()
+    db = SupabaseDB(svc)
+    try:
+        assert await seed_admin() is True
+        row = await db.fetch_one(USERS, {"email": email})
+        assert row and row["is_admin"] and row["tier"] == "vip"
+
+        anon = await get_anon_client()
+        resp = await anon.auth.sign_in_with_password(
+            {"email": email, "password": "RotatedPass123!"}
+        )
+        assert resp.user
+
+        # rotate the env password -> force seed applies it immediately
+        monkeypatch.setenv("ADMIN_PASSWORD", "SecondRot99!")
+        assert await seed_admin() is True
+        resp = await anon.auth.sign_in_with_password(
+            {"email": email, "password": "SecondRot99!"}
+        )
+        assert resp.user
+    finally:
+        row = await db.fetch_one(USERS, {"email": email}, columns="id")
+        if row:
+            await db.delete(USER_PREFERENCES, {"user_id": row["id"]})
+            await db.delete(USERS, {"id": row["id"]})
+        try:
+            users = await svc.auth.admin.list_users()
+            users = users if isinstance(users, list) else (getattr(users, "data", None) or [])
+            for u in users:
+                u_email = getattr(u, "email", None) or (u.get("email") if isinstance(u, dict) else None)
+                if (u_email or "").lower() == email:
+                    await svc.auth.admin.delete_user(getattr(u, "id", None) or u.get("id"))
+        except Exception:
+            pass
 
 
 async def test_order_idempotency_replay(client):
@@ -58,28 +91,19 @@ async def test_forgot_password_never_enumerates(client):
     assert r_real.json() == r_fake.json()
 
 
-async def test_full_password_reset_flow(client, monkeypatch):
+async def test_full_password_reset_flow(client):
     """forgot -> token delivered via notification fallback -> reset -> login with new pw."""
-    email = f"reset{os.urandom(3).hex()}@test.dev"
-    await client.post("/api/auth/register", json={
-        "email": email, "username": email.split("@")[0], "password": "OldPass123!"})
+    H, email = await register_and_login(client)
 
     r = await client.post("/api/auth/forgot", json={"email": email})
     assert r.status_code == 200
 
     # SMTP is unconfigured in tests: the link lands in the in-app notification center
-    from backend.db.database import async_session
-    from sqlalchemy import select as _sel
-    from backend.db.models import User, Notification
-
-    async with async_session() as db:
-        u = (await db.execute(_sel(User).where(User.email == email))).scalar_one()
-        notes = (await db.execute(
-            _sel(Notification).where(Notification.user_id == u.id))).scalars().all()
-    reset_notes = [n for n in notes if "reset" in (n.title or "").lower()]
-    assert reset_notes, f"expected fallback notification, got {[n.title for n in notes]}"
+    notes = (await client.get("/api/notifications", headers=H)).json()["notifications"]
+    reset_notes = [n for n in notes if "reset" in (n.get("title") or "").lower()]
+    assert reset_notes, f"expected fallback notification, got {[n.get('title') for n in notes]}"
     import re
-    m = re.search(r"token=([\w\-]+)", reset_notes[-1].message)
+    m = re.search(r"token=([\w\-]+)", reset_notes[-1]["message"])
     assert m, "notification must contain the reset link"
     raw_token = m.group(1)
 
@@ -88,7 +112,7 @@ async def test_full_password_reset_flow(client, monkeypatch):
     assert rr.status_code == 200, rr.text
 
     # old password dead, new one works
-    bad = await client.post("/api/auth/login", json={"email": email, "password": "OldPass123!"})
+    bad = await client.post("/api/auth/login", json={"email": email, "password": "Testpass123!"})
     assert bad.status_code == 401
     good = await client.post("/api/auth/login", json={"email": email, "password": "NewPass456!"})
     assert good.status_code == 200

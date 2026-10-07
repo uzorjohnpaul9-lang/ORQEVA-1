@@ -199,7 +199,12 @@ class ChannelNotifier:
         if not admin_chat_id:
             return
 
-        # Use any available bot token
+        admin_token = os.getenv("TELEGRAM_BOT_TOKEN_ADMIN", "")
+        if admin_token and admin_token != "create_this_bot":
+            self._send_telegram(admin_token, admin_chat_id, message)
+            return
+
+        # Fallback: any available tier bot
         for tier in ["free", "premium", "vip"]:
             config = TIER_CONFIG[tier]
             bot_token = os.getenv(config["bot_token_env"], "")

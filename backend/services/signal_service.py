@@ -59,11 +59,15 @@ async def save_signals_batch(db: SupabaseDB, signals: list[dict]) -> list[dict]:
 async def list_signals(db: SupabaseDB, market: str | None = None,
                        status: str | None = None, tier: str = "free",
                        limit: int = 50) -> list[dict]:
-    where: dict = {}
-    if tier == "free":
-        where["tier_required"] = "free"
-    elif tier == "premium":
-        where["tier_required"] = ["free", "premium"]
+    # Default-deny: an unrecognised tier must not see anything, otherwise a
+    # corrupt/typo'd tier value silently unlocks every gated signal.
+    allowed = {"free": ["free"],
+               "premium": ["free", "premium"],
+               "vip": ["free", "premium", "vip"]}.get((tier or "").lower())
+    if allowed is None:
+        return []
+
+    where: dict = {"tier_required": allowed}
     if market:
         where["market"] = market
     if status:

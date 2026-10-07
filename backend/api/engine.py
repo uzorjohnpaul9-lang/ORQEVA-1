@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter, Depends
 
 from backend.db.database import get_db
@@ -36,26 +38,21 @@ async def run_engine_scan(
 
 @router.get("/status")
 async def engine_status(user: dict = Depends(get_current_user)):
-    engines = {}
-    try:
-        from engines.stock_engine import StockEngine
-        e = StockEngine()
-        engines["stock"] = {"active": e.is_market_hours(), "symbols": len(e.get_symbols())}
-    except Exception as ex:
-        engines["stock"] = {"active": False, "error": str(ex)}
+    # Engine constructors and market-calendar lookups touch provider SDKs
+    # synchronously, so they run off the event loop.
+    async def describe(module_path: str, cls_name: str) -> dict:
+        def load():
+            mod = __import__(module_path, fromlist=[cls_name])
+            e = getattr(mod, cls_name)()
+            return {"active": e.is_market_hours(), "symbols": len(e.get_symbols())}
+        try:
+            return await asyncio.to_thread(load)
+        except Exception as ex:
+            return {"active": False, "error": str(ex)}
 
-    try:
-        from engines.forex_engine import ForexEngine
-        e = ForexEngine()
-        engines["forex"] = {"active": e.is_market_hours(), "symbols": len(e.get_symbols())}
-    except Exception as ex:
-        engines["forex"] = {"active": False, "error": str(ex)}
-
-    try:
-        from engines.crypto_engine import CryptoEngine
-        e = CryptoEngine()
-        engines["crypto"] = {"active": e.is_market_hours(), "symbols": len(e.get_symbols())}
-    except Exception as ex:
-        engines["crypto"] = {"active": False, "error": str(ex)}
-
-    return engines
+    results = await asyncio.gather(
+        describe("engines.stock_engine", "StockEngine"),
+        describe("engines.forex_engine", "ForexEngine"),
+        describe("engines.crypto_engine", "CryptoEngine"),
+    )
+    return dict(zip(("stock", "forex", "crypto"), results))

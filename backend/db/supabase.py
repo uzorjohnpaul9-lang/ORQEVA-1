@@ -15,12 +15,35 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
+import httpx
 from supabase import create_async_client
 from supabase.lib.client_options import AsyncClientOptions
 
 from backend.config import settings
 
 _OPS = {"eq", "neq", "gt", "gte", "lt", "lte", "like", "ilike", "is", "match"}
+
+
+async def _run(q, *, safe_to_repeat: bool):
+    """Execute a PostgREST query, retrying transient transport failures.
+
+    ConnectError means the request never reached the server, so every
+    operation may safely repeat it. Other transport errors are ambiguous
+    (the request may have landed), so only idempotent reads repeat those.
+    """
+    last = None
+    for attempt in range(3):
+        try:
+            return await q.execute()
+        except httpx.ConnectError as e:
+            last = e
+        except httpx.TransportError as e:
+            if not safe_to_repeat:
+                raise
+            last = e
+        if attempt < 2:
+            await asyncio.sleep(0.5 * (attempt + 1))
+    raise last
 
 
 def now_iso() -> str:
@@ -97,7 +120,7 @@ class SupabaseDB:
             q = q.limit(limit)
         if offset is not None:
             q = q.offset(offset)
-        resp = await q.execute()
+        resp = await _run(q, safe_to_repeat=True)
         return list(resp.data or [])
 
     async def fetch_one(
@@ -105,38 +128,38 @@ class SupabaseDB:
     ) -> dict | None:
         q = _apply_filters(self._c.table(table).select(columns), where)
         q = q.limit(1)
-        resp = await q.execute()
+        resp = await _run(q, safe_to_repeat=True)
         rows = resp.data or []
         return rows[0] if rows else None
 
     async def count(self, table: str, where: dict[str, Any] | None = None) -> int:
         q = _apply_filters(self._c.table(table).select("id", count="exact"), where)
-        resp = await q.execute()
+        resp = await _run(q, safe_to_repeat=True)
         return int(resp.count or 0)
 
     # ---- writes --------------------------------------------------------
 
     async def insert(self, table: str, data: dict) -> dict:
-        resp = await self._c.table(table).insert([data]).execute()
+        resp = await _run(self._c.table(table).insert([data]), safe_to_repeat=False)
         rows = resp.data or []
         return rows[0] if rows else data
 
     async def insert_many(self, table: str, rows: list[dict]) -> list[dict]:
         if not rows:
             return []
-        resp = await self._c.table(table).insert(rows).execute()
+        resp = await _run(self._c.table(table).insert(rows), safe_to_repeat=False)
         return list(resp.data or [])
 
     async def update(
         self, table: str, data: dict, where: dict[str, Any] | None = None
     ) -> list[dict]:
         q = _apply_filters(self._c.table(table).update(data), where)
-        resp = await q.execute()
+        resp = await _run(q, safe_to_repeat=False)
         return list(resp.data or [])
 
     async def delete(self, table: str, where: dict[str, Any] | None = None) -> list[dict]:
         q = _apply_filters(self._c.table(table).delete(), where)
-        resp = await q.execute()
+        resp = await _run(q, safe_to_repeat=False)
         return list(resp.data or [])
 
     async def ping(self) -> bool:

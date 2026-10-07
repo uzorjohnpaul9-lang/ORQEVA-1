@@ -56,36 +56,80 @@ async def seed_admin() -> bool:
             auth_id = getattr(u, "id", None) or (u.get("id") if isinstance(u, dict) else None)
             break
     if auth_id is None:
-        try:
-            created = await client.auth.admin.create_user(
-                {
-                    "email": email,
-                    "password": password,
-                    "email_confirm": True,
-                    "user_metadata": {"username": email.split("@")[0], "tier": "vip", "is_admin": True},
-                }
-            )
-            auth_id = created.user.id
-        except Exception as e:
-            log.error("seed_admin: create admin failed: %s", e)
+        import asyncio
+
+        last_err = None
+        for attempt in range(3):
+            try:
+                created = await client.auth.admin.create_user(
+                    {
+                        "email": email,
+                        "password": password,
+                        "email_confirm": True,
+                        "user_metadata": {"username": email.split("@")[0], "tier": "vip", "is_admin": True},
+                    }
+                )
+                auth_id = created.user.id
+                break
+            except Exception as e:
+                # Supabase occasionally rejects admin.create_user with a
+                # transient empty error under load; retry before giving up,
+                # otherwise the deployment boots with no admin at all.
+                last_err = e
+                if attempt < 2:
+                    await asyncio.sleep(2)
+        if auth_id is None:
+            # A timed-out create may have actually landed - the retry then
+            # fails with "already registered". Pick the id up instead of
+            # booting with a half-seeded admin.
+            try:
+                resp = await client.auth.admin.list_users()
+                users = resp if isinstance(resp, list) else (getattr(resp, "data", None) or [])
+                for u in users:
+                    email_ = getattr(u, "email", None) or (u.get("email") if isinstance(u, dict) else None)
+                    if (email_ or "").lower() == email:
+                        auth_id = getattr(u, "id", None) or (u.get("id") if isinstance(u, dict) else None)
+                        break
+            except Exception:
+                pass
+        if auth_id is None:
+            log.error("seed_admin: create admin failed: %s", last_err)
             return False
     else:
-        # Keep the seeded password in sync with env, and mirror admin flags into
-        # auth user_metadata (the frontend reads is_admin/tier from the JWT).
-        try:
-            await client.auth.admin.update_user_by_id(
-                auth_id,
-                {
-                    "password": password,
-                    "user_metadata": {
-                        "username": (email.split("@")[0] or "admin"),
-                        "tier": "vip",
-                        "is_admin": True,
+        # Admin exists already. Force-overwriting the password on every boot
+        # silently reverted any password the admin changed in the UI, so the
+        # existing account is left untouched unless explicitly requested.
+        if os.getenv("ADMIN_SEED_FORCE", "").strip().lower() in ("1", "true", "yes"):
+            try:
+                await client.auth.admin.update_user_by_id(
+                    auth_id,
+                    {
+                        "password": password,
+                        "user_metadata": {
+                            "username": (email.split("@")[0] or "admin"),
+                            "tier": "vip",
+                            "is_admin": True,
+                        },
                     },
-                },
-            )
-        except Exception as e:
-            log.error("seed_admin: admin password update failed: %s", e)
+                )
+                log.warning("seed_admin: admin password force-reset from ADMIN_PASSWORD")
+            except Exception as e:
+                log.error("seed_admin: admin password update failed: %s", e)
+        else:
+            # Keep the admin flags correct without touching the credential.
+            try:
+                await client.auth.admin.update_user_by_id(
+                    auth_id,
+                    {
+                        "user_metadata": {
+                            "username": (email.split("@")[0] or "admin"),
+                            "tier": "vip",
+                            "is_admin": True,
+                        },
+                    },
+                )
+            except Exception as e:
+                log.error("seed_admin: admin metadata sync failed: %s", e)
 
     # upsert the public.users mirror row
     row = await SupabaseDB(client).fetch_one(USERS, {"id": auth_id})

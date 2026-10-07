@@ -75,7 +75,7 @@ class BinanceBroker(BaseBroker):
                 if float(b["free"]) > 0:
                     balances[b["asset"]] = float(b["free"])
             return balances
-        except:
+        except Exception:
             return {}
 
     def get_position(self, symbol: str) -> Optional[Dict]:
@@ -89,7 +89,7 @@ class BinanceBroker(BaseBroker):
                 "entry_price": float(position.get("entryPrice", 0)),
                 "pnl": float(position.get("unRealizedProfit", 0)),
             }
-        except:
+        except Exception:
             return None
 
     def place_order(self, symbol: str, side: str, quantity: float, order_type: str = "market") -> Dict:
@@ -122,7 +122,7 @@ class BinanceBroker(BaseBroker):
                 self.place_order(symbol, side, abs(position["quantity"]))
                 return True
             return False
-        except:
+        except Exception:
             return False
 
     def get_pnl(self) -> float:
@@ -131,7 +131,7 @@ class BinanceBroker(BaseBroker):
         try:
             income = self.client.get_income_history(incomeType="REALIZED_PNL")
             return sum(float(i["income"]) for i in income[-30:])
-        except:
+        except Exception:
             return 0
 
 

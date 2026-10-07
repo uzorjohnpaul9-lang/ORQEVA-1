@@ -5,19 +5,16 @@ from tests.conftest import register_and_login
 
 
 async def _open_and_close(client, H):
+    # prices passed explicitly: the app's live feed (15s) blows past the test
+    # client timeout and this test is about open/close/history, not feeds
     body = {"market": "crypto", "symbol": "BTCUSDT", "side": "buy",
-            "order_type": "market", "quantity": 0.01}
+            "order_type": "market", "quantity": 0.01, "entry_price": 50000}
     r = await client.post("/api/trading/orders", headers=H, json=body)
-    if r.status_code not in (200, 201):
-        body["entry_price"] = 50000
-        r = await client.post("/api/trading/orders", headers=H, json=body)
     assert r.status_code in (200, 201), r.text
     trade_id = r.json()["trade_id"]
 
-    r = await client.post(f"/api/trading/close/{trade_id}", headers=H)
-    if r.status_code != 200:
-        r = await client.post(f"/api/trading/close/{trade_id}", headers=H,
-                              json={"exit_price": 51000})
+    r = await client.post(f"/api/trading/close/{trade_id}", headers=H,
+                          json={"exit_price": 51000})
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -48,13 +45,14 @@ async def test_history_filters_shape(client: httpx.AsyncClient):
 
 
 async def test_kill_switch_blocks_orders(client: httpx.AsyncClient):
-    H, _ = await register_and_login(client)
+    # tripping the global kill switch is admin-only by design (risk.py)
+    H, _ = await register_and_login(client, admin=True)
     r = await client.post("/api/risk/kill-switch", headers=H,
                           json={"active": True, "reason": "unit test"})
     assert r.status_code == 200
 
     body = {"market": "crypto", "symbol": "ETHUSDT", "side": "buy",
-            "order_type": "market", "quantity": 0.1}
+            "order_type": "market", "quantity": 0.1, "entry_price": 3000.0}
     r = await client.post("/api/trading/orders", headers=H, json=body)
     assert r.status_code in (400, 403)
     assert "kill switch" in r.json()["detail"].lower()

@@ -1,4 +1,3 @@
-from typing import Optional
 import os
 
 try:
@@ -49,7 +48,6 @@ if USE_PYDANTIC:
             extra = "ignore"
 
     class MonitoringSettings(BaseSettings):
-        sentry_dsn: Optional[str] = None
         prometheus_port: int = 9090
         log_level: str = "INFO"
         log_file: str = "logs/trading.log"
@@ -89,7 +87,6 @@ else:
 
     class MonitoringSettings:
         def __init__(self):
-            self.sentry_dsn = os.getenv("SENTRY_DSN")
             self.prometheus_port = int(os.getenv("PROMETHEUS_PORT", "9090"))
             self.log_level = os.getenv("LOG_LEVEL", "INFO")
             self.log_file = os.getenv("LOG_FILE", "logs/trading.log")

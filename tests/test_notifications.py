@@ -5,7 +5,8 @@ from tests.conftest import register_and_login
 
 
 async def test_notification_lifecycle(client: httpx.AsyncClient):
-    H, _ = await register_and_login(client)
+    # kill-switch activation (the triggering event) is admin-only by design
+    H, _ = await register_and_login(client, admin=True)
 
     # trigger an event that creates a notification (kill switch)
     r = await client.post("/api/risk/kill-switch", headers=H,
@@ -31,7 +32,7 @@ async def test_notification_lifecycle(client: httpx.AsyncClient):
 
 
 async def test_foreign_notification_hidden(client: httpx.AsyncClient):
-    H1, _ = await register_and_login(client)
+    H1, _ = await register_and_login(client, admin=True)
     H2, _ = await register_and_login(client)
 
     await client.post("/api/risk/kill-switch", headers=H1,

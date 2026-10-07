@@ -108,50 +108,69 @@ def fake_engines(monkeypatch):
     return inject
 
 
-async def test_run_scan_saves_and_fanout_shape(fake_engines, client):
-    from backend.db.database import async_session
+@pytest.fixture
+def quiet_fanout(monkeypatch):
+    """Isolate run_scan from fan-out side effects.
+
+    Telegram broadcasts (dead/revoked test tokens) and per-user notification
+    inserts (130+ accumulated test users) are not what these tests assert on;
+    they add minutes of network round-trips and can pollute `errors`.
+    """
+    async def _noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr("backend.services.telegram_service.broadcast", _noop)
+    monkeypatch.setattr("backend.services.notification_service.create", _noop)
+    monkeypatch.setattr("backend.services.auto_trade_service.run_for_scan", _noop)
+
+
+async def test_run_scan_saves_and_fanout_shape(fake_engines, quiet_fanout, client):
+    from backend.db.supabase import SupabaseDB, get_service_client
     from backend.services import engine_service
 
     fake_engines(["AAPL"], [], ["BTCUSDT"])
-    async with async_session() as db:
-        out = await engine_service.run_scan(db, cooldown_hours=0)
+    db = SupabaseDB(await get_service_client())
+    out = await engine_service.run_scan(db, cooldown_hours=0)
     assert out["errors"] == []
     assert out["signals_generated"] == 2
     assert out["by_market"] == {"stock": 1, "forex": 0, "crypto": 1}
-    keys = {(s.symbol, s.market) for s in out["saved"]}
+    keys = {(s["symbol"], s["market"]) for s in out["saved"]}
     assert ("AAPL", "stock") in keys and ("BTCUSDT", "crypto") in keys
 
 
-async def test_run_scan_cooldown_suppresses_duplicates(fake_engines, client):
+async def test_run_scan_cooldown_suppresses_duplicates(fake_engines, quiet_fanout, client):
     """Second identical scan within the cooldown window must save nothing."""
-    from backend.db.database import async_session
+    from backend.db.models import SIGNALS
+    from backend.db.supabase import SupabaseDB, get_service_client
     from backend.services import engine_service
 
     fake_engines(["MSFT"], ["EURUSD"], ["ETHUSDT"])
 
-    async with async_session() as db:
-        first = await engine_service.run_scan(db, cooldown_hours=24)
+    db = SupabaseDB(await get_service_client())
+    # prior suite runs may have saved these within 24h -> clear them first
+    for sym in ("MSFT", "EURUSD", "ETHUSDT"):
+        await db.delete(SIGNALS, {"symbol": sym})
+
+    first = await engine_service.run_scan(db, cooldown_hours=24)
     assert first["signals_generated"] == 3
 
-    async with async_session() as db:
-        second = await engine_service.run_scan(db, cooldown_hours=24)
+    second = await engine_service.run_scan(db, cooldown_hours=24)
     assert second["signals_generated"] == 0
     assert second["by_market"] == {"stock": 0, "forex": 0, "crypto": 0}
 
 
-async def test_run_scan_without_cooldown_allows_repeats(fake_engines, client):
-    from backend.db.database import async_session
+async def test_run_scan_without_cooldown_allows_repeats(fake_engines, quiet_fanout, client):
+    from backend.db.supabase import SupabaseDB, get_service_client
     from backend.services import engine_service
 
     fake_engines(["TSLA"], [], ["SOLUSDT"])
-    async with async_session() as db:
-        a = await engine_service.run_scan(db, cooldown_hours=0)
-    async with async_session() as db:
-        b = await engine_service.run_scan(db, cooldown_hours=0)
+    db = SupabaseDB(await get_service_client())
+    a = await engine_service.run_scan(db, cooldown_hours=0)
+    b = await engine_service.run_scan(db, cooldown_hours=0)
     assert a["signals_generated"] == b["signals_generated"] == 2
 
 
-async def test_run_scan_engine_error_captured(monkeypatch):
+async def test_run_scan_engine_error_captured(monkeypatch, quiet_fanout):
     bad = types.ModuleType("engines.stock_engine")
 
     def boom(self):
@@ -178,18 +197,29 @@ async def test_run_scan_engine_error_captured(monkeypatch):
     monkeypatch.setitem(sys.modules, "engines.forex_engine", good)
     monkeypatch.setitem(sys.modules, "engines.crypto_engine", crypto)
 
-    from backend.db.database import async_session
+    from backend.db.supabase import SupabaseDB, get_service_client
     from backend.services import engine_service
 
-    async with async_session() as db:
-        out = await engine_service.run_scan(db)
+    db = SupabaseDB(await get_service_client())
+    out = await engine_service.run_scan(db)
     assert len(out["errors"]) == 1 and "feed down" in out["errors"][0]
     assert out["signals_generated"] == 0
 
 
-async def test_scheduled_scan_tick_never_raises(monkeypatch):
+async def test_scheduled_scan_tick_never_raises(monkeypatch, quiet_fanout):
     """run_scheduled_scan swallows DB/engine failures."""
     monkeypatch.setenv("SCAN_COOLDOWN_HOURS", "4")
+    # empty fake engines: this asserts the tick's error handling, not live feeds
+    for suffix, cls in (("stock_engine", "StockEngine"),
+                        ("forex_engine", "ForexEngine"),
+                        ("crypto_engine", "CryptoEngine")):
+        mod = types.ModuleType(f"engines.{suffix}")
+        setattr(mod, cls, type(cls, (), {
+            "is_market_hours": lambda self: False,
+            "run_cycle": lambda self: [],
+            "__init__": lambda self: None,
+        }))
+        monkeypatch.setitem(sys.modules, f"engines.{suffix}", mod)
     from backend.services import scheduler
     out = await scheduler.run_scheduled_scan()
-    assert set(out.keys()) == {"signals_generated", "by_market", "errors"}
+    assert {"signals_generated", "by_market", "errors"} <= set(out.keys())

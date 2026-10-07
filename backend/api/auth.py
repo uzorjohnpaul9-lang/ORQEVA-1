@@ -32,7 +32,7 @@ async def register(data: UserRegister, db: SupabaseDB = Depends(get_db)):
     client = await get_service_client()
     try:
         created = await client.auth.admin.create_user(
-            {"email": email, "password": data.password}
+            {"email": email, "password": data.password, "email_confirm": True}
         )
         auth_id = created.user.id
     except Exception as e:
@@ -78,7 +78,21 @@ async def login(data: UserLogin, request: Request, db: SupabaseDB = Depends(get_
         resp = await anon.auth.sign_in_with_password({"email": email, "password": data.password})
         auth_user = resp.user
         access_token = resp.session.access_token
-    except Exception:
+    except Exception as e:
+        # AuthApiError carries `status`/`code`; transport failures carry neither.
+        # Only treat actual provider credential rejections as 401 - timeouts,
+        # 429s and 5xx must not lie to the user or count toward lockout.
+        status = getattr(e, "status", None) or getattr(e, "status_code", None)
+        try:
+            status = int(status)
+        except (TypeError, ValueError):
+            status = None
+        transient = status is None and not getattr(e, "code", None)
+        if transient or status == 429 or (status is not None and status >= 500):
+            raise HTTPException(
+                status_code=503,
+                detail="Login temporarily unavailable - please retry",
+            )
         brute_force.record_failure(email, ip)
         raise HTTPException(status_code=401, detail="Invalid email or password")
 

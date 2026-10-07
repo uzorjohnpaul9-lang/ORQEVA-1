@@ -251,15 +251,21 @@ export default function RiskPage() {
                 <Button
                   variant={s.kill_switch_active ? "secondary" : "danger"}
                   onClick={toggleKillSwitch}
+                  disabled={!user?.is_admin && !s.kill_switch_active}
+                  title={!user?.is_admin && !s.kill_switch_active
+                    ? "Only an administrator can activate the global kill switch"
+                    : undefined}
                 >
                   {s.kill_switch_active ? "Deactivate Kill Switch" : "Activate Kill Switch"}
                 </Button>
               </div>
-              {user?.is_admin && (
-                <p className="text-xs text-text-muted mt-4 border-t border-border pt-3">
-                  Admin: your toggle also controls the shared cross-market engine switch.
-                </p>
-              )}
+              <p className="text-xs text-text-muted mt-4 border-t border-border pt-3">
+                {user?.is_admin
+                  ? "Admin: this toggle controls the shared cross-market engine switch and blocks order placement for all users."
+                  : s.kill_switch_active
+                    ? "Your orders are blocked. Deactivating clears your personal switch only; a platform-wide switch can only be cleared by an administrator."
+                    : "You can block your own orders. Activating the platform-wide switch requires an administrator."}
+              </p>
             </Card>
           </div>
         </>

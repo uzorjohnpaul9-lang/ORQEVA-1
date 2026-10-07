@@ -19,9 +19,13 @@ logger = logging.getLogger(__name__)
 
 AUDIT_LOG_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "security_audit.json")
 
+# Shared by key derivation and password hashing so the iteration count lives in
+# exactly one place (and is recorded inside each hash for future migration).
+ITERATIONS = 480000
+
 
 def _derive_key(password: str, salt: bytes) -> bytes:
-    kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=480000)
+    kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=ITERATIONS)
     return base64.urlsafe_b64encode(kdf.derive(password.encode()))
 
 
@@ -51,12 +55,50 @@ def _write_env_master_key(new_key: str):
         f.write("\n".join(lines) + "\n")
 
 
+# Values that ship as obvious placeholders. .env.example uses "change_me", which
+# the old "change_this" prefix check let straight through.
+_PLACEHOLDER_PREFIXES = ("change_this", "change_me", "changeme", "your_", "todo", "replace")
+_MIN_KEY_LENGTH = 16
+
+
+class InsecureEncryptionKeyError(RuntimeError):
+    """Raised when ENCRYPTION_KEY is missing or a placeholder outside DEBUG."""
+
+
+def _is_placeholder(value: str) -> bool:
+    low = (value or "").strip().lower()
+    return (not low
+            or len(low) < _MIN_KEY_LENGTH
+            or any(low.startswith(p) for p in _PLACEHOLDER_PREFIXES))
+
+
 def _get_master_fernet() -> Fernet:
-    master = _read_env_master_key() or os.getenv("ENCRYPTION_KEY", "")
-    if not master or master.startswith("change_this"):
-        master = Fernet.generate_key().decode()
-        _write_env_master_key(master)
-        logger.warning("Generated new ENCRYPTION_KEY and wrote it to .env")
+    """Resolve the master key used for broker-credential encryption.
+
+    Precedence is os.environ first: the process environment is what the container
+    orchestrator injects, so a stale .env on disk must never override it.
+    """
+    # Regenerating the key on boot makes every stored api_key_encrypted
+    # permanently undecryptable, which silently breaks live trading. In DEBUG we
+    # keep the convenience behaviour; anywhere else we refuse to start.
+    master = os.getenv("ENCRYPTION_KEY") or _read_env_master_key()
+
+    if _is_placeholder(master):
+        if os.getenv("DEBUG", "").strip().lower() in ("1", "true", "yes"):
+            generated = Fernet.generate_key().decode()
+            _write_env_master_key(generated)
+            logger.warning(
+                "DEBUG mode: generated a temporary ENCRYPTION_KEY and wrote it to .env. "
+                "Stored credentials will not survive a key change."
+            )
+            return Fernet(_derive_key(generated, b"ai-trading-salt-v1"))
+        raise InsecureEncryptionKeyError(
+            "ENCRYPTION_KEY is missing or still a placeholder. Generate a real one with "
+            "`python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\"` "
+            "and set it in the environment. Broker credentials are encrypted with it and "
+            "become unreadable if it changes."
+        )
+
     salt = b"ai-trading-salt-v1"
     return Fernet(_derive_key(master, salt))
 
@@ -113,15 +155,18 @@ class SecurityManager:
     def _hash_secret(secret: str) -> str:
         salt = secrets.token_bytes(16)
         dk = hashlib.pbkdf2_hmac("sha256", secret.encode(), salt, 480000)
-        return f"{salt.hex()}${dk.hex()}"
+        return f"pbkdf2_sha256${ITERATIONS}${salt.hex()}${dk.hex()}"
 
     @staticmethod
     def _verify_secret(secret: str, stored: str) -> bool:
         try:
-            salt_hex, dk_hex = stored.split("$", 1)
-            salt = bytes.fromhex(salt_hex)
-            dk = hashlib.pbkdf2_hmac("sha256", secret.encode(), salt, 480000)
-            return secrets.compare_digest(dk.hex(), dk_hex)
+            parts = stored.split("$")
+            if len(parts) != 4 or parts[0] != "pbkdf2_sha256":
+                return False
+            iterations = int(parts[1])
+            salt = bytes.fromhex(parts[2])
+            dk = hashlib.pbkdf2_hmac("sha256", secret.encode(), salt, iterations)
+            return secrets.compare_digest(dk.hex(), parts[3])
         except Exception:
             return False
 

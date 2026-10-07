@@ -12,3 +12,4 @@ cryptography>=41.0.0
 python-jose[cryptography]>=3.3.0
 prometheus-client>=0.17.0
 python-multipart>=0.0.6
+sentry-sdk>=1.28.0

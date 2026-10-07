@@ -21,7 +21,14 @@ except ImportError:
     HAS_REQUESTS = False
 
 
-ADMIN_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN_FREE", "")
+def _admin_token() -> str:
+    """Dedicated admin bot, falling back to the Free bot for older setups."""
+    return os.getenv("TELEGRAM_BOT_TOKEN_ADMIN", "") or os.getenv(
+        "TELEGRAM_BOT_TOKEN_FREE", ""
+    )
+
+
+ADMIN_TOKEN = _admin_token()
 ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "")
 
 payment_mgr = PaymentManager()

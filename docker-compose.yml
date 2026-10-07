@@ -4,11 +4,17 @@ services:
       context: .
       dockerfile: Dockerfile.backend
     environment:
-      - SECRET_KEY=${SECRET_KEY:?set a strong SECRET_KEY in .env}
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      # Encrypts stored broker credentials. Required: the backend refuses to
+      # start without it when DEBUG=false, and a regenerated key makes every
+      # saved credential undecryptable.
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:?set a Fernet key in .env - see .env.example}
+      - SECRET_KEY=${SECRET_KEY:-}
+      - DEBUG=${DEBUG:-false}
       - SUPABASE_URL=${SUPABASE_URL:?set SUPABASE_URL in .env}
-      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:?set SUPABASE_SERVICE_KEY in .env}
+      - SUPABASE_PUBLISHABLE_KEY=${SUPABASE_PUBLISHABLE_KEY:-}
+      - SUPABASE_SECRET_KEY=${SUPABASE_SECRET_KEY:-}
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY:-}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-}
       - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET:-}
       - ADMIN_EMAIL=${ADMIN_EMAIL:?set real ADMIN_EMAIL in .env}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:?set strong ADMIN_PASSWORD in .env}
@@ -21,9 +27,26 @@ services:
       - TELEGRAM_BOT_TOKEN_FREE=${TELEGRAM_BOT_TOKEN_FREE:-}
       - TELEGRAM_BOT_TOKEN_PREMIUM=${TELEGRAM_BOT_TOKEN_PREMIUM:-}
       - TELEGRAM_BOT_TOKEN_VIP=${TELEGRAM_BOT_TOKEN_VIP:-}
-      - TWELVEDATA_API_KEY=${TWELVEDATA_API_KEY:-}
-      - CORS_ORIGINS=${CORS_ORIGINS:-["http://localhost:3000"]}
-      - DEBUG=false
+      - TELEGRAM_BOT_TOKEN_ADMIN=${TELEGRAM_BOT_TOKEN_ADMIN:-}
+      - TELEGRAM_CHANNEL_FREE=${TELEGRAM_CHANNEL_FREE:-}
+      - TELEGRAM_CHANNEL_PREMIUM=${TELEGRAM_CHANNEL_PREMIUM:-}
+      - TELEGRAM_CHANNEL_VIP=${TELEGRAM_CHANNEL_VIP:-}
+      - TELEGRAM_CHAT_IDS_FREE=${TELEGRAM_CHAT_IDS_FREE:-}
+      - TELEGRAM_CHAT_IDS_PREMIUM=${TELEGRAM_CHAT_IDS_PREMIUM:-}
+      - TELEGRAM_CHAT_IDS_VIP=${TELEGRAM_CHAT_IDS_VIP:-}
+      - TELEGRAM_ADMIN_CHAT_ID=${TELEGRAM_ADMIN_CHAT_ID:-}
+      - ALPACA_API_KEY=${ALPACA_API_KEY:-}
+      - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY:-}
+      - ALPACA_BASE_URL=${ALPACA_BASE_URL:-https://paper-api.alpaca.markets}
+      - ALPACA_DATA_URL=${ALPACA_DATA_URL:-https://data.alpaca.markets}
+      # Must be TWELVE_DATA_API_KEY: that is the name every reader uses.
+      - TWELVE_DATA_API_KEY=${TWELVE_DATA_API_KEY:?set TWELVE_DATA_API_KEY in .env - forex/crypto/gold quotes need it}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
+      - TRADING_ENABLED=${TRADING_ENABLED:-false}
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SCAN_ENABLED=${SCAN_ENABLED:-false}
+      - SCAN_INTERVAL_MINUTES=${SCAN_INTERVAL_MINUTES:-15}
+      - SCAN_COOLDOWN_HOURS=${SCAN_COOLDOWN_HOURS:-4}
     volumes:
       - db-data:/app/data
     restart: unless-stopped

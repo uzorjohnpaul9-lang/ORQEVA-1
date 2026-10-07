@@ -144,24 +144,24 @@ async def kraken_conn(client):
     H, email = await register_and_login(client)
 
     from security.security_manager import SecurityManager
-    sec = SecurityManager()
-    from backend.db.database import async_session
-    from backend.db.models import User, ExchangeConnection
-    from datetime import datetime, timezone
+    from backend.db.models import EXCHANGE_CONNECTIONS, USERS, gen_uuid
+    from backend.db.supabase import SupabaseDB, get_service_client, now_iso
 
-    async with async_session() as db:
-        u = (await db.execute(
-            __import__("sqlalchemy").select(User).where(User.email == email))).scalar_one()
-        conn = ExchangeConnection(
-            user_id=u.id, exchange="kraken",
-            api_key_encrypted=sec.encrypt_data("KRAKENKEY123456"),
-            api_secret_encrypted=sec.encrypt_data("krakensecret"),
-            is_paper=True, is_active=True,
-            connected_at=datetime.now(timezone.utc),
-        )
-        db.add(conn)
-        await db.commit()
-        conn_id = conn.id
+    sec = SecurityManager()
+    db = SupabaseDB(await get_service_client())
+    u = await db.fetch_one(USERS, {"email": email})
+    conn_id = gen_uuid()
+    await db.insert(EXCHANGE_CONNECTIONS, {
+        "id": conn_id,
+        "user_id": u["id"],
+        "exchange": "kraken",
+        "api_key_encrypted": sec.encrypt_data("KRAKENKEY123456"),
+        "api_secret_encrypted": sec.encrypt_data("krakensecret"),
+        "is_paper": True,
+        "is_active": True,
+        "connected_at": now_iso(),
+        "last_checked": now_iso(),
+    })
     return H, conn_id
 
 
@@ -172,13 +172,23 @@ async def _open_live(client, H, symbol="BTCUSD", **over):
     return await client.post("/api/trading/orders", json=payload, headers=H)
 
 
+@pytest.fixture
+def fixed_live_price(monkeypatch):
+    """Live route resolves price from a feed (entry_price is rejected there);
+    pin it so tests stay offline and deterministic."""
+    async def _price(market, symbol):
+        return 50000.0
+
+    monkeypatch.setattr("backend.api.trading.live_price", _price)
+
+
 async def test_live_route_without_connection_403(client):
     H, _ = await register_and_login(client)
     r = await _open_live(client, H)
     assert r.status_code == 403 and "no validated live connection" in r.json()["detail"]
 
 
-async def test_live_route_happy_path(client, kraken_conn, monkeypatch):
+async def test_live_route_happy_path(client, kraken_conn, fixed_live_price, monkeypatch):
     H, _conn_id = kraken_conn
 
     monkeypatch.setattr(
@@ -187,7 +197,7 @@ async def test_live_route_happy_path(client, kraken_conn, monkeypatch):
         {"ok": True, "broker_order_id": f"TX-{side}", "broker_status": "submitted",
          "filled_price": None},
     )
-    r = await _open_live(client, H, entry_price=50000.0)
+    r = await _open_live(client, H)
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["venue"] == "kraken" and body["broker_order_id"] == "TX-buy"
@@ -199,14 +209,14 @@ async def test_live_route_happy_path(client, kraken_conn, monkeypatch):
     assert rc.status_code == 200, rc.text
 
 
-async def test_live_route_broker_rejection_leaves_no_trade(client, kraken_conn, monkeypatch):
+async def test_live_route_broker_rejection_leaves_no_trade(client, kraken_conn, fixed_live_price, monkeypatch):
     H, _conn_id = kraken_conn
     monkeypatch.setattr(
         KrakenAdapter, "_place_order",
         lambda self, k, s, p, *, symbol, side, quantity, order_type, limit_price, **kw:
         {"ok": False, "detail": "EOrder:Insufficient funds"},
     )
-    r = await _open_live(client, H, entry_price=50000.0)
+    r = await _open_live(client, H)
     assert r.status_code == 502 and "Insufficient funds" in r.json()["detail"]
 
     rh = await client.get("/api/trading/history?outcome=open", headers=H)
@@ -214,7 +224,7 @@ async def test_live_route_broker_rejection_leaves_no_trade(client, kraken_conn, 
                for t in rh.json().get("trades", []))
 
 
-async def test_close_live_without_connection_blocked(client, kraken_conn, monkeypatch):
+async def test_close_live_without_connection_blocked(client, kraken_conn, fixed_live_price, monkeypatch):
     """A live-routed open position must NOT be silently paper-closed."""
     H, conn_id = kraken_conn
     monkeypatch.setattr(
@@ -222,18 +232,16 @@ async def test_close_live_without_connection_blocked(client, kraken_conn, monkey
         lambda self, k, s, p, *, symbol, side, quantity, order_type, limit_price, **kw:
         {"ok": True, "broker_order_id": "TX-x", "broker_status": "ok", "filled_price": None},
     )
-    r = await _open_live(client, H, entry_price=50000.0)
+    r = await _open_live(client, H)
+    assert r.status_code == 200, r.text
     trade_id = r.json()["trade_id"]
 
     # disconnect the broker behind the dashboard's back
-    from backend.db.database import async_session
-    from backend.db.models import ExchangeConnection
-    from sqlalchemy import update
-    async with async_session() as db:
-        await db.execute(update(ExchangeConnection)
-                         .where(ExchangeConnection.id == conn_id)
-                         .values(is_active=False))
-        await db.commit()
+    from backend.db.models import EXCHANGE_CONNECTIONS
+    from backend.db.supabase import SupabaseDB, get_service_client
+
+    db = SupabaseDB(await get_service_client())
+    await db.update(EXCHANGE_CONNECTIONS, {"is_active": False}, {"id": conn_id})
 
     rc = await client.post(f"/api/trading/close/{trade_id}", headers=H)  # no body -> live price path
     assert rc.status_code == 502 and "close manually at broker" in rc.json()["detail"]
@@ -247,7 +255,7 @@ async def test_paper_path_regression(client):
     }, headers=H)
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["venue"] == "paper" and body["route"] == "paper" and body["broker_order_id"] is None
+    assert body["venue"] == "paper" and body["route"] == "paper" and body.get("broker_order_id") is None
 
     rc = await client.post(f"/api/trading/close/{body['trade_id']}",
                            json={"exit_price": 101.0}, headers=H)

@@ -15,12 +15,14 @@ export async function api<T = unknown>(path: string, opts: ApiOptions = {}): Pro
   const res = await fetch(`${API_BASE}${path}`, {
     method,
     headers,
-    body: opts.body && method !== "GET" && method !== "HEAD" ? JSON.stringify(opts.body) : undefined,
+    body: opts.body && method !== "GET" && method !== "HEAD"
+      ? (typeof opts.body === "string" ? opts.body : JSON.stringify(opts.body))
+      : undefined,
   });
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || "API error");
+    throw new Error(typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail));
   }
   return res.json();
 }

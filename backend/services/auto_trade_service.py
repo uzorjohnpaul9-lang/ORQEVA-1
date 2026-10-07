@@ -100,12 +100,18 @@ def _tier_allows(tier: str | None, market: str) -> bool:
     return _TIER_RANK.get(tier or "free", 0) >= _TIER_RANK[_MARKET_MIN_TIER[market]]
 
 
-def _size_trade(signal: dict, account_value: float, risk_pct: float, max_pos_pct: float) -> float | None:
-    """Risk-per-trade sizing with a notional cap. Returns quantity or None."""
-    price = signal.get("entry_price")
-    if not price or float(price) <= 0:
+def _size_trade(signal: dict, account_value: float, risk_pct: float, max_pos_pct: float,
+                price: float | None = None) -> float | None:
+    """Risk-per-trade sizing with a notional cap. Returns quantity or None.
+
+    ``price`` is passed in by the caller because it may have been resolved from a
+    live quote; re-reading ``signal["entry_price"]`` here would return None for any
+    signal that lacked one and silently skip the trade.
+    """
+    resolved = price if price else signal.get("entry_price")
+    if not resolved or float(resolved) <= 0:
         return None
-    price = float(price)
+    price = float(resolved)
     risk_amount = account_value * (float(risk_pct or 1.0) / 100.0)
     stop = signal.get("stop_loss")
     distance = abs(price - float(stop)) if stop and float(stop) > 0 else 0.0
@@ -147,7 +153,6 @@ async def _log(db: SupabaseDB, *, user_id: str, signal: dict, status: str,
 async def execute_for_signal(db: SupabaseDB, signal: dict, settings_rows: list[dict],
                              users_by_id: dict[str, dict]) -> None:
     """Evaluate one newly-saved signal against every enabled user's settings."""
-    price = signal.get("entry_price")
     for s in settings_rows:
         user = users_by_id.get(s.get("user_id"))
         if not user or not user.get("is_active"):
@@ -182,20 +187,39 @@ async def execute_for_signal(db: SupabaseDB, signal: dict, settings_rows: list[d
                                route=route, reason=f"no validated live {market} connection")
                     continue
 
-            # Price: use the signal's entry price, fall back to a live quote.
+            # Price must be per-user: it is resolved inside the loop, so hoisting it
+            # would leak one user's quote into the next iteration.
+            price = signal.get("entry_price")
             if not price or float(price) <= 0:
                 live = await live_price(market, signal.get("symbol"))
                 if not live or live <= 0:
                     await _log(db, user_id=s["user_id"], signal=signal, status="error",
                                route=route, reason="price unavailable")
                     continue
-                price = f"{live:.8f}"
+                price = live
+            price = float(price)
+
+            # Reject protective levels on the wrong side of the entry; the broker
+            # would otherwise fill the stop immediately at the worst price.
+            side = (signal.get("direction") or "buy").lower()
+            stop = signal.get("stop_loss")
+            target = signal.get("take_profit")
+            if stop and float(stop) > 0:
+                if (side == "buy" and float(stop) >= price) or (side == "sell" and float(stop) <= price):
+                    await _log(db, user_id=s["user_id"], signal=signal, status="rejected",
+                               route=route, reason="signal stop-loss is on the wrong side of the entry price")
+                    continue
+            if target and float(target) > 0:
+                if (side == "buy" and float(target) <= price) or (side == "sell" and float(target) >= price):
+                    await _log(db, user_id=s["user_id"], signal=signal, status="rejected",
+                               route=route, reason="signal take-profit is on the wrong side of the entry price")
+                    continue
 
             # Size from risk-per-trade %, capped by the user's max position %.
             status = await risk_service.get_risk_status(db, s["user_id"])
             account_value = float(status.get("account_value") or 0)
             pos_size_pct = status.get("limits", {}).get("max_position_size_pct", 10.0)
-            qty = _size_trade(signal, account_value, s.get("per_trade_risk_pct"), pos_size_pct)
+            qty = _size_trade(signal, account_value, s.get("per_trade_risk_pct"), pos_size_pct, price)
             if not qty:
                 await _log(db, user_id=s["user_id"], signal=signal, status="skipped",
                            route=route, reason="could not size position from signal")
@@ -203,17 +227,17 @@ async def execute_for_signal(db: SupabaseDB, signal: dict, settings_rows: list[d
 
             # User-level risk gate (kill switch, position/trade counts, exposure).
             allowed, reason = await risk_service.pre_trade_check(
-                db, s["user_id"], market, qty, float(price)
+                db, s["user_id"], market, qty, price, status=status
             )
             if not allowed:
                 await _log(db, user_id=s["user_id"], signal=signal, status="rejected",
-                           quantity=qty, entry_price=float(price), route=route, reason=reason)
+                           quantity=qty, entry_price=price, route=route, reason=reason)
                 continue
 
             # Central engine (cross-market kill switch, drawdown, correlation).
             decision = await asyncio.to_thread(
                 central.approve_trade, market, signal.get("symbol"),
-                (signal.get("direction") or "buy").upper(), qty, float(price), account_value
+                side.upper(), qty, price, account_value
             )
             if not getattr(decision, "allowed", False):
                 await _log(db, user_id=s["user_id"], signal=signal, status="skipped",
@@ -225,18 +249,19 @@ async def execute_for_signal(db: SupabaseDB, signal: dict, settings_rows: list[d
                 db, user=user, symbol=signal.get("symbol"), market=market,
                 side=(signal.get("direction") or "buy"), quantity=qty,
                 entry_price=float(price), route=route, conn=conn,
-                stop_loss=signal.get("stop_loss"), take_profit=signal.get("take_profit"),
+                stop_loss=float(stop) if stop and float(stop) > 0 else None,
+                take_profit=float(target) if target and float(target) > 0 else None,
                 strategy=f"auto:{signal.get('strategy') or 'ai'}", signal_id=signal.get("id"),
             )
             if result.get("status") != "filled":
                 await _log(db, user_id=s["user_id"], signal=signal, status="error",
-                           quantity=qty, entry_price=float(price), route=route,
+                           quantity=qty, entry_price=price, route=route,
                            reason=result.get("detail") or "order failed")
                 continue
 
             await _log(db, user_id=s["user_id"], signal=signal, status="placed",
-                       quantity=qty, entry_price=float(price), route=route,
-                       reason="ok", trade_id=result.get("trade_id"))
+                       quantity=qty, entry_price=price, route=route,
+                       reason=result.get("warning") or "ok", trade_id=result.get("trade_id"))
             await _notify(db, user, signal, result, route)
         except Exception as e:  # never let one user's failure break the scan
             await _log(db, user_id=s["user_id"], signal=signal, status="error",
