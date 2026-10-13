@@ -107,8 +107,17 @@ class SecurityManager:
     def __init__(self):
         self.api_keys: Dict[str, Dict] = {}
         self.audit_log: list = []
-        self._fernet = _get_master_fernet()
+        self._fernet: Optional[Fernet] = None
         self._load_audit_log()
+
+    def _get_fernet(self) -> Fernet:
+        # Resolved on first use, not at construction: a missing ENCRYPTION_KEY
+        # must not crash the app while importing a module that builds a
+        # SecurityManager (e.g. backend/api/exchanges.py). It still raises -
+        # loudly - the moment a credential is actually encrypted/decrypted.
+        if self._fernet is None:
+            self._fernet = _get_master_fernet()
+        return self._fernet
 
     # ---- API Key Management ----
 
@@ -173,10 +182,10 @@ class SecurityManager:
     # ---- Fernet Encryption ----
 
     def encrypt_data(self, data: str) -> str:
-        return self._fernet.encrypt(data.encode()).decode()
+        return self._get_fernet().encrypt(data.encode()).decode()
 
     def decrypt_data(self, encrypted_data: str) -> str:
-        return self._fernet.decrypt(encrypted_data.encode()).decode()
+        return self._get_fernet().decrypt(encrypted_data.encode()).decode()
 
     def encrypt_dict(self, data: dict) -> str:
         return self.encrypt_data(json.dumps(data))
