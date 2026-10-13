@@ -22,8 +22,16 @@ __all__ = ["get_db", "init_db", "seed_admin"]
 
 
 async def init_db() -> None:
-    """Verify Supabase connectivity and seed the admin account."""
-    ok = await seed_admin()
+    """Verify Supabase connectivity and seed the admin account.
+
+    Never raises: a misconfigured or unreachable Supabase must leave the app
+    running (``/readyz`` reports ``database: down``) instead of crash-looping.
+    """
+    try:
+        ok = await seed_admin()
+    except Exception as e:
+        log.error("init_db: Supabase init failed: %s", e)
+        return
     if not ok:
         log.error("init_db: could not reach Supabase (check SUPABASE_URL / keys)")
 
@@ -32,7 +40,11 @@ async def seed_admin() -> bool:
     """Ensure the env-configured admin exists in Supabase Auth + public.users."""
     import os
 
-    client = await get_service_client()
+    try:
+        client = await get_service_client()
+    except Exception as e:
+        log.error("seed_admin: could not create Supabase client: %s", e)
+        return False
     email = os.getenv("ADMIN_EMAIL", "").strip().lower()
     password = os.getenv("ADMIN_PASSWORD", "")
     if not email or "CHANGE_ME" in email or "example.com" in email or "orqeva.com" in email:
