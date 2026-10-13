@@ -38,6 +38,7 @@ logs/
 !frontend/package.json
 !frontend/package-lock.json
 !frontend/tsconfig.json
+!railway.json
 
 # Database
 *.db
