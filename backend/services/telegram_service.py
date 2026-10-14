@@ -36,9 +36,21 @@ _TIER_ALLOWED = {
 _API_BASE = "https://api.telegram.org"
 
 
+def _clean(value: str | None) -> str:
+    """Trim whitespace and a single layer of wrapping quotes from an env value.
+
+    Copy-pasted tokens/ids often carry a trailing newline or surrounding
+    quotes; Telegram rejects those with 404 Not Found / chat not found.
+    """
+    v = (value or "").strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in ("\"", "'"):
+        v = v[1:-1].strip()
+    return v
+
+
 def _bot_token(tier: str) -> str:
     for name in (f"TELEGRAM_BOT_TOKEN_{tier.upper()}", "TELEGRAM_BOT_TOKEN"):
-        tok = os.getenv(name, "")
+        tok = _clean(os.getenv(name))
         if tok:
             return tok
     return ""
@@ -124,7 +136,7 @@ _CHANNEL_CHAIN = {
 
 
 def _channel_id(tier: str) -> str:
-    return os.getenv(f"TELEGRAM_CHANNEL_{tier.upper()}", "")
+    return _clean(os.getenv(f"TELEGRAM_CHANNEL_{tier.upper()}"))
 
 
 def channels_configured() -> bool:

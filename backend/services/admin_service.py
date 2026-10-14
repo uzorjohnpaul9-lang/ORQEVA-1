@@ -127,6 +127,7 @@ async def system_status(db: SupabaseDB) -> dict:
 
     scan = get_last_scan() or {}
     return {
+        "commit": (os.getenv("RAILWAY_GIT_COMMIT_SHA") or "")[:7],
         "last_channel_fanout": telegram_service.last_channel_fanout(),
         "scheduler": {
             "enabled": _flag(os.getenv("SCAN_ENABLED", "1")),
