@@ -189,6 +189,18 @@ def last_channel_fanout() -> dict:
     return _LAST_CHANNEL_FANOUT
 
 
+async def test_channel(tier: str) -> dict:
+    """Post a test message to one tier's channel using the backend's config."""
+    channel_id = _channel_id(tier)
+    if not channel_id:
+        return {"tier": tier, "ok": False, "detail": "no_channel_id"}
+    ok, detail = await asyncio.to_thread(
+        _post_message, _bot_token(tier), channel_id,
+        f"<b>TradeAI</b>: channel test ({tier}) - posting works.",
+    )
+    return {"tier": tier, "ok": ok, "detail": detail}
+
+
 def format_signal_alert(sig: dict) -> str:
     direction = (sig.get("direction") or "").upper()
     arrow = "\u2197" if direction == "BUY" else "\u2198"

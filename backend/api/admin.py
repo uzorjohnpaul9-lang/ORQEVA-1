@@ -155,6 +155,15 @@ async def system(
     return await admin_service.system_status(db)
 
 
+@router.post("/telegram/test-channel")
+async def telegram_test_channel(
+    tier: str = Query(..., pattern="^(free|premium|vip)$"),
+    admin: dict = Depends(require_admin),
+):
+    check_rate_limit(admin["id"], "admin")
+    return await telegram_service.test_channel(tier)
+
+
 @router.get("/audit")
 async def audit(
     limit: int = Query(50, ge=1, le=200),
