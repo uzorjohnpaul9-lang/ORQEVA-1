@@ -127,10 +127,11 @@ async def broadcast(db: SupabaseDB, category: str, texts_by_market: dict[str, st
     return sent
 
 
-# Channel fan-out: each signal is posted only to its own tier's channel.
+# Channel fan-out: a signal is posted to its own tier's channel and every
+# higher tier's channel (cumulative), so VIP carries the most.
 _CHANNEL_CHAIN = {
-    "free": ("free",),
-    "premium": ("premium",),
+    "free": ("free", "premium", "vip"),
+    "premium": ("premium", "vip"),
     "vip": ("vip",),
 }
 
@@ -147,10 +148,10 @@ _LAST_CHANNEL_FANOUT: dict[str, Any] = {}
 
 
 async def broadcast_channels(texts_by_tier: dict[str, str]) -> int:
-    """Post each tier's message block to its own tier channel.
+    """Post each tier's message block to its channel and every higher tier's.
 
     texts_by_tier: {"free": txt, "premium": txt, "vip": txt}. Each entry is
-    sent with that channel's own bot (the bot must be a channel admin).
+    sent with the target channel's own bot (each bot must be a channel admin).
     Returns the number of channel messages delivered. Never raises.
     """
     global _LAST_CHANNEL_FANOUT
