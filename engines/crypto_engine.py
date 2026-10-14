@@ -42,25 +42,32 @@ class CryptoEngine(BaseEngine):
         return True
 
     def fetch_prices(self, symbol: str, lookback: int = 30) -> List[float]:
-        """Fetch daily closing prices from Twelve Data."""
-        if not self._api_key:
-            return self._simulated_prices(symbol, lookback)
+        """Daily closing prices: keyless exchange data -> Twelve Data -> simulated."""
+        from .exchange_data import fetch_prices as exchange_prices
 
         try:
-            url = f"{self._base_url}/time_series"
-            params = {
-                "symbol": symbol,
-                "interval": "1day",
-                "outputsize": lookback,
-                "apikey": self._api_key,
-            }
-            r = requests.get(url, params=params, timeout=15)
-            data = r.json()
-
-            if "values" in data:
-                return [float(v["close"]) for v in reversed(data["values"])]
+            prices = exchange_prices(symbol, lookback, "1day")
+            if len(prices) >= 2:
+                return prices
         except Exception as e:
-            logger.error(f"Twelve Data fetch failed for {symbol}: {e}")
+            logger.error(f"Exchange data fetch failed for {symbol}: {e}")
+
+        if self._api_key:
+            try:
+                url = f"{self._base_url}/time_series"
+                params = {
+                    "symbol": symbol,
+                    "interval": "1day",
+                    "outputsize": lookback,
+                    "apikey": self._api_key,
+                }
+                r = requests.get(url, params=params, timeout=15)
+                data = r.json()
+
+                if "values" in data:
+                    return [float(v["close"]) for v in reversed(data["values"])]
+            except Exception as e:
+                logger.error(f"Twelve Data fetch failed for {symbol}: {e}")
 
         return self._simulated_prices(symbol, lookback)
 

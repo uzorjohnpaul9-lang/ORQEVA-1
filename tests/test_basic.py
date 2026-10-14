@@ -523,5 +523,35 @@ class TestExchangeData(unittest.TestCase):
         self.assertTrue(all(r["ok"] is False for r in rows))
 
 
+class TestCryptoEngineData(unittest.TestCase):
+    """Crypto engine + discovery prefer keyless exchange data."""
+
+    def test_engine_uses_exchange_data(self):
+        from engines import exchange_data as ed
+        from engines.crypto_engine import CryptoEngine
+        prices = [100.0 + i for i in range(30)]
+        with mock.patch.object(ed, "fetch_prices", return_value=prices):
+            self.assertEqual(CryptoEngine().fetch_prices("BTC/USD", 30), prices)
+
+    def test_engine_simulated_fallback(self):
+        from engines import exchange_data as ed
+        from engines.crypto_engine import CryptoEngine
+        eng = CryptoEngine()
+        eng._api_key = ""
+        with mock.patch.object(ed, "fetch_prices", return_value=[]):
+            out = eng.fetch_prices("BTC/USD", 30)
+        self.assertEqual(len(out), 30)
+
+    def test_discovery_uses_exchange_data(self):
+        from engines import exchange_data as ed
+        from engines.crypto_discovery import CryptoDiscovery
+        prices = [1.0 + i * 0.1 for i in range(30)]
+        with mock.patch.object(ed, "fetch_prices", return_value=prices):
+            with mock.patch.object(CryptoDiscovery, "_save_cache", lambda self: None):
+                out = CryptoDiscovery()._fetch_batch(["BTC/USD", "ETH/USD"], 30)
+        self.assertEqual(set(out), {"BTC/USD", "ETH/USD"})
+        self.assertAlmostEqual(out["BTC/USD"][-1], prices[-1])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

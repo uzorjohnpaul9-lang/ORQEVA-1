@@ -1,7 +1,8 @@
 """
 Crypto Discovery — scans a wider universe of coins and ranks by momentum.
 Finds "potential new coins coming up" beyond the fixed watchlist.
-Uses Twelve Data API with rate limiting and caching.
+Uses keyless exchange data (Binance/Bybit/…) with Twelve Data as a fallback,
+with rate limiting and caching.
 """
 import os
 import time
@@ -137,11 +138,41 @@ class CryptoDiscovery:
         return True, "OK"
 
     def _fetch_batch(self, symbols: List[str], lookback: int = 30) -> Dict[str, List[float]]:
-        """Fetch prices for multiple symbols in one API call."""
-        if not symbols or not self._api_key:
+        """Fetch prices for multiple symbols.
+
+        Keyless exchange data (Binance/Bybit/…) first — it costs no Twelve Data
+        credits and covers the whole universe — then a single Twelve Data batch
+        call for any symbols the exchanges did not return.
+        """
+        if not symbols:
             return {}
 
-        batch_str = ",".join(symbols)
+        result: Dict[str, List[float]] = {}
+        missing: List[str] = []
+        try:
+            from .exchange_data import fetch_prices as _exchange_prices
+        except Exception:
+            _exchange_prices = None
+
+        if _exchange_prices:
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                fetched = pool.map(
+                    lambda s: (s, _exchange_prices(s, lookback, "1day")), symbols
+                )
+                for sym, prices in fetched:
+                    if prices:
+                        result[sym] = prices
+                    else:
+                        missing.append(sym)
+        else:
+            missing = list(symbols)
+
+        if not missing or not self._api_key or self._daily_calls >= DAILY_SCAN_BUDGET:
+            return result
+
+        batch_str = ",".join(missing)
         try:
             r = requests.get(f"{self._base_url}/time_series", params={
                 "symbol": batch_str,
@@ -153,8 +184,7 @@ class CryptoDiscovery:
             self._save_cache()
 
             data = r.json()
-            result = {}
-            for sym in symbols:
+            for sym in missing:
                 sym_data = data.get(sym, {})
                 if isinstance(sym_data, dict) and "values" in sym_data:
                     prices = [float(v["close"]) for v in reversed(sym_data["values"])]
@@ -163,7 +193,7 @@ class CryptoDiscovery:
             return result
         except Exception as e:
             logger.error(f"Discovery batch fetch failed: {e}")
-            return {}
+            return result
 
     def _score_coin(self, symbol: str, prices: List[float]) -> Optional[CoinMomentum]:
         """Score a single coin based on momentum indicators."""

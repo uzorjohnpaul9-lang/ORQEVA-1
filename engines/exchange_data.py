@@ -17,7 +17,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-TIMEOUT = (3, 6)  # (connect, read) seconds
+TIMEOUT = (4, 10)  # (connect, read) seconds
 COOLDOWN = 600  # skip a provider this long after a network failure
 
 BINANCE_BASE = "https://api.binance.com"
