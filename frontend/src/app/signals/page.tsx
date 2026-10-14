@@ -9,10 +9,22 @@ import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { RichText } from "@/components/learn/RichText";
-import type { AccuracyStats, Signal } from "@/lib/types";
+import type { AccuracyStats, CalendarEventContext, Signal } from "@/lib/types";
 
 const MARKETS = ["all", "stock", "forex", "crypto"] as const;
 const STATUSES = ["active", "expired", "all"] as const;
+
+function eventCtx(s: Signal): CalendarEventContext | undefined {
+  const ctx = s.indicators?.event_context;
+  return ctx && typeof ctx === "object" ? (ctx as CalendarEventContext) : undefined;
+}
+
+function eventLabel(ctx: CalendarEventContext): string {
+  const ev = ctx.events[0];
+  if (!ev) return "Event soon";
+  const mins = ev.minutes_away != null ? ` (${Math.round(ev.minutes_away)}m)` : "";
+  return `Event soon: ${ev.name}${mins}`;
+}
 
 function fmt(v: number | null | undefined): string {
   if (v == null) return "—";
@@ -164,6 +176,7 @@ export default function SignalsPage() {
         )}
         {filtered.map((s) => {
           const eff = s.effective_confidence ?? s.confidence;
+          const ctx = eventCtx(s);
           return (
             <Card key={s.id} className="hover:border-border-light transition-colors cursor-pointer" >
               <div onClick={() => openDetail(s)}>
@@ -196,6 +209,12 @@ export default function SignalsPage() {
                     <p className="text-sm font-mono font-medium mt-0.5 text-green">{fmt(s.take_profit)}</p>
                   </div>
                 </div>
+
+                {ctx && (
+                  <div className="mt-3">
+                    <Badge variant="yellow">{eventLabel(ctx)}</Badge>
+                  </div>
+                )}
 
                 <div className="mt-3 flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -307,6 +326,13 @@ export default function SignalsPage() {
               View chart with entry / stop / target
             </Link>
 
+            {eventCtx(selected) && (
+              <div className="bg-yellow-dim text-yellow text-xs rounded-lg p-3">
+                {eventLabel(eventCtx(selected) as CalendarEventContext)} — this signal may be affected by
+                a scheduled event.
+              </div>
+            )}
+
             <div>
               <div className="flex items-center justify-between text-sm mb-1">
                 <span className="text-text-muted">Original confidence</span>
@@ -327,7 +353,10 @@ export default function SignalsPage() {
               <div>
                 <p className="text-xs text-text-muted uppercase mb-2">Indicators at generation</p>
                 <div className="grid grid-cols-2 gap-2 text-xs font-mono bg-bg-tertiary rounded-lg p-3">
-                  {Object.entries(selected.indicators).slice(0, 12).map(([k, v]) => (
+                  {Object.entries(selected.indicators)
+                    .filter(([k]) => k !== "event_context")
+                    .slice(0, 12)
+                    .map(([k, v]) => (
                     <div key={k} className="flex justify-between gap-2">
                       <span className="text-text-muted">{k}</span>
                       <span>

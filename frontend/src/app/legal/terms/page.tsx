@@ -46,6 +46,9 @@ export default function TermsPage() {
         <H>10. Changes</H>
         <P>We may update these terms; material changes will be announced in-app. Continued use after changes means acceptance.</P>
 
+        <H>11. Data &amp; third-party services</H>
+        <P>Economic calendar data is provided by financecalendar.com. Market data is provided by third-party feeds. We are not responsible for the accuracy, availability or timeliness of third-party data, and scheduled events may affect prices; this is not financial advice.</P>
+
         <H>Contact</H>
         <P>Questions about these terms: DM @Johnpaulmuna_83 on Telegram.</P>
       </div>

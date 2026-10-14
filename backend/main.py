@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from backend.config import settings
 from backend.db.database import init_db, readyz
-from backend.api import auth, signals, portfolio, market, risk, dashboard, engine, trading, ai, exchanges, billing, preferences, notifications, admin, auto_trade, learn
+from backend.api import auth, signals, portfolio, market, risk, dashboard, engine, trading, ai, exchanges, billing, preferences, notifications, admin, auto_trade, learn, calendar
 from backend.middleware.security_headers import SecurityHeadersMiddleware
 from backend.monitoring.metrics import MetricsMiddleware, render as render_metrics
 from backend.services import scheduler
@@ -77,6 +77,7 @@ app.include_router(preferences.router)
 app.include_router(notifications.router)
 app.include_router(auto_trade.router)
 app.include_router(learn.router)
+app.include_router(calendar.router)
 
 
 @app.get("/api/health")

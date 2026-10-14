@@ -20,11 +20,57 @@ def _cooldown_hours() -> int:
 
 
 _last_scan: dict | None = None
+_alerted_events: set[str] = set()
 
 
 def get_last_scan() -> dict | None:
     """Most recent scheduler scan summary (for /api/admin/system). Single worker, in-memory."""
     return _last_scan
+
+
+async def check_event_alerts(db) -> int:
+    """Warn (Telegram 'risk' + in-app) once per imminent high-impact event.
+
+    Never raises. Free tier is excluded from Telegram risk alerts by the
+    existing tier gating in telegram_service.
+    """
+    try:
+        from backend.services import calendar_service, telegram_service
+        from backend.services import notification_service as notif_service
+        from backend.db.models import USERS
+
+        events = calendar_service.high_impact_soon(calendar_service.alert_window_minutes())
+    except Exception:
+        return 0
+
+    sent = 0
+    for ev in events:
+        key = f"{ev.get('name')}|{ev.get('time_utc')}"
+        if key in _alerted_events:
+            continue
+        _alerted_events.add(key)
+
+        text = telegram_service.format_event_alert(ev)
+        try:
+            await telegram_service.broadcast(db, "risk", {"all": text})
+        except Exception:
+            pass
+
+        try:
+            users = await db.fetch_all(USERS, where={"is_active": True})
+            mins = ev.get("minutes_away")
+            when = f"in {round(float(mins))} min" if isinstance(mins, (int, float)) else "soon"
+            for u in users:
+                await notif_service.create(
+                    db, u["id"], "event",
+                    f"High-impact event {when}: {ev.get('name')}",
+                    "May affect " + ", ".join(ev.get("affected_markets") or []) if ev.get("affected_markets") else "Scheduled market event ahead.",
+                    respect_prefs=True,
+                )
+        except Exception:
+            pass
+        sent += 1
+    return sent
 
 
 async def run_scheduled_scan() -> dict:
@@ -35,6 +81,7 @@ async def run_scheduled_scan() -> dict:
 
     try:
         db = SupabaseDB(await get_service_client())
+        alerts = await check_event_alerts(db)
         out = await engine_service.run_scan(db, cooldown_hours=_cooldown_hours())
         log.info(
             "scheduled scan: %s signals (%s), errors=%s",
@@ -43,6 +90,7 @@ async def run_scheduled_scan() -> dict:
         from backend.monitoring.metrics import record_scan
         record_scan(out["signals_generated"], bool(out["errors"]))
         summary = {k: out[k] for k in ("signals_generated", "by_market", "errors")}
+        summary["event_alerts"] = alerts
         summary["at"] = __import__("backend.db.supabase", fromlist=["now_iso"]).now_iso()
         _last_scan = summary
         return summary

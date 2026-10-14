@@ -244,24 +244,29 @@ class RiskEngine:
         return RiskCheck(name="volatility_filter", allowed=True, reason="OK")
 
     def _check_news_events(self) -> RiskCheck:
-        """Control 11: News/Event Avoidance - Block during known event windows."""
-        from datetime import datetime
-        now = datetime.now()
-        hour = now.hour
-        minute = now.minute
+        """Control 11: News/Event Awareness - surface imminent high-impact events.
 
-        # Block 30 min before and after major economic events (simplified)
-        # In production: integrate with economic calendar API
-        event_hours = [8, 9, 14]  # FOMC, NFP, CPI release windows
-        for eh in event_hours:
-            if abs(hour - eh) <= 0 and minute < 30:
-                return RiskCheck(
-                    name="news_events",
-                    allowed=False,
-                    reason=f"Major economic event window ({eh}:00)"
-                )
+        Annotate-only by default: the check reports the event window but does not
+        block (set EVENT_GUARD=block to make it a hard gate).
+        """
+        import os
 
-        return RiskCheck(name="news_events", allowed=True, reason="OK")
+        try:
+            from backend.services import calendar_service
+            soon = calendar_service.high_impact_soon(calendar_service.alert_window_minutes())
+        except Exception:
+            soon = []
+
+        if not soon:
+            return RiskCheck(name="news_events", allowed=True, reason="OK")
+
+        names = ", ".join(e.get("name", "event") for e in soon[:3])
+        blocking = os.getenv("EVENT_GUARD", "annotate").lower() in ("block", "1", "true", "yes")
+        return RiskCheck(
+            name="news_events",
+            allowed=not blocking,
+            reason=f"High-impact event window: {names}",
+        )
 
     def _check_liquidity(self, symbol: str, quantity: float) -> RiskCheck:
         """Control 12: Liquidity Protection - Block if trade > 5% of avg volume."""

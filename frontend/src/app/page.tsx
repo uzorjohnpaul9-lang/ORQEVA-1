@@ -7,6 +7,7 @@ import { StatCard } from "@/components/ui/Card";
 import { Card, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { LineChart } from "@/components/charts/LineChart";
+import { EventBanner } from "@/components/calendar/EventBanner";
 import type { DashboardOverview, PortfolioPerformance, Signal, Trade } from "@/lib/types";
 
 export default function OverviewPage() {
@@ -34,6 +35,7 @@ export default function OverviewPage() {
 
   return (
     <div className="space-y-6">
+      <EventBanner />
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard label="Portfolio Value" value={o ? `$${o.portfolio_value.toLocaleString()}` : "..."} change={o ? `Win rate ${o.win_rate}%` : undefined} />
         <StatCard label="Total P&L" value={o ? `$${o.total_pnl.toLocaleString()}` : "..."} />

@@ -233,6 +233,22 @@ def format_trade_closed(trade: dict) -> str:
     )
 
 
+def format_event_alert(event: dict) -> str:
+    """Event-ahead warning (routed under the 'risk' category)."""
+    name = event.get("name") or "Economic event"
+    mins = event.get("minutes_away")
+    when = f"in {round(float(mins))} min" if isinstance(mins, (int, float)) else "soon"
+    markets = ", ".join(event.get("affected_markets") or [])
+    lines = [
+        f"\u26a0 <b>High-impact event {when}</b>",
+        name,
+    ]
+    if markets:
+        lines.append(f"May affect: {markets}")
+    lines.append("Consider tighter risk around the release.")
+    return "\n".join(lines)
+
+
 def _format_signal_alert_any(sig: Any) -> str:
     """Back-compat: accepts both dicts and attribute-style objects."""
     if isinstance(sig, dict):

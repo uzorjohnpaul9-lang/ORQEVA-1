@@ -12,7 +12,11 @@ _ENGINE_SPECS = [
 ]
 
 
-def _engine_signal_to_db(signal, market: str, strategy: str, tier: str = "free") -> dict:
+def _engine_signal_to_db(signal, market: str, strategy: str, tier: str = "free",
+                         event_context: dict | None = None) -> dict:
+    indicators = dict(signal.metadata or {})
+    if event_context:
+        indicators["event_context"] = event_context
     return {
         "symbol": signal.symbol,
         "market": market,
@@ -23,7 +27,7 @@ def _engine_signal_to_db(signal, market: str, strategy: str, tier: str = "free")
         "take_profit": round(signal.target_price, 4),
         "strategy": (signal.metadata or {}).get("strategy") or strategy,
         "tier": tier,
-        "indicators": signal.metadata,
+        "indicators": indicators,
     }
 
 
@@ -48,6 +52,12 @@ async def run_scan(db: SupabaseDB, *, cooldown_hours: int = 0) -> dict:
     results: dict[str, list] = {"stock": [], "forex": [], "crypto": []}
     errors: list[str] = []
 
+    try:
+        from backend.services import calendar_service
+        event_context = calendar_service.event_context()
+    except Exception:
+        event_context = None
+
     for market, mod_name, cls_name, strategy, tier in _ENGINE_SPECS:
         try:
             module = __import__(mod_name, fromlist=[cls_name])
@@ -55,7 +65,7 @@ async def run_scan(db: SupabaseDB, *, cooldown_hours: int = 0) -> dict:
             if await asyncio.to_thread(engine.is_market_hours):
                 raw = await asyncio.to_thread(engine.run_cycle)
                 results[market].extend(
-                    _engine_signal_to_db(s, market, strategy, tier) for s in raw
+                    _engine_signal_to_db(s, market, strategy, tier, event_context) for s in raw
                 )
         except Exception as e:
             errors.append(f"{market} engine: {str(e)[:150]}")

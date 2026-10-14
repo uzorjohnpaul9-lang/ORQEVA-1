@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import unittest
+from unittest import mock
 from datetime import datetime
 
 # Import modules to test
@@ -395,6 +396,71 @@ class TestEngineArchitecture(unittest.TestCase):
         cm = CoinMomentum(symbol="TEST/USD", price=1.0, rsi=50, score=0.5, direction="BUY")
         self.assertEqual(cm.symbol, "TEST/USD")
         self.assertEqual(cm.direction, "BUY")
+
+
+class _FakeResp:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+class TestCalendarService(unittest.TestCase):
+    """Keyless economic-calendar service (mocked feed - no network)."""
+
+    def setUp(self):
+        from backend.services import calendar_service as cs
+        from backend.middleware.cache import cache
+        cache.clear()
+        self.cs = cs
+
+    def test_markets_for_heuristic(self):
+        self.assertEqual(
+            self.cs._markets_for("US CPI Report October 2026", "economic-indicators"),
+            ["commodity", "crypto", "forex", "stock"],
+        )
+        self.assertEqual(self.cs._markets_for("Gold Futures", ""), ["commodity"])
+        self.assertEqual(
+            self.cs._markets_for("FOMC Rate Decision", "central-banks-monetary-policy"),
+            ["commodity", "crypto", "forex", "stock"],
+        )
+
+    def test_normalize_event(self):
+        ev = self.cs._normalize({
+            "name": "US CPI",
+            "title": "US CPI Report October 2026",
+            "impact": "high",
+            "category": "economic-indicators",
+            "date": "2026-10-14",
+            "time_utc": "2026-10-14T12:30:00+00:00",
+            "url": "https://www.financecalendar.com/event/x/",
+        })
+        self.assertEqual(ev["impact"], "high")
+        self.assertIn("stock", ev["affected_markets"])
+        self.assertEqual(ev["time_utc"], "2026-10-14T12:30:00+00:00")
+
+    def test_upcoming_parses_mocked_feed(self):
+        payload = {
+            "count": 1,
+            "events": [{
+                "name": "US CPI",
+                "title": "US CPI Report October 2026",
+                "impact": "high",
+                "category": "economic-indicators",
+                "date": "2026-10-14",
+                "time_utc": "2026-10-14T12:30:00+00:00",
+                "url": "https://www.financecalendar.com/event/x/",
+            }],
+        }
+        with mock.patch.object(self.cs.requests, "get", return_value=_FakeResp(payload)):
+            events = self.cs.upcoming(days=7, impact="high")
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["name"], "US CPI")
+
+    def test_upcoming_fails_open_on_error(self):
+        with mock.patch.object(self.cs.requests, "get", side_effect=RuntimeError("boom")):
+            self.assertEqual(self.cs.upcoming(days=7), [])
 
 
 if __name__ == "__main__":

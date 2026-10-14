@@ -17,20 +17,33 @@ class MarketControls:
         
     def check_news_events(self, symbol: str = None) -> Dict[str, Any]:
         """
-        Control 11: News/Event Avoidance
-        
-        Check for pending news or events.
+        Control 11: News/Event Awareness
+
+        Look up imminent high-impact economic events from the calendar service.
+        Annotate-only: never blocks by default (see RiskEngine._check_news_events).
         """
-        # Placeholder - would check actual news feeds
-        pending_events = []
-        
+        try:
+            from backend.services import calendar_service
+            window = calendar_service.alert_window_minutes()
+            pending_events = calendar_service.high_impact_soon(window)
+            affected = sorted({m for e in pending_events for m in e.get("affected_markets", [])})
+        except Exception:
+            window = 0
+            pending_events = []
+            affected = []
+
         allowed = len(pending_events) == 0
-        
+
         return {
             "control": "news_events",
             "allowed": allowed,
-            "reason": f"Pending events for {symbol}" if not allowed else "OK",
-            "pending_events": pending_events
+            "reason": (
+                f"High-impact event soon: {', '.join(e.get('name', 'event') for e in pending_events[:3])}"
+                if pending_events else "OK"
+            ),
+            "window_minutes": window,
+            "pending_events": pending_events,
+            "affected_markets": affected,
         }
     
     def check_liquidity(self, symbol: str, quantity: float) -> Dict[str, Any]:

@@ -169,3 +169,41 @@ export interface AutoTradeLogEntry {
   trade_id: string | null;
   created_at: string;
 }
+
+export interface CalendarEvent {
+  name: string;
+  title: string;
+  impact: "high" | "medium" | "low";
+  category: string;
+  all_day: boolean;
+  date: string | null;
+  time_utc: string | null;
+  time_et: string | null;
+  consensus: string | null;
+  prior: string | null;
+  actual: string | null;
+  url: string | null;
+  affected_markets: string[];
+  minutes_away?: number;
+}
+
+export interface CalendarAttribution {
+  source: string;
+  url: string;
+}
+
+export interface CalendarFeed {
+  events: CalendarEvent[];
+  attribution: CalendarAttribution;
+}
+
+export interface CalendarActiveFeed extends CalendarFeed {
+  affected_markets: string[];
+}
+
+export interface CalendarEventContext {
+  window_minutes: number;
+  events: CalendarEvent[];
+  affected_markets: string[];
+  attribution: CalendarAttribution;
+}
