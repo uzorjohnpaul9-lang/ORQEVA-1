@@ -22,17 +22,25 @@ def calculate_rsi(prices: List[float], period: int = 14) -> float:
 
 
 def calculate_macd(prices: List[float], fast: int = 12, slow: int = 26, signal: int = 9) -> Dict[str, float]:
-    """MACD line, signal line, histogram. SMA-based for simplicity."""
+    """MACD line (EMA_fast - EMA_slow), signal line (EMA of the MACD line), histogram.
+
+    Both lines are EMA-based. The old version used an SMA of raw prices as the
+    "signal" line, which sits above the MACD line in an uptrend by construction and
+    made MACD read bearish when it should read bullish.
+    """
     if len(prices) < slow:
-        return {"macd": 0, "signal": 0, "histogram": 0}
-    ema_fast = sum(prices[-fast:]) / fast
-    ema_slow = sum(prices[-slow:]) / slow
-    macd_line = ema_fast - ema_slow
-    signal_line = sum(prices[-signal:]) / signal if len(prices) >= signal else macd_line
+        return {"macd": 0.0, "signal": 0.0, "histogram": 0.0}
+    ema_fast = ema_series(prices, fast)
+    ema_slow = ema_series(prices, slow)
+    macd_line = [f - s for f, s in zip(ema_fast, ema_slow) if f is not None and s is not None]
+    if not macd_line:
+        return {"macd": 0.0, "signal": 0.0, "histogram": 0.0}
+    macd_cur = macd_line[-1]
+    signal_line = calculate_ema(macd_line, signal)
     return {
-        "macd": macd_line,
+        "macd": macd_cur,
         "signal": signal_line,
-        "histogram": macd_line - signal_line,
+        "histogram": macd_cur - signal_line,
     }
 
 
@@ -115,11 +123,19 @@ def score_signal(
     bearish_score = 0.0
     bearish_reasons = []
 
-    # RSI
-    if rsi < config.rsi_oversold:
+    # Trend state (EMA stack 9/21/50) - computed first so mean-reversion factors
+    # (RSI, Bollinger) do not fade a clearly aligned trend.
+    e9 = (ema or {}).get("ema9") or 0.0
+    e21 = (ema or {}).get("ema21") or 0.0
+    e50 = (ema or {}).get("ema50") or 0.0
+    trend_up = bool(e9 and e21 and e50 and e9 > e21 > e50)
+    trend_down = bool(e9 and e21 and e50 and e9 < e21 < e50)
+
+    # RSI (mean-reversion) - suppressed against an aligned trend
+    if rsi < config.rsi_oversold and not trend_down:
         bullish_score += config.rsi_weight
         bullish_reasons.append(f"RSI oversold ({rsi:.0f})")
-    elif rsi > config.rsi_overbought:
+    elif rsi > config.rsi_overbought and not trend_up:
         bearish_score += config.rsi_weight
         bearish_reasons.append(f"RSI overbought ({rsi:.0f})")
 
@@ -131,33 +147,29 @@ def score_signal(
         bearish_score += config.macd_weight
         bearish_reasons.append("MACD bearish")
 
-    # Bollinger Bands
+    # Bollinger Bands (mean-reversion) - suppressed against an aligned trend
     tol_high = getattr(config, "bollinger_tolerance_high", 1.03)
     tol_low = getattr(config, "bollinger_tolerance_low", 0.97)
-    if bollinger["lower"] > 0 and current_price <= bollinger["lower"] * tol_high:
+    if bollinger["lower"] > 0 and current_price <= bollinger["lower"] * tol_high and not trend_down:
         bullish_score += config.bollinger_weight
         bullish_reasons.append("Near lower Bollinger")
-    elif bollinger["upper"] > 0 and current_price >= bollinger["upper"] * tol_low:
+    elif bollinger["upper"] > 0 and current_price >= bollinger["upper"] * tol_low and not trend_up:
         bearish_score += config.bollinger_weight
         bearish_reasons.append("Near upper Bollinger")
 
     # Trend (EMA stack 9/21/50)
-    if ema:
-        e9 = ema.get("ema9") or 0.0
-        e21 = ema.get("ema21") or 0.0
-        e50 = ema.get("ema50") or 0.0
-        if e9 and e21 and e50 and e9 > e21 > e50 and current_price >= e9:
-            bullish_score += config.ema_weight
-            bullish_reasons.append("EMA stack bullish (9>21>50)")
-        elif e9 and e21 and e50 and e9 < e21 < e50 and current_price <= e9:
-            bearish_score += config.ema_weight
-            bearish_reasons.append("EMA stack bearish (9<21<50)")
-        elif e9 and e21 and e9 > e21:
-            bullish_score += config.ema_weight / 2
-            bullish_reasons.append("EMA9 > EMA21")
-        elif e9 and e21 and e9 < e21:
-            bearish_score += config.ema_weight / 2
-            bearish_reasons.append("EMA9 < EMA21")
+    if trend_up:
+        bullish_score += config.ema_weight
+        bullish_reasons.append("EMA stack bullish (9>21>50)")
+    elif trend_down:
+        bearish_score += config.ema_weight
+        bearish_reasons.append("EMA stack bearish (9<21<50)")
+    elif e9 and e21 and e9 > e21:
+        bullish_score += config.ema_weight / 2
+        bullish_reasons.append("EMA9 > EMA21")
+    elif e9 and e21 and e9 < e21:
+        bearish_score += config.ema_weight / 2
+        bearish_reasons.append("EMA9 < EMA21")
 
     # Momentum
     momentum_threshold = getattr(config, "momentum_threshold", 0.02)
