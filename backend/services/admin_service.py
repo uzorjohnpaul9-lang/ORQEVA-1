@@ -123,8 +123,11 @@ def _integration_flags() -> dict:
 async def system_status(db: SupabaseDB) -> dict:
     from backend.services.scheduler import get_last_scan
 
+    from backend.services import telegram_service
+
     scan = get_last_scan() or {}
     return {
+        "last_channel_fanout": telegram_service.last_channel_fanout(),
         "scheduler": {
             "enabled": _flag(os.getenv("SCAN_ENABLED", "1")),
             "interval_minutes": float(os.getenv("SCAN_INTERVAL_MINUTES", "15")),

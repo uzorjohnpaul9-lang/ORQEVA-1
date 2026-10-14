@@ -131,29 +131,50 @@ def channels_configured() -> bool:
     return any(_channel_id(t) for t in ("free", "premium", "vip"))
 
 
+_LAST_CHANNEL_FANOUT: dict[str, Any] = {}
+
+
 async def broadcast_channels(texts_by_tier: dict[str, str]) -> int:
-    """Post each tier's message block to its channel and every higher tier channel.
+    """Post each tier's message block to its own tier channel.
 
     texts_by_tier: {"free": txt, "premium": txt, "vip": txt}. Each entry is
     sent with that channel's own bot (the bot must be a channel admin).
     Returns the number of channel messages delivered. Never raises.
     """
+    global _LAST_CHANNEL_FANOUT
+    from datetime import datetime, timezone
+
     sent = 0
+    results: dict[str, dict] = {}
+    attempted = False
     for src_tier, text in texts_by_tier.items():
         if not text:
             continue
         for chan_tier in _CHANNEL_CHAIN.get(src_tier, (src_tier,)):
             channel_id = _channel_id(chan_tier)
             if not channel_id:
+                results[chan_tier] = {"ok": False, "detail": "no_channel_id"}
                 continue
+            attempted = True
             ok, detail = await asyncio.to_thread(
                 _post_message, _bot_token(chan_tier), channel_id, text
             )
+            results[chan_tier] = {"ok": ok, "detail": detail}
             if ok:
                 sent += 1
             elif detail != "no_bot_token":
                 logger.warning(f"Telegram channel post failed ({chan_tier}): {detail}")
+    if attempted:
+        _LAST_CHANNEL_FANOUT = {
+            "at": datetime.now(timezone.utc).isoformat(),
+            "sent": sent,
+            "results": results,
+        }
     return sent
+
+
+def last_channel_fanout() -> dict:
+    return _LAST_CHANNEL_FANOUT
 
 
 def format_signal_alert(sig: dict) -> str:
