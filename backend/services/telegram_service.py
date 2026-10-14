@@ -115,11 +115,10 @@ async def broadcast(db: SupabaseDB, category: str, texts_by_market: dict[str, st
     return sent
 
 
-# Channel fan-out: a signal is posted to its own tier's channel and every
-# higher tier's channel, mirroring the cumulative read gating in signal_service.
+# Channel fan-out: each signal is posted only to its own tier's channel.
 _CHANNEL_CHAIN = {
-    "free": ("free", "premium", "vip"),
-    "premium": ("premium", "vip"),
+    "free": ("free",),
+    "premium": ("premium",),
     "vip": ("vip",),
 }
 

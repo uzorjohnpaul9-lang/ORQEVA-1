@@ -25,6 +25,12 @@ def _flag(value: str | None) -> bool:
     return (value or "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _mask(value: str | None) -> str:
+    """Last 4 chars only (enough to verify config without leaking the value)."""
+    v = (value or "").strip()
+    return f"...{v[-4:]}" if len(v) >= 4 else ("set" if v else "")
+
+
 async def log_action(
     db: SupabaseDB,
     admin: dict,
@@ -107,6 +113,9 @@ def _integration_flags() -> dict:
         "telegram_free_configured": bool(os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN_FREE")),
         "telegram_premium_configured": bool(os.getenv("TELEGRAM_BOT_TOKEN_PREMIUM")),
         "telegram_vip_configured": bool(os.getenv("TELEGRAM_BOT_TOKEN_VIP")),
+        "telegram_channel_free": _mask(os.getenv("TELEGRAM_CHANNEL_FREE")),
+        "telegram_channel_premium": _mask(os.getenv("TELEGRAM_CHANNEL_PREMIUM")),
+        "telegram_channel_vip": _mask(os.getenv("TELEGRAM_CHANNEL_VIP")),
         "smtp_configured": bool(os.getenv("SMTP_HOST") or os.getenv("SENDER_EMAIL")),
     }
 
