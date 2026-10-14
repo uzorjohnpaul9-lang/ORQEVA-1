@@ -1,4 +1,5 @@
 """Admin space endpoints (all require_admin). See frontend /admin."""
+import asyncio
 import logging
 import secrets
 import string
@@ -153,6 +154,20 @@ async def system(
 ):
     check_rate_limit(admin["id"], "admin")
     return await admin_service.system_status(db)
+
+
+@router.get("/market/providers")
+async def market_providers(
+    symbol: str = Query("BTC/USD"),
+    interval: str = Query("1day"),
+    admin: dict = Depends(require_admin),
+):
+    """Diagnostic: probe each keyless crypto data provider from this host."""
+    check_rate_limit(admin["id"], "admin")
+    from engines.exchange_data import probe
+
+    providers = await asyncio.to_thread(probe, symbol, interval)
+    return {"symbol": symbol, "interval": interval, "providers": providers}
 
 
 @router.post("/telegram/test-channel")

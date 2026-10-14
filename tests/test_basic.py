@@ -494,7 +494,7 @@ class TestExchangeData(unittest.TestCase):
 
     def test_fetch_klines_falls_back_to_bybit(self):
         from engines import exchange_data as ed
-        ed._binance_down_until = 0.0
+        ed._down_until.clear()
         bybit = {"retCode": 0, "result": {"list": [["1791849600000", "1", "2", "0.5", "1.5", "1", "1"]]}}
 
         def fake_get(url, params=None, timeout=None):
@@ -507,13 +507,20 @@ class TestExchangeData(unittest.TestCase):
         self.assertEqual(provider, "bybit")
         self.assertEqual(len(bars), 1)
 
-    def test_fetch_klines_empty_when_both_fail(self):
+    def test_fetch_klines_empty_when_all_fail(self):
         from engines import exchange_data as ed
-        ed._binance_down_until = 0.0
+        ed._down_until.clear()
         with mock.patch.object(ed.requests, "get", side_effect=RuntimeError("down")):
             bars, provider = ed.fetch_klines("BTC/USD", "1day", 5)
         self.assertEqual(bars, [])
         self.assertIsNone(provider)
+
+    def test_probe_reports_each_provider(self):
+        from engines import exchange_data as ed
+        with mock.patch.object(ed.requests, "get", side_effect=RuntimeError("down")):
+            rows = ed.probe("BTC/USD", "1day", 3)
+        self.assertEqual([r["provider"] for r in rows], list(ed.DEFAULT_ORDER))
+        self.assertTrue(all(r["ok"] is False for r in rows))
 
 
 if __name__ == "__main__":
