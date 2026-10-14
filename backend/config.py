@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
 
     CORS_ORIGINS: list[str] | None = None
+    # Regex for origins that can't be enumerated ahead of time - Cloudflare Pages
+    # serves every deployment and preview at its own <hash>.orqeva.pages.dev URL.
+    # Only the canonical origin is pinned in CORS_ORIGINS; this covers the rest.
+    CORS_ORIGIN_REGEX: str | None = os.getenv(
+        "CORS_ORIGIN_REGEX", r"https://[a-z0-9-]+\.orqeva\.pages\.dev"
+    )
 
     @model_validator(mode="before")
     @classmethod

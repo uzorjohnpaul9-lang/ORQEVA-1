@@ -55,6 +55,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS
     or ["http://localhost:3000", "http://localhost:8000", "https://orqeva.pages.dev"],
+    allow_origin_regex=settings.CORS_ORIGIN_REGEX or None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
