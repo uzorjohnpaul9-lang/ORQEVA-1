@@ -206,11 +206,22 @@ def format_signal_alert(sig: dict) -> str:
     direction = (sig.get("direction") or "").upper()
     arrow = "\u2197" if direction == "BUY" else "\u2198"
     conf = float(sig.get("confidence", 0) or 0) * 100
-    return (
-        f"{arrow} <b>{sig.get('symbol', '?')}</b> ({sig.get('market', '?')})\n"
-        f"Signal: <b>{direction or '?'}</b> @ {sig.get('price') or sig.get('entry_price', '?')}\n"
-        f"Confidence: {conf:.0f}% | Strategy: {sig.get('strategy', 'ai')}"
-    )
+    entry = sig.get("price") or sig.get("entry_price")
+    sl = sig.get("stop_loss")
+    tp = sig.get("take_profit")
+    lines = [
+        f"{arrow} <b>{sig.get('symbol', '?')}</b> ({sig.get('market', '?')})",
+        f"Signal: <b>{direction or '?'}</b> @ {entry if entry is not None else '?'}",
+    ]
+    levels = []
+    if sl is not None:
+        levels.append(f"Stop: {sl}")
+    if tp is not None:
+        levels.append(f"Target: {tp}")
+    if levels:
+        lines.append(" | ".join(levels))
+    lines.append(f"Confidence: {conf:.0f}% | Strategy: {sig.get('strategy', 'ai')}")
+    return "\n".join(lines)
 
 
 def format_trade_closed(trade: dict) -> str:
@@ -234,5 +245,7 @@ def _format_signal_alert_any(sig: Any) -> str:
         "market": get("market", "?"),
         "price": get("price", "?"),
         "entry_price": get("entry_price", None),
+        "stop_loss": get("stop_loss", None),
+        "take_profit": get("take_profit", None),
         "strategy": get("strategy", "ai"),
     })
