@@ -7,6 +7,7 @@ export interface NavItem {
 export const navItems: NavItem[] = [
   { href: "/", label: "Overview", icon: "grid" },
   { href: "/signals", label: "AI Signals", icon: "zap" },
+  { href: "/learn", label: "Academy", icon: "book" },
   { href: "/auto-trade", label: "Auto-Trade", icon: "sliders" },
   { href: "/trades", label: "Open Trades", icon: "trending-up" },
   { href: "/trading", label: "Trading", icon: "dollar" },
@@ -29,6 +30,7 @@ export const adminNavItems: NavItem[] = [{ href: "/admin", label: "Admin", icon:
 export const navIconMap: Record<string, string> = {
   grid: "M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z",
   zap: "M13 10V3L4 14h7v7l9-11h-7z",
+  book: "M4 19.5A2.5 2.5 0 016.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z",
   "trending-up": "M7 17l9.2-9.2M17 17V7.8H7.8",
   briefcase: "M20 7H4a2 2 0 00-2 2v10a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2zM16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16",
   activity: "M22 12h-4l-3 9L9 3l-3 9H2",

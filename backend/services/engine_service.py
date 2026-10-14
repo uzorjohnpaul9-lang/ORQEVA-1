@@ -21,7 +21,7 @@ def _engine_signal_to_db(signal, market: str, strategy: str, tier: str = "free")
         "entry_price": round(signal.price, 4),
         "stop_loss": round(signal.stop_loss, 4),
         "take_profit": round(signal.target_price, 4),
-        "strategy": strategy,
+        "strategy": (signal.metadata or {}).get("strategy") or strategy,
         "tier": tier,
         "indicators": signal.metadata,
     }

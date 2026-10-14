@@ -12,6 +12,7 @@ from .indicators import (
     calculate_rsi, calculate_macd, calculate_bollinger,
     calculate_atr, calculate_sma, score_signal,
 )
+from . import strategy_library
 
 logger = logging.getLogger(__name__)
 
@@ -156,16 +157,66 @@ class BaseEngine(ABC):
             logger.error(f"Error analyzing {symbol}: {e}")
             return None
 
+    def analyze_strategy(self, symbol: str) -> Optional[Signal]:
+        """Signal from the public-methodology detectors (strategy_library).
+
+        Tagged with metadata['strategy'] so every such signal is explainable by
+        the Academy's AI Instructor.
+        """
+        if not self.is_market_hours():
+            return None
+        try:
+            prices = self.fetch_prices(symbol, self.indicator_config.macd_slow + 40)
+            if not prices or len(prices) < 30:
+                return None
+
+            cand = strategy_library.scan(prices, min_conf=self.indicator_config.min_signal_score)
+            if not cand:
+                return None
+
+            price = prices[-1]
+            rp = self.risk_params
+            if cand["direction"] == "BUY":
+                target_price = price * (1 + rp.take_profit_pct)
+                stop_loss = price * (1 - rp.stop_loss_pct)
+            else:
+                target_price = price * (1 - rp.take_profit_pct)
+                stop_loss = price * (1 + rp.stop_loss_pct)
+
+            quantity = self.calculate_position_size(symbol, price, 100000)
+            return Signal(
+                symbol=symbol,
+                direction=cand["direction"],
+                price=price,
+                confidence=round(cand["confidence"], 4),
+                reason=cand["reason"],
+                target_price=round(target_price, 4),
+                stop_loss=round(stop_loss, 4),
+                signal_type=self.market_type,
+                fees=self.calculate_fees(symbol, quantity, price),
+                slippage=self.calculate_slippage(symbol, quantity, price),
+                metadata={"strategy": cand["strategy"], "source": "methodology"},
+            )
+        except Exception as e:
+            logger.error(f"Strategy analysis failed for {symbol}: {e}")
+            return None
+
     def run_cycle(self, account_value: float = 100000) -> List[Signal]:
-        """Run a full analysis cycle across all symbols for this engine."""
+        """Run a full analysis cycle across all symbols for this engine.
+
+        Combines the indicator scorer with the methodology detectors and keeps
+        the higher-confidence candidate per symbol.
+        """
         if not self.is_market_hours():
             logger.info(f"{self.market_type} market closed, skipping cycle")
             return []
 
         signals = []
+        min_score = self.indicator_config.min_signal_score
         for symbol in self.get_symbols():
-            signal = self.analyze(symbol)
-            if signal and signal.confidence >= self.indicator_config.min_signal_score:
+            candidates = [s for s in (self.analyze(symbol), self.analyze_strategy(symbol)) if s]
+            signal = max(candidates, key=lambda s: s.confidence, default=None)
+            if signal and signal.confidence >= min_score:
                 signals.append(signal)
                 logger.info(
                     f"{self.market_type.upper()}: {signal.direction} {symbol} "

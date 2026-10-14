@@ -6,6 +6,8 @@ import { useAuth } from "@/lib/auth";
 import { Card, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/ui/Modal";
+import { Button } from "@/components/ui/Button";
+import { RichText } from "@/components/learn/RichText";
 import type { AccuracyStats, Signal } from "@/lib/types";
 
 const MARKETS = ["all", "stock", "forex", "crypto"] as const;
@@ -36,6 +38,8 @@ export default function SignalsPage() {
   const [selected, setSelected] = useState<Signal | null>(null);
   const [live, setLive] = useState(false);
   const [toast, setToast] = useState<string>("");
+  const [explain, setExplain] = useState<string>("");
+  const [explainBusy, setExplainBusy] = useState(false);
   const esRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
@@ -76,6 +80,7 @@ export default function SignalsPage() {
   const openDetail = useCallback(
     async (s: Signal) => {
       setSelected(s);
+      setExplain("");
       if (!token) return;
       try {
         const fresh = await api<Signal>(`/api/signals/${s.id}`, { token });
@@ -86,6 +91,23 @@ export default function SignalsPage() {
     },
     [token]
   );
+
+  const askInstructor = useCallback(async () => {
+    if (!token || !selected) return;
+    setExplainBusy(true);
+    try {
+      const r = await api<{ reply: string }>("/api/learn/explain-signal", {
+        method: "POST",
+        token,
+        body: { signal_id: selected.id },
+      });
+      setExplain(r.reply);
+    } catch {
+      setExplain("Couldn't reach the AI Instructor — please try again.");
+    } finally {
+      setExplainBusy(false);
+    }
+  }, [token, selected]);
 
   const filtered = signals.filter(
     (s) =>
@@ -306,6 +328,19 @@ export default function SignalsPage() {
                 </div>
               </div>
             )}
+
+            <div className="border-t border-border pt-4">
+              {explain ? (
+                <div className="text-sm bg-bg-tertiary rounded-lg p-3">
+                  <p className="text-xs text-green uppercase mb-2">AI Instructor</p>
+                  <RichText text={explain} />
+                </div>
+              ) : (
+                <Button variant="secondary" size="sm" onClick={askInstructor} disabled={explainBusy} className="w-full">
+                  {explainBusy ? "Thinking…" : "Ask the AI Instructor to explain this signal"}
+                </Button>
+              )}
+            </div>
 
             <p className="text-xs text-text-muted">
               Generated {new Date(selected.created_at).toLocaleString()}
