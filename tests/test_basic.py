@@ -463,5 +463,58 @@ class TestCalendarService(unittest.TestCase):
             self.assertEqual(self.cs.upcoming(days=7), [])
 
 
+class TestExchangeData(unittest.TestCase):
+    """Keyless Binance/Bybit kline parsing (mocked - no network)."""
+
+    def test_to_pair(self):
+        from engines.exchange_data import to_pair
+        self.assertEqual(to_pair("BTC/USD"), "BTCUSDT")
+        self.assertEqual(to_pair("ETH/USD"), "ETHUSDT")
+        self.assertEqual(to_pair("BTCUSDT"), "BTCUSDT")
+
+    def test_binance_parse_mocked(self):
+        from engines import exchange_data as ed
+        payload = [[1791849600000, "81852.1", "84172.6", "81031.2", "83172", "1", 0, "0", 0, "0", "0", "0"]]
+        with mock.patch.object(ed.requests, "get", return_value=_FakeResp(payload)):
+            bars = ed._binance_klines("BTCUSDT", "1day", 1)
+        self.assertEqual(bars[0]["close"], 83172.0)
+        self.assertEqual(bars[0]["open"], 81852.1)
+
+    def test_bybit_parse_mocked_newest_first(self):
+        from engines import exchange_data as ed
+        payload = {"retCode": 0, "result": {"list": [
+            ["1791936000000", "83172", "84137.6", "83027.4", "83657.8", "1", "1"],
+            ["1791849600000", "81852.1", "84172.6", "81031.2", "83172", "1", "1"],
+        ]}}
+        with mock.patch.object(ed.requests, "get", return_value=_FakeResp(payload)):
+            bars = ed._bybit_klines("BTCUSDT", "1day", 2)
+        self.assertEqual(len(bars), 2)
+        self.assertEqual(bars[0]["close"], 83172.0)
+        self.assertLess(bars[0]["time"], bars[1]["time"])
+
+    def test_fetch_klines_falls_back_to_bybit(self):
+        from engines import exchange_data as ed
+        ed._binance_down_until = 0.0
+        bybit = {"retCode": 0, "result": {"list": [["1791849600000", "1", "2", "0.5", "1.5", "1", "1"]]}}
+
+        def fake_get(url, params=None, timeout=None):
+            if "binance" in url:
+                raise RuntimeError("blocked")
+            return _FakeResp(bybit)
+
+        with mock.patch.object(ed.requests, "get", side_effect=fake_get):
+            bars, provider = ed.fetch_klines("BTC/USD", "1day", 5)
+        self.assertEqual(provider, "bybit")
+        self.assertEqual(len(bars), 1)
+
+    def test_fetch_klines_empty_when_both_fail(self):
+        from engines import exchange_data as ed
+        ed._binance_down_until = 0.0
+        with mock.patch.object(ed.requests, "get", side_effect=RuntimeError("down")):
+            bars, provider = ed.fetch_klines("BTC/USD", "1day", 5)
+        self.assertEqual(bars, [])
+        self.assertIsNone(provider)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

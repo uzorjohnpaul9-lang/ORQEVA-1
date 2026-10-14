@@ -253,6 +253,16 @@ def get_bars(market: str, symbol: str, interval: str = "1day", outputsize: int =
         if "bars" not in result:
             # Fallback: stocks via Twelve Data when Alpaca is unavailable.
             result = _td_bars(symbol, interval, outputsize)
+    elif market == "crypto":
+        # Keyless public exchange data (Binance -> Bybit) first; Twelve Data as
+        # a fallback so charts still work if both exchanges are unreachable.
+        from engines.exchange_data import fetch_klines
+        bars, source = fetch_klines(symbol, interval, outputsize)
+        result = (
+            {"symbol": symbol, "interval": interval, "bars": bars, "source": source}
+            if bars
+            else _td_bars(symbol, interval, outputsize)
+        )
     else:
         result = _td_bars(symbol, interval, outputsize)
 
