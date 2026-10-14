@@ -36,6 +36,41 @@ async def init_db() -> None:
         log.error("init_db: could not reach Supabase (check SUPABASE_URL / keys)")
 
 
+async def _unique_username(
+    facade: SupabaseDB, email: str, exclude_id: str | None = None
+) -> str:
+    """Pick a public.users.username that is not already taken.
+
+    ``seed_admin`` sends this to Supabase Auth as ``user_metadata.username``,
+    which the ``handle_new_user`` trigger copies verbatim into
+    ``public.users.username``. That column is unique, so a collision here aborts
+    (and rolls back) the entire auth-user insert with a generic
+    "Database error creating new user". Starting from the email local part, we
+    fall back to ``local_domain`` and then ``local_domain_N`` until one is free.
+
+    ``exclude_id`` lets an existing account keep its own username instead of
+    treating it as a collision with itself.
+    """
+    local, _, domain = email.partition("@")
+    local = local or "user"
+    domain_label = domain.split(".")[0] or "user"
+
+    async def is_free(candidate: str) -> bool:
+        row = await facade.fetch_one(USERS, {"username": candidate[:100]}, columns="id")
+        return row is None or (exclude_id is not None and row.get("id") == exclude_id)
+
+    for candidate in (local, f"{local}_{domain_label}"):
+        if await is_free(candidate):
+            return candidate[:100]
+
+    suffix = 1
+    while True:
+        candidate = f"{local}_{domain_label}_{suffix}"
+        if await is_free(candidate):
+            return candidate[:100]
+        suffix += 1
+
+
 async def seed_admin() -> bool:
     """Ensure the env-configured admin exists in Supabase Auth + public.users."""
     import os
@@ -54,6 +89,8 @@ async def seed_admin() -> bool:
         log.error("seed_admin: set a strong ADMIN_PASSWORD in .env - skipping placeholder-admin seed")
         return False
 
+    facade = SupabaseDB(client)
+
     try:
         resp = await client.auth.admin.list_users()
         users = resp if isinstance(resp, list) else (getattr(resp, "data", None) or [])
@@ -67,6 +104,12 @@ async def seed_admin() -> bool:
         if (email_ or "").lower() == email:
             auth_id = getattr(u, "id", None) or (u.get("id") if isinstance(u, dict) else None)
             break
+
+    # Resolve up-front: the handle_new_user trigger mirrors this value into the
+    # unique public.users.username column, so a taken name would roll back the
+    # auth-user insert entirely.
+    username = await _unique_username(facade, email, exclude_id=auth_id)
+
     if auth_id is None:
         import asyncio
 
@@ -78,7 +121,7 @@ async def seed_admin() -> bool:
                         "email": email,
                         "password": password,
                         "email_confirm": True,
-                        "user_metadata": {"username": email.split("@")[0], "tier": "vip", "is_admin": True},
+                        "user_metadata": {"username": username, "tier": "vip", "is_admin": True},
                     }
                 )
                 auth_id = created.user.id
@@ -118,7 +161,7 @@ async def seed_admin() -> bool:
                     {
                         "password": password,
                         "user_metadata": {
-                            "username": (email.split("@")[0] or "admin"),
+                            "username": username,
                             "tier": "vip",
                             "is_admin": True,
                         },
@@ -134,7 +177,7 @@ async def seed_admin() -> bool:
                     auth_id,
                     {
                         "user_metadata": {
-                            "username": (email.split("@")[0] or "admin"),
+                            "username": username,
                             "tier": "vip",
                             "is_admin": True,
                         },
@@ -144,14 +187,14 @@ async def seed_admin() -> bool:
                 log.error("seed_admin: admin metadata sync failed: %s", e)
 
     # upsert the public.users mirror row
-    row = await SupabaseDB(client).fetch_one(USERS, {"id": auth_id})
+    row = await facade.fetch_one(USERS, {"id": auth_id})
     if row is None:
-        await SupabaseDB(client).insert(
+        await facade.insert(
             USERS,
             {
                 "id": auth_id,
                 "email": email,
-                "username": email.split("@")[0],
+                "username": username,
                 "tier": "vip",
                 "is_active": True,
                 "is_admin": True,
@@ -159,7 +202,7 @@ async def seed_admin() -> bool:
                 "updated_at": now_iso(),
             },
         )
-        await SupabaseDB(client).insert(
+        await facade.insert(
             USER_PREFERENCES,
             {
                 "id": gen_uuid(),
@@ -177,7 +220,7 @@ async def seed_admin() -> bool:
             },
         )
     else:
-        await SupabaseDB(client).update(
+        await facade.update(
             USERS,
             {"is_admin": True, "tier": "vip", "is_active": True},
             {"id": auth_id},
