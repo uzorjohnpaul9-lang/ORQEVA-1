@@ -7,6 +7,8 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 import logging
 
+import requests
+
 from .base_engine import BaseEngine, Signal
 from .engine_config import StockEngineConfig, EngineRiskParams, IndicatorConfig
 
@@ -78,26 +80,50 @@ class StockEngine(BaseEngine):
         return True
 
     def fetch_prices(self, symbol: str, lookback: int = 40) -> List[float]:
-        """Fetch daily closing prices from Alpaca."""
-        if not self._data_client:
-            return self._simulated_prices(symbol, lookback)
+        """Fetch daily closing prices from Alpaca, falling back to Twelve Data."""
+        if self._data_client:
+            try:
+                from alpaca.data.requests import StockBarsRequest
+                from alpaca.data.timeframe import TimeFrame
 
-        try:
-            from alpaca.data.requests import StockBarsRequest
-            from alpaca.data.timeframe import TimeFrame
+                request = StockBarsRequest(
+                    symbol_or_symbols=[symbol],
+                    timeframe=TimeFrame(1, "Day"),
+                    start=datetime.now() - timedelta(days=lookback + 10),
+                )
+                bars = self._data_client.get_stock_bars(request)
+                if bars and symbol in bars:
+                    return [bar.close for bar in bars[symbol]]
+            except Exception as e:
+                logger.error(f"Alpaca fetch failed for {symbol}: {e}")
 
-            request = StockBarsRequest(
-                symbol_or_symbols=[symbol],
-                timeframe=TimeFrame(1, "Day"),
-                start=datetime.now() - timedelta(days=lookback + 10),
-            )
-            bars = self._data_client.get_stock_bars(request)
-            if bars and symbol in bars:
-                return [bar.close for bar in bars[symbol]]
-        except Exception as e:
-            logger.error(f"Alpaca fetch failed for {symbol}: {e}")
-
+        closes = self._twelve_data_prices(symbol, lookback)
+        if closes:
+            return closes
         return self._simulated_prices(symbol, lookback)
+
+    def _twelve_data_prices(self, symbol: str, lookback: int) -> List[float]:
+        """Twelve Data fallback for equities while Alpaca is unavailable."""
+        api_key = os.getenv("TWELVE_DATA_API_KEY", "")
+        if not api_key:
+            return []
+        try:
+            r = requests.get(
+                "https://api.twelvedata.com/time_series",
+                params={
+                    "symbol": symbol,
+                    "interval": "1day",
+                    "outputsize": min(lookback + 10, 200),
+                    "apikey": api_key,
+                },
+                timeout=15,
+            )
+            data = r.json()
+            if "values" in data:
+                return [float(v["close"]) for v in reversed(data["values"])][-lookback:]
+        except Exception as e:
+            logger.error(f"Twelve Data fetch failed for {symbol}: {e}")
+        return []
 
     def _simulated_prices(self, symbol: str, lookback: int) -> List[float]:
         """Generate simulated prices when API unavailable."""

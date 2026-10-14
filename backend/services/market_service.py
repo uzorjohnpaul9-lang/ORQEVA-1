@@ -148,7 +148,9 @@ def get_quote(market: str, symbol: str) -> dict[str, Any]:
         if symbol in quotes:
             result = quotes[symbol]
         else:
-            result = {"symbol": symbol, "error": "quote_unavailable"}
+            # Alpaca not configured/unavailable -> Twelve Data also covers US equities.
+            q = _td_quote(symbol)
+            result = q if q else {"symbol": symbol, "error": "quote_unavailable"}
     else:
         q = _td_quote(symbol)
         result = q if q else {"symbol": symbol, "error": "quote_unavailable"}
@@ -175,8 +177,14 @@ def get_overview() -> dict[str, Any]:
             td_symbols.append(item)
 
     stock_quotes = _alpaca_quotes(alpaca_symbols)
+    missing_stocks = [s for s in alpaca_symbols if s not in stock_quotes]
     with ThreadPoolExecutor(max_workers=4) as pool:
         td_results = list(pool.map(lambda item: _td_quote(item["symbol"]), td_symbols))
+        # Alpaca not configured/unavailable -> quote stocks via Twelve Data too.
+        stock_fallback = list(pool.map(_td_quote, missing_stocks))
+    for sym, q in zip(missing_stocks, stock_fallback):
+        if q and "error" not in q:
+            stock_quotes[sym] = q
     td_by_symbol = {item["symbol"]: q for item, q in zip(td_symbols, td_results)}
     for item in OVERVIEW_SYMBOLS:
         label, market, symbol = item["label"], item["market"], item["symbol"]
@@ -217,6 +225,12 @@ def get_movers(use_cache: bool = True) -> list[dict[str, Any]]:
             return cached
 
     quotes = _alpaca_quotes(MOVER_SYMBOLS)
+    if not quotes:
+        # Alpaca unavailable: skip Twelve Data here so we stay inside the free-tier
+        # credit budget (the overview cards already spend most of the 8/min allowance).
+        result = {"gainers": [], "losers": []}
+        cache.set(cache_key, result, ttl=QUOTE_TTL)
+        return result
     ranked = sorted(quotes.values(), key=lambda q: q["change_percent"])
     losers = [m for m in ranked[:5] if m["change_percent"] < 0]
     gainers = [m for m in ranked[-5:] if m["change_percent"] > 0]
@@ -236,6 +250,9 @@ def get_bars(market: str, symbol: str, interval: str = "1day", outputsize: int =
     result: dict[str, Any]
     if market == "stock":
         result = _alpaca_bars(symbol, interval, outputsize)
+        if "bars" not in result:
+            # Fallback: stocks via Twelve Data when Alpaca is unavailable.
+            result = _td_bars(symbol, interval, outputsize)
     else:
         result = _td_bars(symbol, interval, outputsize)
 
