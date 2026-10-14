@@ -54,6 +54,18 @@ async def market_bars(
     return await _offload(market_service.get_bars, market, symbol.upper(), interval, outputsize)
 
 
+@router.get("/indicators")
+async def market_indicators(
+    symbol: str = Query(...),
+    market: str = Query("crypto"),
+    interval: str = Query("1day", description="5min|15min|30min|1h|1day|1week"),
+    outputsize: int = Query(120, ge=30, le=200),
+    user: dict = Depends(get_current_user),
+):
+    check_rate_limit(user["id"], user.get("tier", "free"))
+    return await _offload(market_service.get_indicators, market, symbol.upper(), interval, outputsize)
+
+
 @router.get("/discovery")
 async def crypto_discovery(
     top_n: int = Query(10, ge=1, le=25),

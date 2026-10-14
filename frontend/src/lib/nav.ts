@@ -13,6 +13,7 @@ export const navItems: NavItem[] = [
   { href: "/trading", label: "Trading", icon: "dollar" },
   { href: "/portfolio", label: "Portfolio", icon: "briefcase" },
   { href: "/market", label: "Market", icon: "activity" },
+  { href: "/charts", label: "Charts", icon: "chart" },
   { href: "/analytics", label: "Analytics", icon: "chart" },
   { href: "/risk", label: "Risk Mgmt", icon: "shield" },
   { href: "/history", label: "History", icon: "clock" },

@@ -319,10 +319,18 @@ export default function SignalsPage() {
               <div>
                 <p className="text-xs text-text-muted uppercase mb-2">Indicators at generation</p>
                 <div className="grid grid-cols-2 gap-2 text-xs font-mono bg-bg-tertiary rounded-lg p-3">
-                  {Object.entries(selected.indicators).slice(0, 10).map(([k, v]) => (
+                  {Object.entries(selected.indicators).slice(0, 12).map(([k, v]) => (
                     <div key={k} className="flex justify-between gap-2">
                       <span className="text-text-muted">{k}</span>
-                      <span>{typeof v === "number" ? v.toFixed(3) : String(v)}</span>
+                      <span>
+                        {typeof v === "number"
+                          ? v.toFixed(3)
+                          : v && typeof v === "object"
+                            ? Object.values(v as Record<string, number>)
+                                .map((x) => (typeof x === "number" ? x.toFixed(3) : String(x)))
+                                .join(" / ")
+                            : String(v)}
+                      </span>
                     </div>
                   ))}
                 </div>

@@ -244,6 +244,31 @@ def get_bars(market: str, symbol: str, interval: str = "1day", outputsize: int =
     return result
 
 
+def get_indicators(market: str, symbol: str, interval: str = "1day", outputsize: int = 120) -> dict[str, Any]:
+    """OHLC bars plus EMA (9/21/50) series for the Charts page.
+
+    Reuses the engines' EMA implementation (engines/indicators.py) so the chart
+    overlays and the signal engines always agree on the math.
+    """
+    data = get_bars(market, symbol, interval, outputsize)
+    if "bars" not in data:
+        return data
+
+    from engines.indicators import ema_series
+
+    closes = [b["close"] for b in data["bars"]]
+    return {
+        "symbol": data.get("symbol", symbol),
+        "interval": data.get("interval", interval),
+        "bars": data["bars"],
+        "indicators": {
+            "ema9": ema_series(closes, 9),
+            "ema21": ema_series(closes, 21),
+            "ema50": ema_series(closes, 50),
+        },
+    }
+
+
 def _td_bars(symbol: str, interval: str, outputsize: int) -> dict[str, Any]:
     key = _td_api_key()
     if not key:

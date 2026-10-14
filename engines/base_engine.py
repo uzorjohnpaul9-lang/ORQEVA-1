@@ -10,7 +10,7 @@ from typing import List, Optional, Dict, Any
 from .engine_config import EngineRiskParams, IndicatorConfig
 from .indicators import (
     calculate_rsi, calculate_macd, calculate_bollinger,
-    calculate_atr, calculate_sma, score_signal,
+    calculate_atr, calculate_ema, score_signal,
 )
 from . import strategy_library
 
@@ -104,19 +104,25 @@ class BaseEngine(ABC):
             return None
 
         try:
-            prices = self.fetch_prices(symbol, self.indicator_config.macd_slow + 10)
+            config = self.indicator_config
+            lookback = max(config.macd_slow + 10, config.ema_slow + 40)
+            prices = self.fetch_prices(symbol, lookback)
             if not prices or len(prices) < 26:
                 return None
 
             current_price = prices[-1]
-            config = self.indicator_config
 
             rsi = calculate_rsi(prices, config.rsi_period)
             macd = calculate_macd(prices, config.macd_fast, config.macd_slow, config.macd_signal)
             bollinger = calculate_bollinger(prices, config.bollinger_period, config.bollinger_std)
             atr = calculate_atr(prices, config.atr_period)
+            ema = {
+                "ema9": calculate_ema(prices, config.ema_fast),
+                "ema21": calculate_ema(prices, config.ema_mid),
+                "ema50": calculate_ema(prices, config.ema_slow),
+            }
 
-            result = score_signal(rsi, macd, bollinger, prices, current_price, config)
+            result = score_signal(rsi, macd, bollinger, prices, current_price, config, ema=ema)
 
             if not result["direction"]:
                 return None
@@ -150,7 +156,7 @@ class BaseEngine(ABC):
                 signal_type=self.market_type,
                 fees=fees,
                 slippage=slippage,
-                metadata={"rsi": rsi, "atr": atr, "macd": macd},
+                metadata={"rsi": rsi, "atr": atr, "macd": macd, **ema},
             )
 
         except Exception as e:

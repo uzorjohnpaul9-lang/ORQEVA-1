@@ -66,6 +66,37 @@ def calculate_sma(prices: List[float], period: int) -> float:
     return sum(prices[-period:]) / period
 
 
+def calculate_ema(prices: List[float], period: int) -> float:
+    """Exponential Moving Average of the latest value. SMA-seeded."""
+    if not prices:
+        return 0.0
+    if len(prices) < period:
+        return sum(prices) / len(prices)
+    k = 2 / (period + 1)
+    ema = sum(prices[:period]) / period
+    for p in prices[period:]:
+        ema = p * k + ema * (1 - k)
+    return ema
+
+
+def ema_series(prices: List[float], period: int) -> List[Optional[float]]:
+    """Full EMA series aligned to `prices`. Values before the seed are None.
+
+    Used for charting (overlays) so the frontend never recomputes EMA in JS.
+    """
+    n = len(prices)
+    out: List[Optional[float]] = [None] * n
+    if n < period or period <= 0:
+        return out
+    k = 2 / (period + 1)
+    ema = sum(prices[:period]) / period
+    out[period - 1] = ema
+    for i in range(period, n):
+        ema = prices[i] * k + ema * (1 - k)
+        out[i] = ema
+    return out
+
+
 def score_signal(
     rsi: float,
     macd: Dict[str, float],
@@ -73,6 +104,7 @@ def score_signal(
     prices: List[float],
     current_price: float,
     config: IndicatorConfig,
+    ema: Optional[Dict[str, float]] = None,
 ) -> Dict[str, float]:
     """
     Score a signal as bullish or bearish using configurable weights.
@@ -109,16 +141,23 @@ def score_signal(
         bearish_score += config.bollinger_weight
         bearish_reasons.append("Near upper Bollinger")
 
-    # Trend (SMA crossover)
-    if len(prices) >= 20:
-        sma5 = calculate_sma(prices, 5)
-        sma20 = calculate_sma(prices, 20)
-        if sma5 > sma20:
-            bullish_score += config.trend_weight
-            bullish_reasons.append("Uptrend (SMA5 > SMA20)")
-        else:
-            bearish_score += config.trend_weight
-            bearish_reasons.append("Downtrend (SMA5 < SMA20)")
+    # Trend (EMA stack 9/21/50)
+    if ema:
+        e9 = ema.get("ema9") or 0.0
+        e21 = ema.get("ema21") or 0.0
+        e50 = ema.get("ema50") or 0.0
+        if e9 and e21 and e50 and e9 > e21 > e50 and current_price >= e9:
+            bullish_score += config.ema_weight
+            bullish_reasons.append("EMA stack bullish (9>21>50)")
+        elif e9 and e21 and e50 and e9 < e21 < e50 and current_price <= e9:
+            bearish_score += config.ema_weight
+            bearish_reasons.append("EMA stack bearish (9<21<50)")
+        elif e9 and e21 and e9 > e21:
+            bullish_score += config.ema_weight / 2
+            bullish_reasons.append("EMA9 > EMA21")
+        elif e9 and e21 and e9 < e21:
+            bearish_score += config.ema_weight / 2
+            bearish_reasons.append("EMA9 < EMA21")
 
     # Momentum
     momentum_threshold = getattr(config, "momentum_threshold", 0.02)

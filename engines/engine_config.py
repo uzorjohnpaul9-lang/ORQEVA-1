@@ -32,11 +32,15 @@ class IndicatorConfig:
     bollinger_std: float = 2.0
     atr_period: int = 14
     momentum_period: int = 5
+    # EMA stack (trend) - replaces the old SMA5/SMA20 factor
+    ema_fast: int = 9
+    ema_mid: int = 21
+    ema_slow: int = 50
     # Scoring weights
     rsi_weight: float = 0.25
     macd_weight: float = 0.20
     bollinger_weight: float = 0.20
-    trend_weight: float = 0.15
+    ema_weight: float = 0.20
     momentum_weight: float = 0.10
     # Min score to emit signal
     min_signal_score: float = 0.40
