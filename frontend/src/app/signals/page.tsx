@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { api, API_BASE } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Card, CardHeader, CardTitle } from "@/components/ui/Card";
@@ -298,6 +299,13 @@ export default function SignalsPage() {
                 <p className="font-mono font-medium mt-1 text-green">{fmt(selected.take_profit)}</p>
               </div>
             </div>
+
+            <Link
+              href={`/charts?symbol=${encodeURIComponent(selected.symbol)}&market=${selected.market}&entry=${selected.entry_price}&sl=${selected.stop_loss ?? ""}&tp=${selected.take_profit ?? ""}&side=${selected.direction}`}
+              className="inline-flex w-full items-center justify-center rounded-lg border border-border bg-bg-tertiary px-4 py-2 text-sm font-medium text-text-primary hover:bg-hover transition-colors"
+            >
+              View chart with entry / stop / target
+            </Link>
 
             <div>
               <div className="flex items-center justify-between text-sm mb-1">

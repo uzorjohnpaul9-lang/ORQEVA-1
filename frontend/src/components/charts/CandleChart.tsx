@@ -13,18 +13,37 @@ export interface CandleBar {
   close: number;
 }
 
+export interface PriceLine {
+  price: number;
+  label: string;
+  color: string;
+  dashed?: boolean;
+}
+
 interface CandleChartProps {
   bars: CandleBar[];
   ema9?: (number | null)[];
   ema21?: (number | null)[];
   ema50?: (number | null)[];
+  lines?: PriceLine[];
   height?: number;
 }
 
 const UP = "#00D68F";
 const DOWN = "#FF4757";
 
-export function CandleChart({ bars, ema9 = [], ema21 = [], ema50 = [], height = 380 }: CandleChartProps) {
+function fmt(v: number): string {
+  return v >= 1000 ? v.toLocaleString(undefined, { maximumFractionDigits: 2 }) : v.toFixed(4);
+}
+
+export function CandleChart({
+  bars,
+  ema9 = [],
+  ema21 = [],
+  ema50 = [],
+  lines = [],
+  height = 380,
+}: CandleChartProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -69,6 +88,55 @@ export function CandleChart({ bars, ema9 = [], ema21 = [], ema50 = [], height = 
       },
     };
 
+    const linePlugin = {
+      id: "priceLines",
+      afterDatasetsDraw(chart: Chart) {
+        if (lines.length === 0) return;
+        const { ctx, chartArea, scales } = chart;
+        if (!chartArea) return;
+        const ys = scales.y as unknown as { getPixelForValue: (v: number) => number };
+
+        ctx.save();
+        ctx.font = "11px ui-monospace, monospace";
+        ctx.textBaseline = "middle";
+        lines.forEach((ln) => {
+          const y = ys.getPixelForValue(ln.price);
+          if (!isFinite(y) || y < chartArea.top || y > chartArea.bottom) return;
+
+          ctx.strokeStyle = ln.color;
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash(ln.dashed ? [6, 4] : []);
+          ctx.beginPath();
+          ctx.moveTo(chartArea.left, y);
+          ctx.lineTo(chartArea.right, y);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          const text = `${ln.label} ${fmt(ln.price)}`;
+          const pad = 4;
+          const w = ctx.measureText(text).width + pad * 2;
+          const h = 16;
+          const x = chartArea.right - w - 4;
+          ctx.fillStyle = ln.color;
+          ctx.fillRect(x, y - h / 2, w, h);
+          ctx.fillStyle = "#0B0D17";
+          ctx.fillText(text, x + pad, y);
+        });
+        ctx.restore();
+      },
+    };
+
+    const prices = bars.flatMap((b) => [b.low, b.high]).concat(lines.map((l) => l.price));
+    let yMin: number | undefined;
+    let yMax: number | undefined;
+    if (prices.length > 0) {
+      const lo = Math.min(...prices);
+      const hi = Math.max(...prices);
+      const pad = (hi - lo) * 0.06 || Math.abs(hi) * 0.01 || 1;
+      yMin = lo - pad;
+      yMax = hi + pad;
+    }
+
     const chart = new Chart(canvasRef.current, {
       type: "bar",
       data: {
@@ -101,14 +169,14 @@ export function CandleChart({ bars, ema9 = [], ema21 = [], ema50 = [], height = 
         },
         scales: {
           x: { ticks: { color: "#5A5E72", maxTicksLimit: 10, autoSkip: true }, grid: { color: "#2D3142" } },
-          y: { ticks: { color: "#5A5E72" }, grid: { color: "#2D3142" } },
+          y: { min: yMin, max: yMax, ticks: { color: "#5A5E72" }, grid: { color: "#2D3142" } },
         },
       },
-      plugins: [candlePlugin],
+      plugins: [candlePlugin, linePlugin],
     });
 
     return () => chart.destroy();
-  }, [bars, ema9, ema21, ema50]);
+  }, [bars, ema9, ema21, ema50, lines]);
 
   return (
     <div style={{ height }}>

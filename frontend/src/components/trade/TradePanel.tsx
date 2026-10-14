@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { clsx } from "clsx";
 import type { Trade } from "@/lib/types";
 import { Card } from "@/components/ui/Card";
@@ -61,6 +62,13 @@ export function TradePanel({ trade }: TradePanelProps) {
           </div>
         )}
       </div>
+
+      <Link
+        href={`/charts?symbol=${encodeURIComponent(trade.symbol)}&market=${trade.market}&entry=${trade.entry_price}&side=${trade.side}`}
+        className="mt-4 inline-flex w-full items-center justify-center rounded-lg border border-border bg-bg-tertiary px-4 py-2 text-sm font-medium text-text-primary hover:bg-hover transition-colors"
+      >
+        View chart
+      </Link>
     </Card>
   );
 }

@@ -1,19 +1,25 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { clsx } from "clsx";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Card, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
-import { CandleChart, type CandleBar } from "@/components/charts/CandleChart";
+import { CandleChart, type CandleBar, type PriceLine } from "@/components/charts/CandleChart";
 
-const MARKETS = ["crypto", "stock", "forex"] as const;
+const MARKETS = ["crypto", "stock", "forex", "commodity"] as const;
 const INTERVALS = ["5min", "15min", "30min", "1h", "1day", "1week"] as const;
-const DEFAULT_SYMBOL: Record<(typeof MARKETS)[number], string> = {
+
+type Market = (typeof MARKETS)[number];
+type Interval = (typeof INTERVALS)[number];
+
+const DEFAULT_SYMBOL: Record<Market, string> = {
   crypto: "BTC/USD",
   stock: "AAPL",
   forex: "EUR/USD",
+  commodity: "XAU/USD",
 };
 
 interface IndicatorsResponse {
@@ -36,11 +42,36 @@ function fmt(v: number | null): string {
   return v.toFixed(4);
 }
 
-export default function ChartsPage() {
+function num(v: string | null): number | null {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function ChartsInner() {
   const { token } = useAuth();
-  const [market, setMarket] = useState<(typeof MARKETS)[number]>("crypto");
-  const [symbol, setSymbol] = useState("BTC/USD");
-  const [interval, setInterval] = useState<(typeof INTERVALS)[number]>("1day");
+  const params = useSearchParams();
+
+  const qMarket = params.get("market");
+  const qInterval = params.get("interval");
+  const qSymbol = params.get("symbol");
+  const qEntry = num(params.get("entry"));
+  const qSl = num(params.get("sl"));
+  const qTp = num(params.get("tp"));
+  const qSide = params.get("side");
+
+  const tradeMode = qEntry != null;
+
+  const initialMarket: Market = (MARKETS as readonly string[]).includes(qMarket ?? "")
+    ? (qMarket as Market)
+    : "crypto";
+  const initialInterval: Interval = (INTERVALS as readonly string[]).includes(qInterval ?? "")
+    ? (qInterval as Interval)
+    : "1day";
+
+  const [market, setMarket] = useState<Market>(initialMarket);
+  const [symbol, setSymbol] = useState(qSymbol?.trim() || DEFAULT_SYMBOL[initialMarket]);
+  const [interval, setInterval] = useState<Interval>(initialInterval);
   const [data, setData] = useState<IndicatorsResponse | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -72,7 +103,7 @@ export default function ChartsPage() {
     load();
   }, [load]);
 
-  const pickMarket = (m: (typeof MARKETS)[number]) => {
+  const pickMarket = (m: Market) => {
     setMarket(m);
     setSymbol(DEFAULT_SYMBOL[m]);
   };
@@ -90,6 +121,22 @@ export default function ChartsPage() {
           : "mixed"
       : "—";
 
+  const lines = useMemo<PriceLine[]>(() => {
+    if (!tradeMode) return [];
+    const out: PriceLine[] = [];
+    if (qEntry != null) out.push({ price: qEntry, label: "Entry", color: "#4C6FFF" });
+    if (qSl != null) out.push({ price: qSl, label: "Stop", color: "#FF4757", dashed: true });
+    if (qTp != null) out.push({ price: qTp, label: "Target", color: "#00D68F", dashed: true });
+    return out;
+  }, [tradeMode, qEntry, qSl, qTp]);
+
+  const dir = qSide === "sell" || qSide === "short" ? -1 : 1;
+  const ret =
+    tradeMode && price != null && qEntry
+      ? ((price - qEntry) / qEntry) * dir * 100
+      : null;
+  const inProfit = ret != null && ret >= 0;
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -103,6 +150,36 @@ export default function ChartsPage() {
           EMA trend: {bias}
         </Badge>
       </div>
+
+      {tradeMode && (
+        <Card className={clsx(inProfit ? "border-green/40" : "border-red/40")}>
+          <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
+            <div>
+              <p className="text-[10px] text-text-muted uppercase tracking-wider">Position</p>
+              <p className="font-semibold mt-0.5">
+                {symbol} <span className={dir === 1 ? "text-green" : "text-red"}>{dir === 1 ? "LONG" : "SHORT"}</span>
+              </p>
+            </div>
+            {[
+              { label: "Entry", value: qEntry },
+              { label: "Stop", value: qSl },
+              { label: "Target", value: qTp },
+              { label: "Now", value: price },
+            ].map((r) => (
+              <div key={r.label}>
+                <p className="text-[10px] text-text-muted uppercase tracking-wider">{r.label}</p>
+                <p className="font-mono text-sm mt-0.5">{fmt(r.value)}</p>
+              </div>
+            ))}
+            <div className="ml-auto text-right">
+              <p className="text-[10px] text-text-muted uppercase tracking-wider">Unrealized</p>
+              <p className={clsx("font-mono text-lg font-bold", inProfit ? "text-green" : "text-red")}>
+                {ret != null ? `${inProfit ? "+" : ""}${ret.toFixed(2)}%` : "—"}
+              </p>
+            </div>
+          </div>
+        </Card>
+      )}
 
       <Card>
         <div className="flex flex-wrap items-center gap-2">
@@ -130,7 +207,7 @@ export default function ChartsPage() {
           />
           <select
             value={interval}
-            onChange={(e) => setInterval(e.target.value as (typeof INTERVALS)[number])}
+            onChange={(e) => setInterval(e.target.value as Interval)}
             className="bg-bg-tertiary border border-border rounded-lg px-3 py-1.5 text-sm text-text-primary outline-none focus:border-green/50"
           >
             {INTERVALS.map((i) => (
@@ -172,6 +249,7 @@ export default function ChartsPage() {
             ema9={data.indicators.ema9}
             ema21={data.indicators.ema21}
             ema50={data.indicators.ema50}
+            lines={lines}
           />
         ) : (
           !error && <p className="text-sm text-text-muted">{loading ? "Loading chart…" : "No data."}</p>
@@ -198,5 +276,13 @@ export default function ChartsPage() {
 
       <p className="text-xs text-text-muted">Educational tool — not financial advice.</p>
     </div>
+  );
+}
+
+export default function ChartsPage() {
+  return (
+    <Suspense fallback={<p className="text-sm text-text-muted">Loading chart…</p>}>
+      <ChartsInner />
+    </Suspense>
   );
 }
