@@ -115,6 +115,48 @@ async def broadcast(db: SupabaseDB, category: str, texts_by_market: dict[str, st
     return sent
 
 
+# Channel fan-out: a signal is posted to its own tier's channel and every
+# higher tier's channel, mirroring the cumulative read gating in signal_service.
+_CHANNEL_CHAIN = {
+    "free": ("free", "premium", "vip"),
+    "premium": ("premium", "vip"),
+    "vip": ("vip",),
+}
+
+
+def _channel_id(tier: str) -> str:
+    return os.getenv(f"TELEGRAM_CHANNEL_{tier.upper()}", "")
+
+
+def channels_configured() -> bool:
+    return any(_channel_id(t) for t in ("free", "premium", "vip"))
+
+
+async def broadcast_channels(texts_by_tier: dict[str, str]) -> int:
+    """Post each tier's message block to its channel and every higher tier channel.
+
+    texts_by_tier: {"free": txt, "premium": txt, "vip": txt}. Each entry is
+    sent with that channel's own bot (the bot must be a channel admin).
+    Returns the number of channel messages delivered. Never raises.
+    """
+    sent = 0
+    for src_tier, text in texts_by_tier.items():
+        if not text:
+            continue
+        for chan_tier in _CHANNEL_CHAIN.get(src_tier, (src_tier,)):
+            channel_id = _channel_id(chan_tier)
+            if not channel_id:
+                continue
+            ok, detail = await asyncio.to_thread(
+                _post_message, _bot_token(chan_tier), channel_id, text
+            )
+            if ok:
+                sent += 1
+            elif detail != "no_bot_token":
+                logger.warning(f"Telegram channel post failed ({chan_tier}): {detail}")
+    return sent
+
+
 def format_signal_alert(sig: dict) -> str:
     direction = (sig.get("direction") or "").upper()
     arrow = "\u2197" if direction == "BUY" else "\u2198"

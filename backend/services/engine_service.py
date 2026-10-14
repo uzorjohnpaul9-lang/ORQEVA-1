@@ -101,6 +101,7 @@ async def _fan_out(db: SupabaseDB, results: dict, saved: list[dict], errors: lis
 
     try:
         texts: dict[str, str] = {"all": ""}
+        channel_texts: dict[str, str] = {}
         for mkt, sigs in results.items():
             if not sigs:
                 continue
@@ -110,8 +111,12 @@ async def _fan_out(db: SupabaseDB, results: dict, saved: list[dict], errors: lis
             block = "<b>Engine scan - " + mkt.title() + "</b>\n" + "\n".join(lines)
             texts[mkt] = block
             texts["all"] += ("" if not texts["all"] else "\n\n") + block
+            tier = sigs[0].get("tier", "free")
+            channel_texts[tier] = (channel_texts[tier] + "\n\n" + block) if channel_texts.get(tier) else block
         if any(texts.values()):
             await telegram_service.broadcast(db, "signals", texts)
+        if any(channel_texts.values()):
+            await telegram_service.broadcast_channels(channel_texts)
     except Exception as e:
         errors.append(f"Telegram broadcast: {str(e)[:150]}")
 
