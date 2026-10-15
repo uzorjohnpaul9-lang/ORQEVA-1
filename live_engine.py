@@ -108,7 +108,8 @@ TIER_MESSAGES = {
 }
 
 # Referral links
-BINANCE_REFERRAL = "https://www.binance.com/activity/referral-entry/CPA?ref=CPA_00N4AMKT4D"
+from config.referral import BINANCE_REFERRAL_URL
+BINANCE_REFERRAL = BINANCE_REFERRAL_URL
 TRADING_LINKS = {
     "stock": BINANCE_REFERRAL,
     "forex": BINANCE_REFERRAL,

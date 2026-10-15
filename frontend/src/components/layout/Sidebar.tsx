@@ -5,6 +5,8 @@ import { usePathname } from "next/navigation";
 import { clsx } from "clsx";
 import { useAuth } from "@/lib/auth";
 import { adminNavItems, navIconMap, navItems } from "@/lib/nav";
+import { tierBadgeVariant, tierLabel } from "@/lib/plans";
+import { Badge } from "@/components/ui/Badge";
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -44,13 +46,26 @@ export function Sidebar() {
       </nav>
 
       <div className="px-4 py-4 border-t border-border">
+        {(user?.tier || "free").toLowerCase() !== "vip" && (
+          <Link
+            href="/vip"
+            className="mb-3 flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg bg-green/10 text-green text-sm font-medium hover:bg-green/20 transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d={navIconMap.crown} />
+            </svg>
+            Upgrade plan
+          </Link>
+        )}
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-full bg-blue/20 flex items-center justify-center text-blue text-sm font-medium">
             {user?.email?.[0]?.toUpperCase() || "T"}
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium truncate">{user?.email || "Trader"}</p>
-            <p className="text-xs text-text-muted truncate capitalize">{(user?.tier || "free").toLowerCase()} Tier</p>
+            <div className="mt-0.5">
+              <Badge variant={tierBadgeVariant(user?.tier)}>{tierLabel(user?.tier)}</Badge>
+            </div>
           </div>
         </div>
       </div>

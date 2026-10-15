@@ -9,9 +9,11 @@ import requests
 from dotenv import load_dotenv
 load_dotenv()
 
+from config.referral import BINANCE_REFERRAL_URL
+
 WALLET = "TVTd5E174wygdqAUBYddFWgViLTQJRKytf"
 ADMIN = "@Johnpaulmuna_83"
-BINANCE_REF = "https://www.binance.com/activity/referral-entry/CPA?ref=CPA_00N4AMKT4D"
+BINANCE_REF = BINANCE_REFERRAL_URL
 
 channels = {
     "Free": {

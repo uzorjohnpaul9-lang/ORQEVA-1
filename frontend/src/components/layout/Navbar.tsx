@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
 import { NotificationSheet, type Notif } from "@/components/ui/NotificationSheet";
+import { Badge } from "@/components/ui/Badge";
+import { tierBadgeVariant, tierLabel } from "@/lib/plans";
 
 export function Navbar() {
   const [showNotifs, setShowNotifs] = useState(false);
@@ -113,11 +115,25 @@ export function Navbar() {
           </button>
 
           {showUser && (
-            <div className="absolute right-0 top-full mt-2 w-48 bg-bg-secondary border border-border rounded-xl shadow-2xl z-50">
+            <div className="absolute right-0 top-full mt-2 w-56 bg-bg-secondary border border-border rounded-xl shadow-2xl z-50">
               <div className="px-4 py-3 border-b border-border">
-                <p className="text-sm font-medium">{user?.username}</p>
-                <p className="text-xs text-text-muted">{user?.tier} tier</p>
+                <p className="text-sm font-medium truncate">{user?.username || user?.email}</p>
+                <div className="mt-1 flex items-center gap-2">
+                  <Badge variant={tierBadgeVariant(user?.tier)}>{tierLabel(user?.tier)} tier</Badge>
+                </div>
               </div>
+              {(user?.tier || "free").toLowerCase() !== "vip" && (
+                <Link
+                  href="/vip"
+                  onClick={() => setShowUser(false)}
+                  className="flex items-center gap-2 w-full text-left px-4 py-3 text-sm text-green hover:bg-bg-hover"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M2 4l3 12h14l3-12-5 4-5-4-5 4-5-4z" />
+                  </svg>
+                  Upgrade plan
+                </Link>
+              )}
               <button onClick={logout} className="w-full text-left px-4 py-3 text-sm text-red hover:bg-bg-hover rounded-b-xl">
                 Sign Out
               </button>

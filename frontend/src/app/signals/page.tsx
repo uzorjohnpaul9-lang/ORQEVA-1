@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { RichText } from "@/components/learn/RichText";
+import { tierLabel } from "@/lib/plans";
 import type { AccuracyStats, CalendarEventContext, Signal } from "@/lib/types";
 
 const MARKETS = ["all", "stock", "forex", "crypto", "commodity"] as const;
@@ -144,6 +145,20 @@ export default function SignalsPage() {
       {toast && (
         <Card className="border-green/40">
           <p className="text-sm text-green">{toast}</p>
+        </Card>
+      )}
+
+      {(user?.tier || "free").toLowerCase() !== "vip" && (
+        <Card className="border-green/30 bg-green/5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-text-secondary">
+              You&apos;re on the <span className="font-medium text-text-primary">{tierLabel(user?.tier)}</span> plan —
+              more signals (stocks, commodities, crypto &amp; memecoins) are locked.
+            </p>
+            <Link href="/vip">
+              <Button size="sm">See plans & upgrade</Button>
+            </Link>
+          </div>
         </Card>
       )}
 
