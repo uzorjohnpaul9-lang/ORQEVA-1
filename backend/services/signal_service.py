@@ -87,10 +87,20 @@ async def expire_old_signals(db: SupabaseDB, max_age_hours: int = 24):
 async def get_signal_stats(db: SupabaseDB):
     total = await db.count(SIGNALS)
     active = await db.count(SIGNALS, where={"status": "active"})
-    rows = await db.fetch_all(SIGNALS, columns="market")
+    # Page through in chunks so the per-market breakdown is not silently
+    # truncated by PostgREST's 1000-row fetch cap.
     by_market: dict[str, int] = {}
-    for r in rows:
-        by_market[r["market"]] = by_market.get(r["market"], 0) + 1
+    page_size = 1000
+    offset = 0
+    while True:
+        rows = await db.fetch_all(SIGNALS, columns="market", limit=page_size, offset=offset)
+        for r in rows:
+            market = r.get("market")
+            if market:
+                by_market[market] = by_market.get(market, 0) + 1
+        if len(rows) < page_size:
+            break
+        offset += page_size
     return {
         "total_signals": total,
         "active_signals": active,
