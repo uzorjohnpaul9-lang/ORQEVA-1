@@ -42,3 +42,9 @@ body {
   color: var(--color-text-primary);
   font-family: var(--font-sans);
 }
+
+@keyframes loadingbar {
+  0% { transform: translateX(-100%); }
+  50% { transform: translateX(150%); }
+  100% { transform: translateX(350%); }
+}

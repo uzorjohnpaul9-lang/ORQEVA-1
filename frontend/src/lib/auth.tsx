@@ -30,23 +30,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
 
   useEffect(() => {
+    const mapUser = (s: { user?: { id: string; email?: string | null; user_metadata?: Record<string, unknown> } } | null): User | null =>
+      s?.user
+        ? {
+            id: s.user.id,
+            email: s.user.email ?? "",
+            username: (s.user.user_metadata?.username as string) ?? "",
+            tier: (s.user.user_metadata?.tier as string) ?? "free",
+            is_admin: Boolean(s.user.user_metadata?.is_admin),
+          }
+        : null;
+
     supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) setToken(session.access_token);
+      if (session) {
+        setToken(session.access_token);
+        setUser(mapUser(session));
+      }
     }).finally(() => setLoading(false));
 
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
       setToken(session?.access_token ?? null);
-      setUser(
-        session?.user
-          ? {
-              id: session.user.id,
-              email: session.user.email ?? "",
-              username: (session.user.user_metadata?.username as string) ?? "",
-              tier: (session.user.user_metadata?.tier as string) ?? "starter",
-              is_admin: Boolean(session.user.user_metadata?.is_admin),
-            }
-          : null
-      );
+      setUser(mapUser(session));
     });
 
     return () => sub.subscription.unsubscribe();

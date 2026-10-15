@@ -4,7 +4,15 @@ import { useAuth } from "@/lib/auth";
 import { useRouter, usePathname } from "next/navigation";
 import { useEffect } from "react";
 
-const publicRoutes = ["/login", "/register"];
+const publicRoutes = ["/login", "/register", "/forgot", "/reset"];
+
+function LoadingBar() {
+  return (
+    <div className="fixed top-0 left-0 right-0 z-50 h-0.5 overflow-hidden bg-transparent">
+      <div className="h-full w-1/3 bg-green animate-[loadingbar_1.2s_ease-in-out_infinite]" />
+    </div>
+  );
+}
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -22,17 +30,18 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     }
   }, [user, loading, pathname, router]);
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-bg-primary">
-        <div className="w-8 h-8 border-2 border-green/30 border-t-green rounded-full animate-spin" />
-      </div>
-    );
-  }
-
-  if (!user && !publicRoutes.includes(pathname)) {
+  // Already signed out on a protected route: render nothing while the
+  // redirect effect fires (avoids flashing a page we don't own).
+  if (!loading && !user && !publicRoutes.includes(pathname)) {
     return null;
   }
 
-  return <>{children}</>;
+  // Non-blocking: render the app shell immediately and hydrate the session in
+  // the background. A slim progress bar signals the pending auth check.
+  return (
+    <>
+      {loading && <LoadingBar />}
+      {children}
+    </>
+  );
 }
