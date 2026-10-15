@@ -15,6 +15,7 @@ SUMMARY_SYMBOLS = {
     "stock": "SPY",
     "crypto": "BTC/USD",
     "forex": "EUR/USD",
+    "commodity": "XAU/USD",
 }
 
 MODEL_ROSTER = [

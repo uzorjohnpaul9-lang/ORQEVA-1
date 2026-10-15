@@ -40,7 +40,13 @@ interface SubRow {
   id: string; user_email?: string; tier: string; status: string;
   auto_renew: boolean; started_at: string; expires_at: string | null;
 }
-interface EngineStatus { stock?: { active: boolean }; forex?: { active: boolean }; crypto?: { active: boolean } }
+interface EngineStatus {
+  stock?: { active: boolean };
+  forex?: { active: boolean };
+  crypto?: { active: boolean };
+  crypto_alt?: { active: boolean };
+  commodity?: { active: boolean };
+}
 
 const TABS = ["Overview", "Users", "Billing", "Signals", "System"] as const;
 type Tab = (typeof TABS)[number];
@@ -489,7 +495,9 @@ function SystemTab({ token }: { token: string }) {
           <div className="space-y-2 text-sm">
             <Row k="Stocks" v={engine?.stock ? (engine.stock.active ? "market open" : "closed") : "-"} />
             <Row k="Forex" v={engine?.forex ? (engine.forex.active ? "market open" : "closed") : "-"} />
-            <Row k="Crypto" v={engine?.crypto ? (engine.crypto.active ? "active" : "idle") : "-"} />
+            <Row k="Crypto (Majors)" v={engine?.crypto ? (engine.crypto.active ? "active" : "idle") : "-"} />
+            <Row k="Crypto (Meme/Hot)" v={engine?.crypto_alt ? (engine.crypto_alt.active ? "active" : "idle") : "-"} />
+            <Row k="Commodities" v={engine?.commodity ? (engine.commodity.active ? "active" : "idle") : "-"} />
           </div>
         </AdminCard>
 

@@ -25,10 +25,10 @@ from backend.services.order_executor import active_connection, live_price, place
 from backend.api.risk import central
 
 # Market -> minimum tier that may auto-trade (mirrors engine_service._ENGINE_SPECS).
-_MARKET_MIN_TIER = {"stock": "premium", "forex": "free", "crypto": "vip"}
+_MARKET_MIN_TIER = {"stock": "premium", "forex": "free", "crypto": "vip", "commodity": "premium"}
 _TIER_RANK = {"free": 0, "premium": 1, "vip": 2}
 
-MARKETS = ["stock", "forex", "crypto"]
+MARKETS = ["stock", "forex", "crypto", "commodity"]
 
 
 async def get_or_create_settings(db: SupabaseDB, user_id: str) -> dict:

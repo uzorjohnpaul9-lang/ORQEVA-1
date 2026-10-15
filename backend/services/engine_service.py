@@ -5,11 +5,19 @@ from backend.db.models import SIGNALS, USERS
 from backend.db.supabase import SupabaseDB, now_iso
 from backend.services import signal_service
 
+# (bucket, module, class, strategy, tier, db_market)
+# bucket = result grouping; db_market = value stored in signals.market
 _ENGINE_SPECS = [
-    ("stock", "engines.stock_engine", "StockEngine", "Alpaca Breakout", "premium"),
-    ("forex", "engines.forex_engine", "ForexEngine", "Twelve Data Trend", "free"),
-    ("crypto", "engines.crypto_engine", "CryptoEngine", "Twelve Data Momentum", "vip"),
+    ("stock", "engines.stock_engine", "StockEngine", "Alpaca Breakout", "premium", "stock"),
+    ("forex", "engines.forex_engine", "ForexEngine", "Twelve Data Trend", "free", "forex"),
+    ("crypto", "engines.crypto_engine", "CryptoEngine", "Crypto Momentum", "vip", "crypto"),
+    ("crypto_alt", "engines.crypto_alt_engine", "CryptoAltEngine", "Meme Momentum", "vip", "crypto"),
+    ("commodity", "engines.commodity_engine", "CommodityEngine", "Commodity Trend", "premium", "commodity"),
 ]
+
+
+def _empty_results() -> dict[str, list]:
+    return {"stock": [], "forex": [], "crypto": [], "crypto_alt": [], "commodity": []}
 
 
 def _engine_signal_to_db(signal, market: str, strategy: str, tier: str = "free",
@@ -49,7 +57,7 @@ async def run_scan(db: SupabaseDB, *, cooldown_hours: int = 0) -> dict:
 
     Returns {"signals_generated", "by_market", "errors", "saved"}.
     """
-    results: dict[str, list] = {"stock": [], "forex": [], "crypto": []}
+    results: dict[str, list] = _empty_results()
     errors: list[str] = []
 
     try:
@@ -58,26 +66,26 @@ async def run_scan(db: SupabaseDB, *, cooldown_hours: int = 0) -> dict:
     except Exception:
         event_context = None
 
-    for market, mod_name, cls_name, strategy, tier in _ENGINE_SPECS:
+    for bucket, mod_name, cls_name, strategy, tier, db_market in _ENGINE_SPECS:
         try:
             module = __import__(mod_name, fromlist=[cls_name])
             engine = getattr(module, cls_name)()
             if await asyncio.to_thread(engine.is_market_hours):
                 raw = await asyncio.to_thread(engine.run_cycle)
-                results[market].extend(
-                    _engine_signal_to_db(s, market, strategy, tier, event_context) for s in raw
+                results[bucket].extend(
+                    _engine_signal_to_db(s, db_market, strategy, tier, event_context) for s in raw
                 )
         except Exception as e:
-            errors.append(f"{market} engine: {str(e)[:150]}")
+            errors.append(f"{bucket} engine: {str(e)[:150]}")
 
     if cooldown_hours > 0:
         seen = await recent_signal_keys(db, cooldown_hours)
-        for market, sigs in results.items():
-            results[market] = [
+        for bucket, sigs in results.items():
+            results[bucket] = [
                 s for s in sigs if (s["symbol"], s["market"], s["direction"]) not in seen
             ]
 
-    all_signals = results["stock"] + results["forex"] + results["crypto"]
+    all_signals = [s for sigs in results.values() for s in sigs]
     saved: list[dict] = []
     if all_signals:
         saved = await signal_service.save_signals_batch(db, all_signals)
@@ -118,7 +126,7 @@ async def _fan_out(db: SupabaseDB, results: dict, saved: list[dict], errors: lis
             lines = [telegram_service.format_signal_alert(s) for s in saved if s.get("market") == mkt]
             if not lines:
                 continue
-            block = "<b>Engine scan - " + mkt.title() + "</b>\n" + "\n".join(lines)
+            block = "<b>Engine scan - " + mkt.replace("_", " ").title() + "</b>\n" + "\n".join(lines)
             texts[mkt] = block
             texts["all"] += ("" if not texts["all"] else "\n\n") + block
             tier = sigs[0].get("tier", "free")

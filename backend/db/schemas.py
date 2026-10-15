@@ -117,7 +117,7 @@ class PreferencesUpdate(BaseModel):
     telegram_system_alerts: bool | None = None
     email_notifications: bool | None = None
     web_notifications: bool | None = None
-    default_market: str | None = Field(None, pattern="^(all|stock|forex|crypto)$")
+    default_market: str | None = Field(None, pattern="^(all|stock|forex|crypto|commodity)$")
     risk_tolerance: str | None = Field(None, pattern="^(conservative|moderate|aggressive)$")
     theme: str | None = Field(None, pattern="^(dark|light)$")
 
@@ -146,7 +146,7 @@ class ExchangeResponse(BaseModel):
 class AutoTradeSettings(BaseModel):
     enabled: bool = False
     route: str = Field("paper", pattern="^(paper|live)$")
-    markets: list[str] = Field(default_factory=lambda: ["forex", "crypto", "stock"])
+    markets: list[str] = Field(default_factory=lambda: ["forex", "crypto", "stock", "commodity"])
     per_trade_risk_pct: float = Field(1.0, ge=0.1, le=10.0)
     min_confidence: float = Field(0.0, ge=0.0, le=1.0)
 

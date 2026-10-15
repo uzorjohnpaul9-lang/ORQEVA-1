@@ -46,11 +46,11 @@ export function Sidebar() {
       <div className="px-4 py-4 border-t border-border">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-full bg-blue/20 flex items-center justify-center text-blue text-sm font-medium">
-            T
+            {user?.email?.[0]?.toUpperCase() || "T"}
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium truncate">Trader</p>
-            <p className="text-xs text-text-muted truncate">Free Tier</p>
+            <p className="text-sm font-medium truncate">{user?.email || "Trader"}</p>
+            <p className="text-xs text-text-muted truncate capitalize">{(user?.tier || "free").toLowerCase()} Tier</p>
           </div>
         </div>
       </div>

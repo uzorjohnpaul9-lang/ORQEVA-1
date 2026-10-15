@@ -53,26 +53,15 @@ export default function VIPPage() {
       </div>
 
       <Card>
-        <CardHeader><CardTitle>Binance Referral</CardTitle></CardHeader>
+        <CardHeader><CardTitle>Upgrade to Premium / VIP</CardTitle></CardHeader>
         <div className="space-y-3">
-          <p className="text-sm text-text-secondary">Earn commission by referring users to Binance.</p>
-          <div className="flex items-center gap-2 bg-bg-tertiary rounded-lg p-3">
-            <code className="text-sm text-green flex-1">https://www.binance.com/activity/referral-entry/CPA?ref=CPA_00N4AMKT4D</code>
-            <Button variant="secondary" size="sm">Copy</Button>
-          </div>
-          <div className="grid grid-cols-3 gap-4 mt-4">
-            <div className="text-center">
-              <p className="text-2xl font-bold">45</p>
-              <p className="text-xs text-text-muted">Referrals</p>
-            </div>
-            <div className="text-center">
-              <p className="text-2xl font-bold text-green">$2,250</p>
-              <p className="text-xs text-text-muted">Total Earned</p>
-            </div>
-            <div className="text-center">
-              <p className="text-2xl font-bold">$50</p>
-              <p className="text-xs text-text-muted">This Month</p>
-            </div>
+          <p className="text-sm text-text-secondary">Access locked signals, auto-trade, and higher rate limits.</p>
+          <div className="flex flex-wrap gap-3">
+            <a href="/billing">
+              <Button variant="primary">Go to Billing</Button>
+            </a>
+            <Badge variant="yellow">Premium $49/30d</Badge>
+            <Badge variant="purple">VIP $199/30d</Badge>
           </div>
         </div>
       </Card>

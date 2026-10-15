@@ -296,6 +296,7 @@ class RiskEngine:
             "crypto": ["BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "AVAX"],
             "tech": ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA"],
             "forex_usd": ["EUR/USD", "GBP/USD", "AUD/USD", "NZD/USD"],
+            "commodities": ["XAU/USD", "XAG/USD", "WTI/USD", "BRENT/USD", "NATGAS/USD"],
         }
 
         base = symbol.split("/")[0].replace("USD", "").replace("T", "")

@@ -183,6 +183,7 @@ export default function SettingsPage() {
               { value: "stock", label: "Stocks Only" },
               { value: "forex", label: "Forex Only" },
               { value: "crypto", label: "Crypto Only" },
+              { value: "commodity", label: "Commodities Only" },
             ]}
           />
           <Select

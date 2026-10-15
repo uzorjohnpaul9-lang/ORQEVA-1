@@ -59,13 +59,14 @@ class CentralRiskEngine:
 
         # Per-market position tracking
         self.positions: Dict[str, Dict] = {}  # key = "market:symbol"
-        self.daily_trade_count: Dict[str, int] = {"stock": 0, "forex": 0, "crypto": 0}
+        self.daily_trade_count: Dict[str, int] = {"stock": 0, "forex": 0, "crypto": 0, "commodity": 0}
 
         # Cross-market correlation groups
         self.correlation_groups = {
             "tech_stocks": ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA"],
             "crypto_all": ["BTC/USD", "ETH/USD", "SOL/USD", "BNB/USD", "XRP/USD", "ADA/USD", "DOGE/USD", "AVAX/USD"],
             "forex_usd": ["EUR/USD", "GBP/USD", "AUD/USD", "NZD/USD"],
+            "commodities": ["XAU/USD", "XAG/USD", "WTI/USD", "BRENT/USD", "NATGAS/USD"],
             "risk_assets": ["TSLA", "NVDA", "BTC/USD", "ETH/USD", "SOL/USD"],  # Cross-market risk
         }
 
@@ -236,8 +237,8 @@ class CentralRiskEngine:
     # ---- Summary ----
 
     def get_portfolio_summary(self) -> Dict:
-        """Aggregated view across all 3 markets."""
-        market_positions = {"stock": 0, "forex": 0, "crypto": 0}
+        """Aggregated view across all markets."""
+        market_positions = {"stock": 0, "forex": 0, "crypto": 0, "commodity": 0}
         for key, pos in self.positions.items():
             market = pos.get("market", "unknown")
             market_positions[market] = market_positions.get(market, 0) + 1
@@ -298,7 +299,7 @@ class CentralRiskEngine:
                     self.kill_switch_active = data.get("kill_switch_active", False)
                     self.kill_switch_reason = data.get("kill_switch_reason", "")
                     self.trade_count = data.get("trade_count", 0)
-                    self.daily_trade_count = data.get("daily_trade_count", {"stock": 0, "forex": 0, "crypto": 0})
+                    self.daily_trade_count = data.get("daily_trade_count", {"stock": 0, "forex": 0, "crypto": 0, "commodity": 0})
                     self.positions = data.get("positions", {})
                     if self.kill_switch_active:
                         logger.warning(f"Kill switch restored: {self.kill_switch_reason}")
@@ -308,5 +309,5 @@ class CentralRiskEngine:
     def reset_daily(self):
         """Reset daily counters (call at midnight)."""
         self.daily_pnl = 0.0
-        self.daily_trade_count = {"stock": 0, "forex": 0, "crypto": 0}
+        self.daily_trade_count = {"stock": 0, "forex": 0, "crypto": 0, "commodity": 0}
         self._save_state()

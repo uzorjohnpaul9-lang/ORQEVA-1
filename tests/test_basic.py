@@ -381,13 +381,20 @@ class TestEngineArchitecture(unittest.TestCase):
         self.assertEqual(fe.market_type, "forex")
         self.assertIn("EUR/USD", fe.get_symbols())
 
-    def test_crypto_engine_analyze(self):
-        from engines.crypto_engine import CryptoEngine
-        ce = CryptoEngine()
-        self.assertEqual(ce.market_type, "crypto")
-        self.assertIn("BTC/USD", ce.get_symbols())
+    def test_crypto_alt_engine_config(self):
+        from engines.engine_config import CryptoAltEngineConfig, MEME_COINS, HOT_COINS
+        c = CryptoAltEngineConfig()
+        self.assertTrue(len(c.symbols) >= 10)
+        self.assertIn('DOGE/USD', c.symbols)
+        self.assertIn('TRUMP/USD', MEME_COINS)
+        self.assertIn('SOL/USD', HOT_COINS)
 
-    def test_crypto_discovery_init(self):
+    def test_commodity_engine_config(self):
+        from engines.engine_config import CommodityEngineConfig
+        g = CommodityEngineConfig()
+        self.assertEqual(g.market_open_hour, 0)
+        self.assertIn('XAU/USD', g.symbols)
+        self.assertIn('XAG/USD', g.symbols)
         from engines.crypto_discovery import CryptoDiscovery, CRYPTO_UNIVERSE, CoinMomentum
         dc = CryptoDiscovery()
         self.assertTrue(len(CRYPTO_UNIVERSE) >= 40)

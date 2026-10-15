@@ -15,6 +15,7 @@ const MARKET_CHIPS = [
   { market: "forex", label: "Forex", tier: "Free" },
   { market: "stock", label: "Stock", tier: "Premium" },
   { market: "crypto", label: "Crypto", tier: "VIP" },
+  { market: "commodity", label: "Commodity", tier: "Premium" },
 ];
 
 const STATUS_VARIANT: Record<string, "green" | "red" | "blue" | "yellow" | "gray"> = {

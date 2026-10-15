@@ -50,9 +50,9 @@ async def engine_status(user: dict = Depends(get_current_user)):
         except Exception as ex:
             return {"active": False, "error": str(ex)}
 
-    results = await asyncio.gather(
-        describe("engines.stock_engine", "StockEngine"),
-        describe("engines.forex_engine", "ForexEngine"),
-        describe("engines.crypto_engine", "CryptoEngine"),
-    )
-    return dict(zip(("stock", "forex", "crypto"), results))
+    from backend.services.engine_service import _ENGINE_SPECS
+
+    specs = await asyncio.gather(*[
+        describe(mod_name, cls_name) for _, mod_name, cls_name, *_ in _ENGINE_SPECS
+    ])
+    return {bucket: spec for (bucket, *_), spec in zip(_ENGINE_SPECS, specs)}

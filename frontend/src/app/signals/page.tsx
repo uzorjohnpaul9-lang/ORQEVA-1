@@ -11,8 +11,12 @@ import { Button } from "@/components/ui/Button";
 import { RichText } from "@/components/learn/RichText";
 import type { AccuracyStats, CalendarEventContext, Signal } from "@/lib/types";
 
-const MARKETS = ["all", "stock", "forex", "crypto"] as const;
+const MARKETS = ["all", "stock", "forex", "crypto", "commodity"] as const;
 const STATUSES = ["active", "expired", "all"] as const;
+
+function marketVariant(m: string): "blue" | "green" | "purple" | "yellow" {
+  return m === "stock" ? "blue" : m === "forex" ? "green" : m === "commodity" ? "yellow" : "purple";
+}
 
 function eventCtx(s: Signal): CalendarEventContext | undefined {
   const ctx = s.indicators?.event_context;
@@ -184,7 +188,7 @@ export default function SignalsPage() {
                   <div>
                     <div className="flex items-center gap-2">
                       <h3 className="font-semibold text-base">{s.symbol}</h3>
-                      <Badge variant={s.market === "stock" ? "blue" : s.market === "forex" ? "green" : "purple"}>
+                      <Badge variant={marketVariant(s.market)}>
                         {s.market}
                       </Badge>
                     </div>
@@ -291,7 +295,7 @@ export default function SignalsPage() {
               <Badge variant={selected.direction === "buy" ? "green" : "red"} dot>
                 {selected.direction.toUpperCase()}
               </Badge>
-              <Badge variant={selected.market === "stock" ? "blue" : selected.market === "forex" ? "green" : "purple"}>
+              <Badge variant={marketVariant(selected.market)}>
                 {selected.market}
               </Badge>
               <Badge variant={selected.status === "active" ? "green" : "gray"}>{selected.status}</Badge>

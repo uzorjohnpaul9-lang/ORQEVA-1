@@ -131,7 +131,7 @@ class CryptoEngineConfig:
     """Configuration for the crypto engine."""
     pairs: List[str] = field(default_factory=lambda: [
         "BTC/USD", "ETH/USD", "SOL/USD", "BNB/USD",
-        "XRP/USD", "ADA/USD", "DOGE/USD", "AVAX/USD",
+        "XRP/USD", "ADA/USD", "DOGE/USD", "AVAX/USD", "TRX/USD",
     ])
     market_open_hour: int = 0       # 24/7
     market_close_hour: int = 24
@@ -164,9 +164,112 @@ class CryptoEngineConfig:
     slippage_small_cap: float = 0.005    # 0.5% (low-volume alts)
 
 
+@dataclass
+class CryptoAltEngineConfig:
+    """Configuration for the meme / hot-alt crypto engine.
+
+    Scans memecoins and trending alts alongside the majors handled by
+    CryptoEngine. Market stays "crypto" (VIP tier) so no schema change is
+    needed; signals are tagged by category for clarity.
+    """
+    symbols: List[str] = field(default_factory=lambda: [
+        # Memecoins
+        "DOGE/USD", "SHIB/USD", "PEPE/USD", "BONK/USD", "FLOKI/USD",
+        "WIF/USD", "TRUMP/USD", "FARTCOIN/USD", "PENGU/USD",
+        # Hot / high-momentum alts
+        "SOL/USD", "AVAX/USD", "LINK/USD", "NEAR/USD", "SUI/USD",
+        "SEI/USD", "TIA/USD", "INJ/USD", "ARB/USD", "OP/USD", "APT/USD",
+        # Established alts
+        "TRX/USD", "LTC/USD", "DOT/USD", "ATOM/USD", "UNI/USD", "AAVE/USD",
+    ])
+    market_open_hour: int = 0       # 24/7
+    market_close_hour: int = 24
+    min_confidence: float = 0.50
+    lookback_days: int = 30
+    indicators: IndicatorConfig = field(default_factory=lambda: IndicatorConfig(
+        rsi_period=14, rsi_oversold=30, rsi_overbought=70,
+        macd_fast=12, macd_slow=26, macd_signal=9,
+        bollinger_period=20, bollinger_std=2.5,
+        momentum_period=5, min_signal_score=0.45,
+        # Alts are volatile: wider bands, stronger momentum needed
+        bollinger_tolerance_high=1.03,    # 3%
+        bollinger_tolerance_low=0.97,
+        momentum_threshold=0.05,          # 5%
+    ))
+    risk: EngineRiskParams = field(default_factory=lambda: EngineRiskParams(
+        max_position_size=0.02,     # 2% per alt position (smaller size)
+        max_daily_trades=20,
+        max_positions=6,
+        stop_loss_pct=0.12,         # 12% (volatile)
+        take_profit_pct=0.25,       # 25%
+        trailing_stop_pct=0.08,     # 8%
+        max_spread_pct=0.03,        # 3% (wider for thin books)
+        fee_per_trade=0.0,
+        fee_percentage=0.001,       # Binance taker fee 0.1%
+    ))
+    # Slippage model
+    slippage_meme: float = 0.010     # 1.0% (memecoins)
+    slippage_hot: float = 0.005      # 0.5% (hot alts)
+    slippage_alt: float = 0.003      # 0.3% (established alts)
+
+
+@dataclass
+class CommodityEngineConfig:
+    """Configuration for the commodity engine (metals + energy) via Twelve Data."""
+    symbols: List[str] = field(default_factory=lambda: [
+        "XAU/USD",   # Gold
+        "XAG/USD",   # Silver
+        "WTI/USD",   # Crude (WTI)
+        "BRENT/USD",  # Crude (Brent)
+        "NATGAS/USD",  # Natural gas
+    ])
+    market_open_hour: int = 0       # 24/5
+    market_close_hour: int = 24
+    min_confidence: float = 0.50
+    lookback_days: int = 40
+    indicators: IndicatorConfig = field(default_factory=lambda: IndicatorConfig(
+        rsi_period=14, rsi_oversold=35, rsi_overbought=65,
+        macd_fast=12, macd_slow=26, macd_signal=9,
+        bollinger_period=20, bollinger_std=2.0,
+        momentum_period=5, min_signal_score=0.42,
+        bollinger_tolerance_high=1.015,   # 1.5%
+        bollinger_tolerance_low=0.985,
+        momentum_threshold=0.01,          # 1%
+    ))
+    risk: EngineRiskParams = field(default_factory=lambda: EngineRiskParams(
+        max_position_size=0.05,     # 5% per commodity position
+        max_daily_trades=10,
+        max_positions=3,
+        stop_loss_pct=0.02,         # 2%
+        take_profit_pct=0.04,       # 4%
+        trailing_stop_pct=0.015,    # 1.5%
+        max_spread_pct=0.002,       # 0.2%
+        fee_per_trade=0.0,
+        fee_percentage=0.0002,      # Spread cost estimate
+    ))
+    # Slippage model
+    slippage_metal: float = 0.0005   # 0.05% (gold/silver - deep markets)
+    slippage_energy: float = 0.001   # 0.1% (oil/gas)
+
+
 # Major pair groupings for slippage
 MAJOR_PAIRS = {"EUR/USD", "GBP/USD", "USD/JPY"}
 MINOR_PAIRS = {"USD/CHF", "AUD/USD", "USD/CAD", "NZD/USD"}
 LARGE_CRYPTO = {"BTC/USD", "ETH/USD"}
-MID_CRYPTO = {"SOL/USD", "BNB/USD", "XRP/USD"}
+MID_CRYPTO = {"SOL/USD", "BNB/USD", "XRP/USD", "TRX/USD"}
 # Everything else = small cap crypto
+
+# Crypto alt categories (for signal tagging + slippage tiers)
+MEME_COINS = {
+    "DOGE/USD", "SHIB/USD", "PEPE/USD", "BONK/USD", "FLOKI/USD",
+    "WIF/USD", "TRUMP/USD", "FARTCOIN/USD", "PENGU/USD",
+}
+HOT_COINS = {
+    "SOL/USD", "AVAX/USD", "LINK/USD", "NEAR/USD", "SUI/USD",
+    "SEI/USD", "TIA/USD", "INJ/USD", "ARB/USD", "OP/USD", "APT/USD",
+}
+# Remaining alt symbols fall into the "established alt" bucket.
+
+# Commodity groupings for slippage
+METALS = {"XAU/USD", "XAG/USD"}
+ENERGY = {"WTI/USD", "BRENT/USD", "NATGAS/USD"}

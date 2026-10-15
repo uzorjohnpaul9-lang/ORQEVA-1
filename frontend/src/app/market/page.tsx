@@ -7,6 +7,10 @@ import { Card, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import type { DiscoveryCoin, MarketOverview } from "@/lib/types";
 
+const MEME_SET = new Set(["DOGE/USD", "SHIB/USD", "PEPE/USD", "BONK/USD", "FLOKI/USD", "WIF/USD", "TRUMP/USD", "FARTCOIN/USD", "PENGU/USD"]);
+const HOT_SET = new Set(["SOL/USD", "AVAX/USD", "LINK/USD", "NEAR/USD", "SUI/USD", "SEI/USD", "TIA/USD", "INJ/USD", "ARB/USD", "OP/USD", "APT/USD"]);
+const MAJOR_SET = new Set(["BTC/USD", "ETH/USD", "SOL/USD", "BNB/USD", "XRP/USD", "ADA/USD", "AVAX/USD", "DOT/USD", "TRX/USD", "LTC/USD"]);
+
 function fmtPrice(v: number | null | undefined): string {
   if (v == null) return "—";
   if (v >= 1000) return v.toLocaleString(undefined, { maximumFractionDigits: 0 });
@@ -122,26 +126,43 @@ export default function MarketPage() {
           </div>
         </Card>
 
-        <Card>
-          <CardHeader><CardTitle>Crypto Discovery</CardTitle></CardHeader>
-          <div className="space-y-1">
-            {coins.length === 0 && <p className="text-sm text-text-muted">No scan results yet — run a discovery scan</p>}
-            {coins.map((c) => (
-              <div key={c.symbol} className="flex items-center justify-between py-2 border-b border-border/50 last:border-0">
-                <div>
-                  <p className="text-sm font-medium">{c.symbol}</p>
-                  <p className="text-xs text-text-muted">RSI {c.rsi} · score {c.score}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-sm font-mono">{fmtPrice(c.price)}</p>
-                  {c.direction && (
-                    <Badge variant={c.direction === "buy" ? "green" : "red"}>{c.direction.toUpperCase()}</Badge>
-                  )}
-                </div>
+      <Card>
+        <CardHeader><CardTitle>Majors</CardTitle></CardHeader>
+        <div className="space-y-1">
+          {coins.filter((c) => MAJOR_SET.has(c.symbol)).length === 0 && <p className="text-sm text-text-muted">No data</p>}
+          {coins.filter((c) => MAJOR_SET.has(c.symbol)).map((c) => (
+            <div key={c.symbol} className="flex items-center justify-between py-2 border-b border-border/50 last:border-0">
+              <div>
+                <p className="text-sm font-medium">{c.symbol}</p>
+                <p className="text-xs text-text-muted">RSI {c.rsi} · score {c.score}</p>
               </div>
-            ))}
-          </div>
-        </Card>
+              <div className="text-right">
+                <p className="text-sm font-mono">{fmtPrice(c.price)}</p>
+                {c.direction && <Badge variant={c.direction === "buy" ? "green" : "red"}>{c.direction.toUpperCase()}</Badge>}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle>Meme / Hot</CardTitle></CardHeader>
+        <div className="space-y-1">
+          {coins.filter((c) => MEME_SET.has(c.symbol) || HOT_SET.has(c.symbol)).length === 0 && <p className="text-sm text-text-muted">No data</p>}
+          {coins.filter((c) => MEME_SET.has(c.symbol) || HOT_SET.has(c.symbol)).map((c) => (
+            <div key={c.symbol} className="flex items-center justify-between py-2 border-b border-border/50 last:border-0">
+              <div>
+                <p className="text-sm font-medium">{c.symbol}</p>
+                <p className="text-xs text-text-muted">{MEME_SET.has(c.symbol) ? "Meme" : HOT_SET.has(c.symbol) ? "Hot Alt" : "Alt"}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-sm font-mono">{fmtPrice(c.price)}</p>
+                {c.direction && <Badge variant={c.direction === "buy" ? "green" : "red"}>{c.direction.toUpperCase()}</Badge>}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
       </div>
     </div>
   );

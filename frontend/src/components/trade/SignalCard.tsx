@@ -7,7 +7,7 @@ interface SignalCardProps {
 }
 
 export function SignalCard({ signal }: SignalCardProps) {
-  const marketColors: Record<string, "blue" | "green" | "purple"> = { stock: "blue", forex: "green", crypto: "purple" };
+  const marketColors: Record<string, "blue" | "green" | "purple" | "yellow"> = { stock: "blue", forex: "green", crypto: "purple", commodity: "yellow" };
   const dirColor = signal.direction === "buy" ? "green" : "red";
 
   return (
