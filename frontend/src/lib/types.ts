@@ -36,9 +36,26 @@ export interface StrategyAccuracy {
   total_pnl: number;
 }
 
+export interface MarketAccuracy {
+  market: string;
+  closed_trades: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+  total_pnl: number;
+}
+
+export interface SignalCounts {
+  total_signals: number;
+  active_signals: number;
+  by_market: Record<string, number>;
+}
+
 export interface AccuracyStats {
-  overall: { closed_trades: number; win_rate: number };
+  overall: { closed_trades: number; win_rate: number; total_pnl: number };
+  signals: SignalCounts;
   strategies: StrategyAccuracy[];
+  markets: MarketAccuracy[];
 }
 
 export interface Trade {

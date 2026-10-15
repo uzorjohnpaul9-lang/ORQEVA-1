@@ -118,30 +118,54 @@ def apply_decay(confidence: float, created_at) -> tuple[float, float]:
 
 
 async def accuracy_stats(db: SupabaseDB) -> dict:
-    """Historical signal accuracy per strategy, derived from closed trades."""
+    """Historical signal accuracy, derived from closed trades.
+
+    Returns per-strategy and per-market outcome breakdown plus platform-wide
+    signal counts (from the SIGNALS table), so the dashboard can show real
+    signal-outcome analytics rather than an empty personal-trade view.
+    """
     rows = await db.fetch_all(
         TRADES,
-        where={"status": "closed", "strategy": {"op": "neq", "value": None}},
+        where={"status": "closed"},
         columns="strategy,market,pnl",
     )
 
     grouped: dict[str, dict] = {}
+    by_market: dict[str, dict] = {}
+    overall_total = 0
+    overall_wins = 0
+    overall_pnl = 0.0
+
     for r in rows:
         strategy = r.get("strategy")
-        if not strategy:
-            continue
-        g = grouped.setdefault(strategy, {
-            "strategy": strategy,
-            "markets": set(),
-            "total": 0,
-            "wins": 0,
-            "total_pnl": 0.0,
-        })
-        g["markets"].add(r.get("market"))
-        g["total"] += 1
-        if (r.get("pnl") or 0) > 0:
-            g["wins"] += 1
-        g["total_pnl"] += float(r.get("pnl") or 0)
+        market = r.get("market")
+        pnl = float(r.get("pnl") or 0)
+        win = pnl > 0
+
+        overall_total += 1
+        overall_wins += 1 if win else 0
+        overall_pnl += pnl
+
+        if strategy:
+            g = grouped.setdefault(strategy, {
+                "strategy": strategy,
+                "markets": set(),
+                "total": 0,
+                "wins": 0,
+                "total_pnl": 0.0,
+            })
+            g["markets"].add(market)
+            g["total"] += 1
+            if win:
+                g["wins"] += 1
+            g["total_pnl"] += pnl
+
+        if market:
+            m = by_market.setdefault(market, {"total": 0, "wins": 0, "total_pnl": 0.0})
+            m["total"] += 1
+            if win:
+                m["wins"] += 1
+            m["total_pnl"] += pnl
 
     strategies = []
     for g in grouped.values():
@@ -155,12 +179,26 @@ async def accuracy_stats(db: SupabaseDB) -> dict:
             "total_pnl": round(g["total_pnl"], 2),
         })
     strategies.sort(key=lambda s: s["win_rate"], reverse=True)
-    overall_total = sum(s["closed_trades"] for s in strategies)
-    overall_wins = sum(s["wins"] for s in strategies)
+
+    markets = []
+    for name, m in by_market.items():
+        markets.append({
+            "market": name,
+            "closed_trades": m["total"],
+            "wins": m["wins"],
+            "losses": m["total"] - m["wins"],
+            "win_rate": round(m["wins"] / m["total"] * 100, 1) if m["total"] else 0.0,
+            "total_pnl": round(m["total_pnl"], 2),
+        })
+    markets.sort(key=lambda s: s["closed_trades"], reverse=True)
+
     return {
         "overall": {
             "closed_trades": overall_total,
             "win_rate": round(overall_wins / overall_total * 100, 1) if overall_total else 0.0,
+            "total_pnl": round(overall_pnl, 2),
         },
+        "signals": await get_signal_stats(db),
         "strategies": strategies,
+        "markets": markets,
     }

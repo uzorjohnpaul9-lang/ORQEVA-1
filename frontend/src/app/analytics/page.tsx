@@ -8,6 +8,7 @@ import { LineChart } from "@/components/charts/LineChart";
 import { BarChart } from "@/components/charts/BarChart";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import type { AccuracyStats } from "@/lib/types";
 
 interface Analytics {
   range: { start: string | null; end: string | null };
@@ -41,6 +42,9 @@ export default function AnalyticsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [range, setRange] = useState("30");
+  const [signalStats, setSignalStats] = useState<AccuracyStats | null>(null);
+  const [signalLoading, setSignalLoading] = useState(true);
+  const [signalError, setSignalError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -59,6 +63,17 @@ export default function AnalyticsPage() {
     })();
     return () => { active = false; };
   }, [token, range]);
+
+  useEffect(() => {
+    if (!token) return;
+    let active = true;
+    setSignalLoading(true);
+    api<AccuracyStats>("/api/signals/accuracy", { token })
+      .then((d) => { if (active) { setSignalStats(d); setSignalError(null); } })
+      .catch(() => { if (active) setSignalError("Could not load signal outcomes"); })
+      .finally(() => { if (active) setSignalLoading(false); });
+    return () => { active = false; };
+  }, [token]);
 
   const equityData = useMemo(
     () => data && {
@@ -90,6 +105,14 @@ export default function AnalyticsPage() {
       datasets: [{ label: "Win Rate %", data: data.by_strategy.map((s) => s.win_rate), color: "#FFBE0B" }],
     },
     [data]
+  );
+
+  const marketWinRateData = useMemo(
+    () => signalStats && signalStats.markets.length > 0 && {
+      labels: signalStats.markets.map((m) => m.market),
+      datasets: [{ label: "Win Rate %", data: signalStats.markets.map((m) => m.win_rate), color: "#00D68F" }],
+    },
+    [signalStats]
   );
 
   async function exportCsv() {
@@ -136,6 +159,95 @@ export default function AnalyticsPage() {
           </div>
           <Button variant="secondary" size="sm" onClick={exportCsv}>Export CSV</Button>
         </div>
+      </div>
+
+      {/* Signal Outcomes — platform-wide, primary */}
+      <section className="space-y-4">
+        <div>
+          <h2 className="text-lg font-semibold">Signal Outcomes</h2>
+          <p className="text-sm text-text-secondary mt-1">Platform-wide accuracy across all closed signals</p>
+        </div>
+
+        {signalLoading && <p className="text-sm text-text-muted">Loading signal outcomes...</p>}
+        {signalError && <p className="text-sm text-red">{signalError}</p>}
+
+        {!signalLoading && !signalError && signalStats && (
+          signalStats.overall.closed_trades === 0 ? (
+            <Card>
+              <p className="text-sm text-text-muted py-6 text-center">
+                No closed signal outcomes yet — platform accuracy appears here as signals complete their trades.
+              </p>
+            </Card>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <StatCard
+                  label="Total Signals"
+                  value={signalStats.signals.total_signals.toLocaleString()}
+                  change={`${signalStats.signals.active_signals} active`}
+                />
+                <StatCard
+                  label="Signal Win Rate"
+                  value={`${signalStats.overall.win_rate}%`}
+                  change={`${signalStats.overall.closed_trades} closed`}
+                />
+                <StatCard
+                  label="Signal P&L"
+                  value={`${signalStats.overall.total_pnl >= 0 ? "+" : "-"}$${Math.abs(signalStats.overall.total_pnl).toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+                />
+                <StatCard label="Markets Tracked" value={signalStats.markets.length.toString()} />
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <Card>
+                  <CardHeader><CardTitle>Win Rate by Market</CardTitle></CardHeader>
+                  {marketWinRateData
+                    ? <BarChart data={marketWinRateData} height={250} />
+                    : <p className="text-sm text-text-muted py-8 text-center">No market outcomes yet.</p>}
+                </Card>
+                <Card padding={false}>
+                  <div className="px-4 pt-4"><CardTitle>Signal Outcomes by Market</CardTitle></div>
+                  <div className="px-4 pb-4 mt-3 overflow-x-auto">
+                    <table className="w-full text-sm min-w-[420px]">
+                      <thead>
+                        <tr className="border-b border-border">
+                          <th className="text-left text-xs text-text-muted uppercase py-2 px-4">Market</th>
+                          <th className="text-center text-xs text-text-muted uppercase py-2 px-4">Closed</th>
+                          <th className="text-center text-xs text-text-muted uppercase py-2 px-4">W</th>
+                          <th className="text-center text-xs text-text-muted uppercase py-2 px-4">L</th>
+                          <th className="text-center text-xs text-text-muted uppercase py-2 px-4">Win %</th>
+                          <th className="text-right text-xs text-text-muted uppercase py-2 px-4">P&L</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {signalStats.markets.map((m) => (
+                          <tr key={m.market} className="border-b border-border/50 last:border-0">
+                            <td className="capitalize px-4 py-2.5">{m.market}</td>
+                            <td className="text-center px-4 py-2.5">{m.closed_trades}</td>
+                            <td className="text-center px-4 py-2.5 text-green">{m.wins}</td>
+                            <td className="text-center px-4 py-2.5 text-red">{m.losses}</td>
+                            <td className="text-center px-4 py-2.5 font-mono">{m.win_rate}%</td>
+                            <td className={clsx("text-right px-4 py-2.5 font-mono", m.total_pnl >= 0 ? "text-green" : "text-red")}>
+                              {m.total_pnl >= 0 ? "+" : "-"}${Math.abs(m.total_pnl).toLocaleString()}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+              </div>
+            </>
+          )
+        )}
+      </section>
+
+      {/* Your Trades — personal */}
+      <div className="pt-2">
+        <h2 className="text-lg font-semibold">Your Trades</h2>
+        <p className="text-sm text-text-secondary mt-1">
+          Your personal trading performance{range ? ` · last ${range} days` : " · all time"}
+        </p>
       </div>
 
       {error && <p className="text-sm text-red">{error}</p>}
