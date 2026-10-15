@@ -22,7 +22,15 @@ const sizes = {
 
 export function Button({ variant = "primary", size = "md", className, children, ...props }: ButtonProps) {
   return (
-    <button className={clsx("inline-flex items-center justify-center gap-2 transition-colors disabled:opacity-50", variants[variant], sizes[size], className)} {...props}>
+    <button
+      className={clsx(
+        "inline-flex items-center justify-center gap-2 transition-[transform,background-color,color,border-color,opacity] duration-150 ease-out active:scale-[0.97] disabled:pointer-events-none disabled:opacity-50",
+        variants[variant],
+        sizes[size],
+        className
+      )}
+      {...props}
+    >
       {children}
     </button>
   );

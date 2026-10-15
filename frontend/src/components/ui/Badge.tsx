@@ -18,7 +18,7 @@ const variants = {
 export function Badge({ variant = "gray", children, dot }: BadgeProps) {
   return (
     <span className={clsx("inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium", variants[variant])}>
-      {dot && <span className={clsx("w-1.5 h-1.5 rounded-full", `bg-current`)} />}
+      {dot && <span className={clsx("w-1.5 h-1.5 rounded-full animate-pulse-dot", `bg-current`)} />}
       {children}
     </span>
   );

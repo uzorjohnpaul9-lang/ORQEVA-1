@@ -8,6 +8,8 @@ import { Card, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
+import { SignalPulse } from "@/components/ui/SignalPulse";
+import { Stagger, StaggerItem } from "@/components/motion/Reveal";
 import { RichText } from "@/components/learn/RichText";
 import { tierLabel } from "@/lib/plans";
 import type { AccuracyStats, CalendarEventContext, Signal } from "@/lib/types";
@@ -136,7 +138,10 @@ export default function SignalsPage() {
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-bold">AI Signals</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold">AI Signals</h1>
+          {live && <SignalPulse size={26} rings={2} />}
+        </div>
         <Badge variant={live ? "green" : "gray"} dot>
           {live ? "LIVE FEED" : "FEED OFFLINE"}
         </Badge>
@@ -189,7 +194,7 @@ export default function SignalsPage() {
         <span className="ml-auto text-xs text-text-muted">{filtered.length} signals</span>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+      <Stagger className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {filtered.length === 0 && (
           <Card><p className="text-sm text-text-muted">No signals yet. Run an engine scan or wait for the live feed.</p></Card>
         )}
@@ -197,7 +202,8 @@ export default function SignalsPage() {
           const eff = s.effective_confidence ?? s.confidence;
           const ctx = eventCtx(s);
           return (
-            <Card key={s.id} className="hover:border-border-light transition-colors cursor-pointer" >
+            <StaggerItem key={s.id}>
+            <Card className="hover:border-border-light transition-colors cursor-pointer" >
               <div onClick={() => openDetail(s)}>
                 <div className="flex items-start justify-between mb-3">
                   <div>
@@ -257,9 +263,10 @@ export default function SignalsPage() {
                 </div>
               </div>
             </Card>
+            </StaggerItem>
           );
         })}
-      </div>
+      </Stagger>
 
       <Card>
         <CardHeader><CardTitle>Historical Signal Accuracy</CardTitle></CardHeader>

@@ -5,11 +5,20 @@ interface CardProps {
   children: ReactNode;
   className?: string;
   padding?: boolean;
+  /** Lift + brighten border on hover. Use for clickable cards. */
+  interactive?: boolean;
 }
 
-export function Card({ children, className, padding = true }: CardProps) {
+export function Card({ children, className, padding = true, interactive = false }: CardProps) {
   return (
-    <div className={clsx("bg-bg-secondary border border-border rounded-xl", padding && "p-5", className)}>
+    <div
+      className={clsx(
+        "bg-bg-secondary border border-border rounded-xl transition-[transform,border-color,box-shadow] duration-200 ease-out",
+        padding && "p-5",
+        interactive && "hover:-translate-y-0.5 hover:border-border-light hover:shadow-lg hover:shadow-black/20",
+        className
+      )}
+    >
       {children}
     </div>
   );

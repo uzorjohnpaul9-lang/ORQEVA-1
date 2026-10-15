@@ -22,13 +22,13 @@ export function Modal({ open, onClose, title, children, align = "center" }: Moda
 
   return (
     <div className={clsx("fixed inset-0 z-50 flex", align === "bottom" ? "items-end" : "items-center justify-center")}>
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-fade-in" onClick={onClose} />
       <div
         className={clsx(
           "relative bg-bg-secondary border border-border rounded-xl shadow-2xl",
           align === "bottom"
-            ? "w-full max-h-[85vh] overflow-y-auto rounded-b-none p-6"
-            : "w-full max-w-lg mx-4 p-6"
+            ? "w-full max-h-[85vh] overflow-y-auto rounded-b-none p-6 animate-slide-up"
+            : "w-full max-w-lg mx-4 p-6 animate-scale-in"
         )}
       >
         <div className="flex items-center justify-between mb-4">

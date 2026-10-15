@@ -7,6 +7,7 @@ import { useAuth } from "@/lib/auth";
 import { adminNavItems, navIconMap, navItems } from "@/lib/nav";
 import { tierBadgeVariant, tierLabel } from "@/lib/plans";
 import { Badge } from "@/components/ui/Badge";
+import { SignalPulse } from "@/components/ui/SignalPulse";
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -16,9 +17,9 @@ export function Sidebar() {
   return (
     <aside className="hidden xl:flex w-64 flex-col bg-bg-secondary border-r border-border h-screen">
       <div className="flex items-center gap-3 px-6 py-5 border-b border-border">
-        <div className="w-8 h-8 rounded-lg bg-green/20 flex items-center justify-center">
-          <span className="text-green font-bold text-sm">O</span>
-        </div>
+        <SignalPulse size={34} rings={2}>
+          <span className="text-[10px] font-bold">O</span>
+        </SignalPulse>
         <span className="font-semibold text-lg tracking-wide">ORQEVA</span>
       </div>
 
