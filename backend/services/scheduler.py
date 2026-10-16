@@ -110,7 +110,11 @@ async def run_scheduled_scan() -> dict:
 
 async def _loop():
     interval = _interval_seconds()
-    log.info("engine scheduler started (every %ss)", interval)
+    startup_delay = max(0, int(os.getenv("SCAN_STARTUP_DELAY_SECONDS", "20")))
+    log.info("engine scheduler started (every %ss, first scan in %ss)", interval, startup_delay)
+    # One early scan so a fresh deploy resolves outcomes without waiting a full interval.
+    await asyncio.sleep(startup_delay)
+    await run_scheduled_scan()
     while True:
         await asyncio.sleep(interval)
         await run_scheduled_scan()

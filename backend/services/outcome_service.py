@@ -11,7 +11,9 @@ skipped so one bad feed cannot stall the whole batch.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 from backend.db.models import SIGNALS
@@ -20,7 +22,11 @@ from backend.db.supabase import SupabaseDB, now_iso, parse_dt
 log = logging.getLogger("outcomes")
 
 DEFAULT_MAX_AGE_HOURS = 72  # signals older than this expire if untouched
-DEFAULT_LIMIT = 500
+DEFAULT_LIMIT = 2000
+# Hard wall-clock budget for a single resolve pass. Bar fetches hit external
+# providers synchronously, so without a budget a slow feed could stall the
+# scheduler tick indefinitely. The pass stops cleanly and resumes next tick.
+DEFAULT_BUDGET_SECONDS = 90
 
 
 def _f(value) -> float | None:
@@ -105,8 +111,14 @@ def r_multiple(direction: str, entry, stop_loss, exit_price) -> float | None:
 
 
 async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT_MAX_AGE_HOURS,
-                                 limit: int = DEFAULT_LIMIT) -> dict:
-    """Resolve/expire active signals. Returns counts by outcome."""
+                                 limit: int = DEFAULT_LIMIT,
+                                 budget_seconds: int = DEFAULT_BUDGET_SECONDS) -> dict:
+    """Resolve/expire active signals. Returns counts by outcome.
+
+    Bar feeds are fetched on a worker thread (``asyncio.to_thread``) so the
+    synchronous HTTP calls never block the event loop, and the whole pass is
+    bounded by ``budget_seconds`` so a slow provider cannot stall the caller.
+    """
     try:
         rows = await db.fetch_all(
             SIGNALS,
@@ -120,17 +132,21 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
         return {"tp": 0, "sl": 0, "expired": 0, "skipped": 0, "errors": [str(e)[:150]]}
 
     cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
-    counts = {"tp": 0, "sl": 0, "expired": 0, "skipped": 0}
+    counts = {"tp": 0, "sl": 0, "expired": 0, "skipped": 0, "budget_exhausted": False}
     bar_cache: dict[tuple[str, str], list[dict]] = {}
     errors: list[str] = []
+    deadline = time.monotonic() + budget_seconds
 
     for s in rows:
+        if time.monotonic() >= deadline:
+            counts["budget_exhausted"] = True
+            break
         try:
             market = s.get("market")
             symbol = s.get("symbol")
             key = (market, symbol)
             if key not in bar_cache:
-                bar_cache[key] = _bars_for(market, symbol)
+                bar_cache[key] = await asyncio.to_thread(_bars_for, market, symbol)
             bars = bar_cache[key]
 
             direction = s.get("direction") or ""
