@@ -22,11 +22,12 @@ from backend.db.supabase import SupabaseDB, now_iso, parse_dt
 log = logging.getLogger("outcomes")
 
 DEFAULT_MAX_AGE_HOURS = 72  # signals older than this expire if untouched
-DEFAULT_LIMIT = 2000
+DEFAULT_LIMIT = 5000
 # Hard wall-clock budget for a single resolve pass. Bar fetches hit external
 # providers synchronously, so without a budget a slow feed could stall the
 # scheduler tick indefinitely. The pass stops cleanly and resumes next tick.
-DEFAULT_BUDGET_SECONDS = 90
+# The scheduler interval (15m) leaves ample headroom for a longer pass.
+DEFAULT_BUDGET_SECONDS = 240
 
 
 def _f(value) -> float | None:
