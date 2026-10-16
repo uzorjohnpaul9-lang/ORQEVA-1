@@ -28,6 +28,10 @@ DEFAULT_LIMIT = 5000
 # scheduler tick indefinitely. The pass stops cleanly and resumes next tick.
 # The scheduler interval (15m) leaves ample headroom for a longer pass.
 DEFAULT_BUDGET_SECONDS = 240
+# Per-symbol bar fetch cap. The underlying providers are synchronous and some
+# SDK clients (e.g. Alpaca) have no client-side timeout, so a single stalled
+# call could otherwise hang a worker thread forever and stall the whole pass.
+DEFAULT_BAR_FETCH_TIMEOUT = 20
 
 
 def _f(value) -> float | None:
@@ -122,7 +126,8 @@ def r_multiple(direction: str, entry, stop_loss, exit_price) -> float | None:
 
 async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT_MAX_AGE_HOURS,
                                  limit: int = DEFAULT_LIMIT,
-                                 budget_seconds: int = DEFAULT_BUDGET_SECONDS) -> dict:
+                                 budget_seconds: int = DEFAULT_BUDGET_SECONDS,
+                                 fetch_timeout: int = DEFAULT_BAR_FETCH_TIMEOUT) -> dict:
     """Resolve/expire active signals. Returns counts by outcome.
 
     Bar feeds are fetched on a worker thread (``asyncio.to_thread``) so the
@@ -156,7 +161,14 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
             symbol = s.get("symbol")
             key = (market, symbol)
             if key not in bar_cache:
-                bar_cache[key] = await asyncio.to_thread(_bars_for, market, symbol)
+                try:
+                    bar_cache[key] = await asyncio.wait_for(
+                        asyncio.to_thread(_bars_for, market, symbol),
+                        timeout=fetch_timeout,
+                    )
+                except Exception:
+                    # Stalled provider (incl. asyncio.TimeoutError): treat as no bars.
+                    bar_cache[key] = []
             bars = bar_cache[key]
 
             direction = s.get("direction") or ""

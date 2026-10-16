@@ -84,7 +84,12 @@ async def run_scheduled_scan() -> dict:
         alerts = await check_event_alerts(db)
         out = await engine_service.run_scan(db, cooldown_hours=_cooldown_hours())
         try:
-            resolved = await outcome_service.resolve_active_signals(db)
+            # Hard ceiling so a stalled provider can never wedge the tick loop.
+            budget = int(os.getenv("OUTCOME_RESOLVE_BUDGET_SECONDS", "240"))
+            resolved = await asyncio.wait_for(
+                outcome_service.resolve_active_signals(db, budget_seconds=budget),
+                timeout=budget + 60,
+            )
         except Exception as e:  # pragma: no cover - defensive
             resolved = {"error": str(e)[:150]}
         log.info(
