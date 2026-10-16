@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import clsx from "clsx";
 import { Card, CardHeader, CardTitle, StatCard } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
+import { Reveal } from "@/components/motion/Reveal";
 import { LineChart } from "@/components/charts/LineChart";
 import { BarChart } from "@/components/charts/BarChart";
 import { api } from "@/lib/api";
@@ -107,13 +108,24 @@ export default function AnalyticsPage() {
     [data]
   );
 
-  const marketWinRateData = useMemo(
-    () => signalStats && signalStats.markets.length > 0 && {
+  const marketWinRateData = useMemo(() => {
+    if (!signalStats || signalStats.markets.length === 0) return undefined;
+    return {
       labels: signalStats.markets.map((m) => m.market),
       datasets: [{ label: "Win Rate %", data: signalStats.markets.map((m) => m.win_rate), color: "#00D68F" }],
-    },
-    [signalStats]
-  );
+    };
+  }, [signalStats]);
+
+  const outcomes = signalStats?.outcomes;
+  const hasOutcomes = !!outcomes && outcomes.resolved > 0;
+
+  const marketHitRateData = useMemo(() => {
+    if (!outcomes || outcomes.by_market.length === 0) return undefined;
+    return {
+      labels: outcomes.by_market.map((m) => m.market),
+      datasets: [{ label: "Hit Rate %", data: outcomes.by_market.map((m) => m.win_rate), color: "#00D68F" }],
+    };
+  }, [outcomes]);
 
   async function exportCsv() {
     if (!token || !data) return;
@@ -136,7 +148,7 @@ export default function AnalyticsPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <Reveal className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Analytics</h1>
@@ -172,10 +184,10 @@ export default function AnalyticsPage() {
         {signalError && <p className="text-sm text-red">{signalError}</p>}
 
         {!signalLoading && !signalError && signalStats && (
-          signalStats.overall.closed_trades === 0 ? (
+          !hasOutcomes && signalStats.overall.closed_trades === 0 ? (
             <Card>
               <p className="text-sm text-text-muted py-6 text-center">
-                No closed signal outcomes yet — platform accuracy appears here as signals complete their trades.
+                No resolved signal outcomes yet — platform accuracy appears here as signals hit their targets or stops.
               </p>
             </Card>
           ) : (
@@ -187,22 +199,33 @@ export default function AnalyticsPage() {
                   change={`${signalStats.signals.active_signals} active`}
                 />
                 <StatCard
-                  label="Signal Win Rate"
-                  value={`${signalStats.overall.win_rate}%`}
-                  change={`${signalStats.overall.closed_trades} closed`}
+                  label="Signal Hit Rate"
+                  value={hasOutcomes ? `${outcomes!.win_rate}%` : `${signalStats.overall.win_rate}%`}
+                  change={hasOutcomes ? `${outcomes!.resolved} resolved` : `${signalStats.overall.closed_trades} closed`}
                 />
+                {hasOutcomes ? (
+                  <StatCard
+                    label="Avg R Multiple"
+                    value={`${outcomes!.avg_r >= 0 ? "+" : ""}${outcomes!.avg_r.toFixed(2)}R`}
+                    change={`${outcomes!.by_outcome.tp ?? 0} TP / ${outcomes!.by_outcome.sl ?? 0} SL`}
+                  />
+                ) : (
+                  <StatCard
+                    label="Signal P&L"
+                    value={`${signalStats.overall.total_pnl >= 0 ? "+" : "-"}$${Math.abs(signalStats.overall.total_pnl).toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+                  />
+                )}
                 <StatCard
-                  label="Signal P&L"
-                  value={`${signalStats.overall.total_pnl >= 0 ? "+" : "-"}$${Math.abs(signalStats.overall.total_pnl).toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+                  label="Markets Tracked"
+                  value={(hasOutcomes ? outcomes!.by_market.length : signalStats.markets.length).toString()}
                 />
-                <StatCard label="Markets Tracked" value={signalStats.markets.length.toString()} />
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <Card>
-                  <CardHeader><CardTitle>Win Rate by Market</CardTitle></CardHeader>
-                  {marketWinRateData
-                    ? <BarChart data={marketWinRateData} height={250} />
+                  <CardHeader><CardTitle>Hit Rate by Market</CardTitle></CardHeader>
+                  {(hasOutcomes ? marketHitRateData : marketWinRateData)
+                    ? <BarChart data={(hasOutcomes ? marketHitRateData : marketWinRateData)!} height={250} />
                     : <p className="text-sm text-text-muted py-8 text-center">No market outcomes yet.</p>}
                 </Card>
                 <Card padding={false}>
@@ -212,31 +235,47 @@ export default function AnalyticsPage() {
                       <thead>
                         <tr className="border-b border-border">
                           <th className="text-left text-xs text-text-muted uppercase py-2 px-4">Market</th>
-                          <th className="text-center text-xs text-text-muted uppercase py-2 px-4">Closed</th>
+                          <th className="text-center text-xs text-text-muted uppercase py-2 px-4">{hasOutcomes ? "Resolved" : "Closed"}</th>
                           <th className="text-center text-xs text-text-muted uppercase py-2 px-4">W</th>
                           <th className="text-center text-xs text-text-muted uppercase py-2 px-4">L</th>
-                          <th className="text-center text-xs text-text-muted uppercase py-2 px-4">Win %</th>
-                          <th className="text-right text-xs text-text-muted uppercase py-2 px-4">P&L</th>
+                          <th className="text-center text-xs text-text-muted uppercase py-2 px-4">Hit %</th>
+                          {!hasOutcomes && <th className="text-right text-xs text-text-muted uppercase py-2 px-4">P&L</th>}
                         </tr>
                       </thead>
                       <tbody>
-                        {signalStats.markets.map((m) => (
-                          <tr key={m.market} className="border-b border-border/50 last:border-0">
-                            <td className="capitalize px-4 py-2.5">{m.market}</td>
-                            <td className="text-center px-4 py-2.5">{m.closed_trades}</td>
-                            <td className="text-center px-4 py-2.5 text-green">{m.wins}</td>
-                            <td className="text-center px-4 py-2.5 text-red">{m.losses}</td>
-                            <td className="text-center px-4 py-2.5 font-mono">{m.win_rate}%</td>
-                            <td className={clsx("text-right px-4 py-2.5 font-mono", m.total_pnl >= 0 ? "text-green" : "text-red")}>
-                              {m.total_pnl >= 0 ? "+" : "-"}${Math.abs(m.total_pnl).toLocaleString()}
-                            </td>
-                          </tr>
-                        ))}
+                        {hasOutcomes
+                          ? outcomes!.by_market.map((m) => (
+                              <tr key={m.market} className="border-b border-border/50 last:border-0">
+                                <td className="capitalize px-4 py-2.5">{m.market}</td>
+                                <td className="text-center px-4 py-2.5">{m.resolved}</td>
+                                <td className="text-center px-4 py-2.5 text-green">{m.wins}</td>
+                                <td className="text-center px-4 py-2.5 text-red">{m.resolved - m.wins}</td>
+                                <td className="text-center px-4 py-2.5 font-mono">{m.win_rate}%</td>
+                              </tr>
+                            ))
+                          : signalStats.markets.map((m) => (
+                              <tr key={m.market} className="border-b border-border/50 last:border-0">
+                                <td className="capitalize px-4 py-2.5">{m.market}</td>
+                                <td className="text-center px-4 py-2.5">{m.closed_trades}</td>
+                                <td className="text-center px-4 py-2.5 text-green">{m.wins}</td>
+                                <td className="text-center px-4 py-2.5 text-red">{m.losses}</td>
+                                <td className="text-center px-4 py-2.5 font-mono">{m.win_rate}%</td>
+                                <td className={clsx("text-right px-4 py-2.5 font-mono", m.total_pnl >= 0 ? "text-green" : "text-red")}>
+                                  {m.total_pnl >= 0 ? "+" : "-"}${Math.abs(m.total_pnl).toLocaleString()}
+                                </td>
+                              </tr>
+                            ))}
                       </tbody>
                     </table>
                   </div>
                 </Card>
               </div>
+
+              {hasOutcomes && outcomes!.simulated > 0 && (
+                <p className="text-xs text-text-muted">
+                  {outcomes!.simulated} resolved signal{outcomes!.simulated === 1 ? "" : "s"} used simulated data and are included for reference.
+                </p>
+              )}
             </>
           )
         )}
@@ -332,6 +371,6 @@ export default function AnalyticsPage() {
           </Card>
         </>
       )}
-    </div>
+    </Reveal>
   );
 }

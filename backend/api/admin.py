@@ -30,6 +30,17 @@ class ResetPassword(BaseModel):
     notify: bool = True
 
 
+class DeactivateBody(BaseModel):
+    reason: str = Field(..., min_length=2, max_length=500)
+    anonymize: bool = False
+
+
+class DeleteBody(BaseModel):
+    reason: str = Field(..., min_length=2, max_length=500)
+    # Typed confirmation: must equal the target's current email (case-insensitive).
+    confirm: str = Field(..., min_length=1, max_length=255)
+
+
 async def _auth_metadata(client, user_id: str) -> dict:
     """Existing Supabase Auth user_metadata (defensive; never raises)."""
     try:
@@ -104,6 +115,123 @@ async def update_user(
         {"changes": {k: v for k, v in updates.items() if k != "updated_at"}},
     )
     return admin_service.user_view(row)
+
+
+@router.post("/users/{user_id}/deactivate")
+async def deactivate_user(
+    user_id: str,
+    body: DeactivateBody,
+    db: SupabaseDB = Depends(get_db),
+    admin: dict = Depends(require_admin),
+):
+    """Soft-terminate an account. Optionally anonymize PII (restorable via reactivate)."""
+    check_rate_limit(admin["id"], "admin")
+    target = await db.fetch_one(USERS, {"id": user_id})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user_id == admin["id"]:
+        raise HTTPException(status_code=400, detail="You cannot deactivate your own account")
+    if await admin_service.is_last_admin(db, target):
+        raise HTTPException(status_code=400, detail="Cannot deactivate the last admin")
+
+    updates: dict = {"is_active": False, "updated_at": now_iso()}
+    original: dict | None = None
+    if body.anonymize:
+        original = {"email": target.get("email"), "username": target.get("username")}
+        updates.update(admin_service.anonymized_identity(user_id))
+
+    updated = await db.update(USERS, updates, {"id": user_id})
+    row = updated[0] if updated else target
+
+    # Persist the original identity in auth metadata so reactivate can restore it.
+    if original:
+        try:
+            client = await get_service_client()
+            meta = await _auth_metadata(client, user_id)
+            meta["_deactivated_original"] = original
+            await client.auth.admin.update_user_by_id(user_id, {"user_metadata": meta})
+        except Exception as e:
+            logger.warning("auth metadata sync failed for %s: %s", user_id, e)
+
+    await admin_service.log_action(
+        db, admin, "user.deactivate", "user", user_id,
+        {"reason": body.reason, "anonymized": bool(body.anonymize)},
+    )
+    return admin_service.user_view(row)
+
+
+@router.post("/users/{user_id}/reactivate")
+async def reactivate_user(
+    user_id: str,
+    db: SupabaseDB = Depends(get_db),
+    admin: dict = Depends(require_admin),
+):
+    """Reverse a deactivation, restoring anonymized identity when present."""
+    check_rate_limit(admin["id"], "admin")
+    target = await db.fetch_one(USERS, {"id": user_id})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    updates: dict = {"is_active": True, "updated_at": now_iso()}
+    restored = False
+    try:
+        client = await get_service_client()
+        meta = await _auth_metadata(client, user_id)
+        original = meta.pop("_deactivated_original", None)
+        if isinstance(original, dict):
+            if original.get("email"):
+                updates["email"] = original["email"]
+                restored = True
+            if original.get("username"):
+                updates["username"] = original["username"]
+            await client.auth.admin.update_user_by_id(user_id, {"user_metadata": meta})
+    except Exception as e:
+        logger.warning("auth metadata restore failed for %s: %s", user_id, e)
+
+    updated = await db.update(USERS, updates, {"id": user_id})
+    row = updated[0] if updated else target
+
+    await admin_service.log_action(
+        db, admin, "user.reactivate", "user", user_id, {"identity_restored": restored},
+    )
+    return admin_service.user_view(row)
+
+
+@router.delete("/users/{user_id}")
+async def delete_user(
+    user_id: str,
+    body: DeleteBody,
+    db: SupabaseDB = Depends(get_db),
+    admin: dict = Depends(require_admin),
+):
+    """Hard-delete an account: Supabase Auth user + profile (FK cascades children)."""
+    check_rate_limit(admin["id"], "admin")
+    target = await db.fetch_one(USERS, {"id": user_id})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user_id == admin["id"]:
+        raise HTTPException(status_code=400, detail="You cannot delete your own account")
+    if await admin_service.is_last_admin(db, target):
+        raise HTTPException(status_code=400, detail="Cannot delete the last admin")
+
+    expected = (target.get("email") or "").strip().lower()
+    if body.confirm.strip().lower() != expected:
+        raise HTTPException(status_code=400, detail="Confirmation does not match the user's email")
+
+    # Remove the auth identity first; if that fails, keep the profile intact so
+    # the account is not left half-deleted.
+    try:
+        client = await get_service_client()
+        await client.auth.admin.delete_user(user_id)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Auth deletion failed: {getattr(e, 'message', e)}")
+
+    await db.delete(USERS, {"id": user_id})
+    await admin_service.log_action(
+        db, admin, "user.delete", "user", user_id,
+        {"reason": body.reason, "email": target.get("email")},
+    )
+    return {"deleted": True, "id": user_id}
 
 
 @router.post("/users/{user_id}/reset-password")

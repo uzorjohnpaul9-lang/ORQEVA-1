@@ -23,6 +23,7 @@ def _empty_results() -> dict[str, list]:
 def _engine_signal_to_db(signal, market: str, strategy: str, tier: str = "free",
                          event_context: dict | None = None) -> dict:
     indicators = dict(signal.metadata or {})
+    data_source = indicators.pop("data_source", None) or "live"
     if event_context:
         indicators["event_context"] = event_context
     return {
@@ -36,6 +37,7 @@ def _engine_signal_to_db(signal, market: str, strategy: str, tier: str = "free",
         "strategy": (signal.metadata or {}).get("strategy") or strategy,
         "tier": tier,
         "indicators": indicators,
+        "data_source": data_source,
     }
 
 

@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { Stagger, StaggerItem } from "@/components/motion/Reveal";
 
 interface ExchangeConn {
   id: string;
@@ -187,13 +188,14 @@ export default function ExchangesPage() {
           </p>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <Stagger className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {conns.map((conn) => {
             const adapter = adapters.find((a) => a.name === conn.exchange);
             const label = conn.display_name ?? adapter?.display_name ?? (conn.exchange as string).charAt(0).toUpperCase() + (conn.exchange as string).slice(1);
             const type = (adapter?.markets ?? []).join("/") || "-";
             return (
-              <Card key={conn.id}>
+              <StaggerItem key={conn.id}>
+              <Card>
                 <div className="flex items-start justify-between mb-4">
                   <div>
                     <h3 className="font-semibold text-lg">{label}</h3>
@@ -226,9 +228,10 @@ export default function ExchangesPage() {
                   <Button variant="danger" size="sm" onClick={() => disconnect(conn.id)}>Disconnect</Button>
                 </div>
               </Card>
+              </StaggerItem>
             );
           })}
-        </div>
+        </Stagger>
       )}
     </div>
   );

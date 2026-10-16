@@ -5,6 +5,7 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Card, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import { Stagger, StaggerItem } from "@/components/motion/Reveal";
 import type { DiscoveryCoin, MarketOverview } from "@/lib/types";
 
 const MEME_SET = new Set(["DOGE/USD", "SHIB/USD", "PEPE/USD", "BONK/USD", "FLOKI/USD", "WIF/USD", "TRUMP/USD", "FARTCOIN/USD", "PENGU/USD"]);
@@ -29,6 +30,7 @@ export default function MarketPage() {
   const [coins, setCoins] = useState<DiscoveryCoin[]>([]);
   const [updatedAt, setUpdatedAt] = useState<string>("");
   const [error, setError] = useState<string>("");
+  const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -43,6 +45,8 @@ export default function MarketPage() {
       setError("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load market data");
+    } finally {
+      setLoading(false);
     }
   }, [token]);
 
@@ -70,14 +74,26 @@ export default function MarketPage() {
         <Card><p className="text-sm text-red-400">{error}</p></Card>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-        {indices.length === 0 && !error && (
-          <Card><p className="text-sm text-text-muted">Loading market data...</p></Card>
+      <Stagger className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        {loading && indices.length === 0 && !error && (
+          Array.from({ length: 4 }).map((_, i) => (
+            <Card key={`sk-${i}`} className="animate-pulse">
+              <div className="flex items-center justify-between">
+                <div className="space-y-2">
+                  <div className="h-4 w-24 rounded bg-bg-tertiary" />
+                  <div className="h-3 w-16 rounded bg-bg-tertiary" />
+                </div>
+                <div className="h-5 w-14 rounded bg-bg-tertiary" />
+              </div>
+              <div className="mt-3 h-6 w-28 rounded bg-bg-tertiary" />
+            </Card>
+          ))
         )}
         {indices.map((idx) => {
           const up = (idx.change_percent ?? 0) >= 0;
           return (
-            <Card key={`${idx.market}-${idx.symbol}`}>
+            <StaggerItem key={`${idx.market}-${idx.symbol}`}>
+            <Card>
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium">{idx.label}</p>
@@ -89,9 +105,10 @@ export default function MarketPage() {
               </div>
               <p className="text-xl font-bold mt-2 font-mono">{fmtPrice(idx.price)}</p>
             </Card>
+            </StaggerItem>
           );
         })}
-      </div>
+      </Stagger>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <Card>

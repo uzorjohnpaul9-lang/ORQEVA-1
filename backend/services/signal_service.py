@@ -14,7 +14,7 @@ def _signal_row(s: dict) -> dict:
 async def save_signal(db: SupabaseDB, symbol: str, market: str, direction: str,
                       confidence: float, entry_price: float, stop_loss: float,
                       take_profit: float, strategy: str, tier: str = "free",
-                      indicators: dict | None = None) -> dict:
+                      indicators: dict | None = None, data_source: str = "live") -> dict:
     row = {
         "id": gen_uuid(),
         "user_id": None,
@@ -29,6 +29,7 @@ async def save_signal(db: SupabaseDB, symbol: str, market: str, direction: str,
         "status": "active",
         "tier_required": tier,
         "indicators": indicators,
+        "data_source": data_source,
         "created_at": now_iso(),
     }
     return await db.insert(SIGNALS, row)
@@ -51,6 +52,7 @@ async def save_signals_batch(db: SupabaseDB, signals: list[dict]) -> list[dict]:
             "status": "active",
             "tier_required": s.get("tier", "free"),
             "indicators": s.get("indicators"),
+            "data_source": s.get("data_source") or "live",
             "created_at": now_iso(),
         })
     return await db.insert_many(SIGNALS, rows)
@@ -202,6 +204,8 @@ async def accuracy_stats(db: SupabaseDB) -> dict:
         })
     markets.sort(key=lambda s: s["closed_trades"], reverse=True)
 
+    from backend.services import outcome_service
+
     return {
         "overall": {
             "closed_trades": overall_total,
@@ -209,6 +213,7 @@ async def accuracy_stats(db: SupabaseDB) -> dict:
             "total_pnl": round(overall_pnl, 2),
         },
         "signals": await get_signal_stats(db),
+        "outcomes": await outcome_service.outcome_stats(db),
         "strategies": strategies,
         "markets": markets,
     }

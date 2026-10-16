@@ -47,6 +47,12 @@ class SignalResponse(BaseModel):
     strategy: str | None
     status: str
     tier_required: str
+    category: str | None = None
+    outcome: str | None = None
+    exit_price: float | None = None
+    resolved_at: datetime | None = None
+    r_multiple: float | None = None
+    data_source: str | None = None
     indicators: dict | None
     created_at: datetime
 

@@ -93,13 +93,16 @@ class StockEngine(BaseEngine):
                 )
                 bars = self._data_client.get_stock_bars(request)
                 if bars and symbol in bars:
+                    self._last_source = "live"
                     return [bar.close for bar in bars[symbol]]
             except Exception as e:
                 logger.error(f"Alpaca fetch failed for {symbol}: {e}")
 
         closes = self._twelve_data_prices(symbol, lookback)
         if closes:
+            self._last_source = "live"
             return closes
+        self._last_source = "simulated"
         return self._simulated_prices(symbol, lookback)
 
     def _twelve_data_prices(self, symbol: str, lookback: int) -> List[float]:

@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { api, API_BASE } from "@/lib/api";
+import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { useSignalsFeed } from "@/lib/signalsFeed";
 import { Card, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/ui/Modal";
@@ -16,6 +17,26 @@ import type { AccuracyStats, CalendarEventContext, Signal } from "@/lib/types";
 
 const MARKETS = ["all", "stock", "forex", "crypto", "commodity"] as const;
 const STATUSES = ["active", "expired", "all"] as const;
+const CATEGORIES = ["all", "meme", "hot", "major", "alt"] as const;
+
+function categoryVariant(cat: string): "green" | "yellow" | "purple" | "blue" | "gray" {
+  if (cat === "meme") return "purple";
+  if (cat === "hot") return "yellow";
+  if (cat === "major") return "blue";
+  if (cat === "alt") return "gray";
+  return "gray";
+}
+
+function outcomeVariant(outcome: string): "green" | "red" | "gray" | "yellow" {
+  if (outcome === "tp") return "green";
+  if (outcome === "sl") return "red";
+  if (outcome === "expired") return "gray";
+  return "yellow";
+}
+
+function rLabel(r: number): string {
+  return `${r >= 0 ? "+" : ""}${r.toFixed(2)}R`;
+}
 
 function marketVariant(m: string): "blue" | "green" | "purple" | "yellow" {
   return m === "stock" ? "blue" : m === "forex" ? "green" : m === "commodity" ? "yellow" : "purple";
@@ -49,53 +70,71 @@ function confColor(c: number): string {
   return c >= 0.8 ? "#00D68F" : c >= 0.6 ? "#FFBE0B" : "#FF4757";
 }
 
+function SignalCardSkeleton() {
+  return (
+    <Card className="animate-pulse">
+      <div className="flex items-start justify-between mb-3">
+        <div className="space-y-2">
+          <div className="h-4 w-24 rounded bg-bg-tertiary" />
+          <div className="h-3 w-16 rounded bg-bg-tertiary" />
+        </div>
+        <div className="h-5 w-14 rounded bg-bg-tertiary" />
+      </div>
+      <div className="grid grid-cols-3 gap-3">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <div key={i} className="space-y-1.5">
+            <div className="h-2.5 w-10 mx-auto rounded bg-bg-tertiary" />
+            <div className="h-3.5 w-16 mx-auto rounded bg-bg-tertiary" />
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 h-2.5 w-32 rounded bg-bg-tertiary" />
+    </Card>
+  );
+}
+
 export default function SignalsPage() {
   const { token, user } = useAuth();
+  const { live, incoming } = useSignalsFeed();
   const [signals, setSignals] = useState<Signal[]>([]);
   const [accuracy, setAccuracy] = useState<AccuracyStats | null>(null);
   const [market, setMarket] = useState<(typeof MARKETS)[number]>("all");
   const [status, setStatus] = useState<(typeof STATUSES)[number]>("active");
+  const [cat, setCat] = useState<(typeof CATEGORIES)[number]>("all");
   const [selected, setSelected] = useState<Signal | null>(null);
-  const [live, setLive] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<string>("");
   const [explain, setExplain] = useState<string>("");
   const [explainBusy, setExplainBusy] = useState(false);
-  const esRef = useRef<EventSource | null>(null);
+  const seenRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!token) return;
+    setLoading(true);
     api<Signal[]>("/api/signals/?limit=100", { token })
       .then(setSignals)
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setLoading(false));
     api<AccuracyStats>("/api/signals/accuracy", { token })
       .then(setAccuracy)
       .catch(() => {});
   }, [token]);
 
-  // Live SSE feed — new signals arrive pushed, gated server-side by tier
+  // Merge signals pushed by the app-wide SSE feed (see SignalsFeedProvider).
   useEffect(() => {
-    if (!token || !user) return;
-    const url = `${API_BASE}/api/signals/feed?token=${encodeURIComponent(token)}`;
-    const es = new EventSource(url);
-    esRef.current = es;
-
-    es.addEventListener("signal", (ev) => {
-      try {
-        const s: Signal = JSON.parse((ev as MessageEvent).data);
-        setSignals((prev) => (prev.some((p) => p.id === s.id) ? prev : [s, ...prev]));
-        setToast(`New ${s.market} signal: ${s.symbol} ${s.direction.toUpperCase()}`);
-        setTimeout(() => setToast(""), 5000);
-      } catch {}
+    if (incoming.length === 0) return;
+    const fresh = incoming.filter((s) => !seenRef.current.has(s.id));
+    if (fresh.length === 0) return;
+    fresh.forEach((s) => seenRef.current.add(s.id));
+    setSignals((prev) => {
+      const ids = new Set(prev.map((p) => p.id));
+      const add = fresh.filter((s) => !ids.has(s.id));
+      return add.length ? [...add, ...prev] : prev;
     });
-    es.onopen = () => setLive(true);
-    es.onerror = () => setLive(false);
-
-    return () => {
-      es.close();
-      esRef.current = null;
-      setLive(false);
-    };
-  }, [token, user]);
+    const s = fresh[0];
+    setToast(`New ${s.market} signal: ${s.symbol} ${s.direction.toUpperCase()}`);
+    setTimeout(() => setToast(""), 5000);
+  }, [incoming]);
 
   const openDetail = useCallback(
     async (s: Signal) => {
@@ -129,11 +168,27 @@ export default function SignalsPage() {
     }
   }, [token, selected]);
 
-  const filtered = signals.filter(
-    (s) =>
-      (market === "all" || s.market === market) &&
-      (status === "all" || s.status === status)
-  );
+  const filtered = useMemo(() => {
+    const seen = new Set<string>();
+    return signals.filter((s) => {
+      if (seen.has(s.id)) return false;
+      seen.add(s.id);
+      return (
+        (market === "all" || s.market === market) &&
+        (status === "all" || s.status === status) &&
+        (cat === "all" || (s.category ?? "").toLowerCase() === cat)
+      );
+    });
+  }, [signals, market, status, cat]);
+
+  const catCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const s of signals) {
+      const c = (s.category ?? "").toLowerCase();
+      if (c) counts[c] = (counts[c] ?? 0) + 1;
+    }
+    return counts;
+  }, [signals]);
 
   return (
     <div className="space-y-6">
@@ -191,9 +246,26 @@ export default function SignalsPage() {
             {st.toUpperCase()}
           </button>
         ))}
+        <span className="w-px h-5 bg-border mx-1" />
+        {CATEGORIES.map((c) => (
+          <button
+            key={c}
+            onClick={() => setCat(c)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+              cat === c ? "bg-purple text-white" : "bg-bg-tertiary text-text-secondary hover:text-text-primary"
+            }`}
+          >
+            {c === "all" ? "ALL TYPES" : `${c.toUpperCase()}${catCounts[c] ? ` ${catCounts[c]}` : ""}`}
+          </button>
+        ))}
         <span className="ml-auto text-xs text-text-muted">{filtered.length} signals</span>
       </div>
 
+      {loading && signals.length === 0 ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {Array.from({ length: 6 }).map((_, i) => <SignalCardSkeleton key={i} />)}
+        </div>
+      ) : (
       <Stagger className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {filtered.length === 0 && (
           <Card><p className="text-sm text-text-muted">No signals yet. Run an engine scan or wait for the live feed.</p></Card>
@@ -212,8 +284,26 @@ export default function SignalsPage() {
                       <Badge variant={marketVariant(s.market)}>
                         {s.market}
                       </Badge>
+                      {s.category && s.category !== s.market && (
+                        <Badge variant={categoryVariant(s.category)}>{s.category}</Badge>
+                      )}
                     </div>
                     <p className="text-xs text-text-muted mt-1">{s.strategy}</p>
+                    {(s.outcome || s.data_source === "simulated") && (
+                      <div className="flex items-center gap-2 mt-2">
+                        {s.outcome && (
+                          <Badge variant={outcomeVariant(s.outcome)}>{s.outcome.toUpperCase()}</Badge>
+                        )}
+                        {s.r_multiple != null && (
+                          <span className={`text-xs font-mono ${s.r_multiple >= 0 ? "text-green" : "text-red-400"}`}>
+                            {rLabel(s.r_multiple)}
+                          </span>
+                        )}
+                        {s.data_source === "simulated" && (
+                          <Badge variant="yellow">SIMULATED</Badge>
+                        )}
+                      </div>
+                    )}
                   </div>
                   <Badge variant={s.direction === "buy" ? "green" : "red"} dot>
                     {s.direction.toUpperCase()}
@@ -267,6 +357,70 @@ export default function SignalsPage() {
           );
         })}
       </Stagger>
+      )}
+
+      {accuracy?.outcomes && accuracy.outcomes.resolved > 0 && (
+        <Card>
+          <CardHeader><CardTitle>Signal Outcomes</CardTitle></CardHeader>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+            <div>
+              <p className="text-[10px] text-text-muted uppercase">Hit Rate</p>
+              <p className={`text-xl font-mono font-semibold ${accuracy.outcomes.win_rate >= 50 ? "text-green" : "text-red-400"}`}>
+                {accuracy.outcomes.win_rate}%
+              </p>
+            </div>
+            <div>
+              <p className="text-[10px] text-text-muted uppercase">Resolved</p>
+              <p className="text-xl font-mono font-semibold">{accuracy.outcomes.resolved}</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-text-muted uppercase">Avg R</p>
+              <p className={`text-xl font-mono font-semibold ${accuracy.outcomes.avg_r >= 0 ? "text-green" : "text-red-400"}`}>
+                {accuracy.outcomes.avg_r >= 0 ? "+" : ""}{accuracy.outcomes.avg_r.toFixed(2)}R
+              </p>
+            </div>
+            <div>
+              <p className="text-[10px] text-text-muted uppercase">TP / SL</p>
+              <p className="text-xl font-mono font-semibold">
+                <span className="text-green">{accuracy.outcomes.by_outcome.tp ?? 0}</span>
+                <span className="text-text-muted"> / </span>
+                <span className="text-red-400">{accuracy.outcomes.by_outcome.sl ?? 0}</span>
+              </p>
+            </div>
+          </div>
+          {accuracy.outcomes.by_market.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm min-w-[420px]">
+                <thead>
+                  <tr className="border-b border-border">
+                    <th className="text-left text-xs text-text-muted py-2">Market</th>
+                    <th className="text-right text-xs text-text-muted py-2">Resolved</th>
+                    <th className="text-right text-xs text-text-muted py-2">Wins</th>
+                    <th className="text-right text-xs text-text-muted py-2">Hit Rate</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {accuracy.outcomes.by_market.map((m) => (
+                    <tr key={m.market} className="border-b border-border/50 last:border-0">
+                      <td className="py-2.5 font-medium capitalize">{m.market}</td>
+                      <td className="py-2.5 text-right font-mono">{m.resolved}</td>
+                      <td className="py-2.5 text-right font-mono">{m.wins}</td>
+                      <td className="py-2.5 text-right font-mono">
+                        <span className={m.win_rate >= 50 ? "text-green" : "text-red-400"}>{m.win_rate}%</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {accuracy.outcomes.simulated > 0 && (
+            <p className="text-xs text-text-muted mt-3">
+              {accuracy.outcomes.simulated} resolved signal{accuracy.outcomes.simulated === 1 ? "" : "s"} used simulated data and are included for reference.
+            </p>
+          )}
+        </Card>
+      )}
 
       <Card>
         <CardHeader><CardTitle>Historical Signal Accuracy</CardTitle></CardHeader>
@@ -320,6 +474,9 @@ export default function SignalsPage() {
               <Badge variant={marketVariant(selected.market)}>
                 {selected.market}
               </Badge>
+              {selected.category && selected.category !== selected.market && (
+                <Badge variant={categoryVariant(selected.category)}>{selected.category}</Badge>
+              )}
               <Badge variant={selected.status === "active" ? "green" : "gray"}>{selected.status}</Badge>
               <Badge variant={selected.tier_required === "free" ? "gray" : selected.tier_required === "premium" ? "yellow" : "purple"}>
                 {selected.tier_required}

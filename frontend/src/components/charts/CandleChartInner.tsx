@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { createPortal } from "react-dom";
 import { Chart, registerables } from "chart.js";
 
 Chart.register(...registerables);
@@ -31,9 +32,24 @@ export interface CandleChartProps {
 
 const UP = "#00D68F";
 const DOWN = "#FF4757";
+const MIN_BARS = 8;
 
 function fmt(v: number): string {
   return v >= 1000 ? v.toLocaleString(undefined, { maximumFractionDigits: 2 }) : v.toFixed(4);
+}
+
+function ZoomButton({ label, onClick, title }: { label: string; onClick: () => void; title: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      aria-label={title}
+      className="w-7 h-7 flex items-center justify-center rounded-md border border-border bg-bg-secondary/90 text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors text-sm font-medium"
+    >
+      {label}
+    </button>
+  );
 }
 
 export function CandleChartInner({
@@ -45,12 +61,128 @@ export function CandleChartInner({
   height = 380,
 }: CandleChartProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const areaRef = useRef<HTMLDivElement>(null);
+  const [mounted, setMounted] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
+  // Visible window into `bars` as [start, end) indices; null = show all.
+  const [view, setView] = useState<[number, number] | null>(null);
 
+  const total = bars.length;
+  const [start, end] = useMemo<[number, number]>(
+    () => (view ? [view[0], view[1]] : [0, total]),
+    [view, total]
+  );
+  const size = Math.max(1, end - start);
+
+  useEffect(() => setMounted(true), []);
+
+  // Reset the window whenever the underlying series changes (new symbol/interval).
+  useEffect(() => {
+    setView(null);
+  }, [bars]);
+
+  const clampView = useCallback(
+    (s: number, e: number): [number, number] => {
+      let n = Math.round(e - s);
+      n = Math.max(MIN_BARS, Math.min(total, n));
+      let ns = Math.round(s);
+      if (ns < 0) ns = 0;
+      if (ns + n > total) ns = total - n;
+      if (ns < 0) ns = 0;
+      return [ns, ns + n];
+    },
+    [total]
+  );
+
+  const zoomBy = useCallback(
+    (ratio: number) => {
+      if (total <= MIN_BARS) return;
+      const cur = view ?? [0, total];
+      const curSize = cur[1] - cur[0];
+      const center = (cur[0] + cur[1]) / 2;
+      const next = clampView(center - (curSize * ratio) / 2, center + (curSize * ratio) / 2);
+      setView(next[0] === 0 && next[1] === total ? null : next);
+    },
+    [view, total, clampView]
+  );
+
+  const panByBars = useCallback(
+    (delta: number) => {
+      if (total <= MIN_BARS || !view) return;
+      const next = clampView(view[0] + delta, view[1] + delta);
+      setView(next[0] === 0 && next[1] === total ? null : next);
+    },
+    [view, total, clampView]
+  );
+
+  const reset = useCallback(() => setView(null), []);
+
+  // Wheel zoom — needs a non-passive listener so we can preventDefault.
+  useEffect(() => {
+    const el = areaRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (total <= MIN_BARS) return;
+      e.preventDefault();
+      zoomBy(e.deltaY < 0 ? 0.8 : 1.25);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [zoomBy, total, fullscreen]);
+
+  // Pinch + drag via pointer events.
+  const pointers = useRef<Map<number, number>>(new Map());
+  const lastDist = useRef<number | null>(null);
+  const lastX = useRef<number | null>(null);
+
+  const onPointerDown = (e: ReactPointerEvent) => {
+    (e.target as Element).setPointerCapture?.(e.pointerId);
+    pointers.current.set(e.pointerId, e.clientX);
+    lastX.current = e.clientX;
+    lastDist.current = null;
+  };
+
+  const onPointerMove = (e: ReactPointerEvent) => {
+    if (!pointers.current.has(e.pointerId)) return;
+    pointers.current.set(e.pointerId, e.clientX);
+    const xs = Array.from(pointers.current.values());
+    if (xs.length >= 2) {
+      const dist = Math.abs(xs[0] - xs[1]) || 1;
+      if (lastDist.current != null && dist > 0) {
+        zoomBy(lastDist.current / dist);
+      }
+      lastDist.current = dist;
+    } else {
+      const dx = e.clientX - (lastX.current ?? e.clientX);
+      const width = areaRef.current?.clientWidth || 1;
+      const barsPerPx = size / width;
+      if (Math.abs(dx) >= 1) panByBars(-dx * barsPerPx);
+      lastX.current = e.clientX;
+    }
+  };
+
+  const onPointerUp = (e: ReactPointerEvent) => {
+    pointers.current.delete(e.pointerId);
+    if (pointers.current.size === 1) {
+      lastX.current = Array.from(pointers.current.values())[0];
+      lastDist.current = null;
+    } else if (pointers.current.size === 0) {
+      lastX.current = null;
+      lastDist.current = null;
+    }
+  };
+
+  // Chart lifecycle — re-runs only when the visible window changes.
   useEffect(() => {
     if (!canvasRef.current) return;
 
-    const labels = bars.map((b) => b.time);
-    const ranges = bars.map((b) => [b.low, b.high]);
+    const viewBars = bars.slice(start, end);
+    const vEma9 = ema9.slice(start, end);
+    const vEma21 = ema21.slice(start, end);
+    const vEma50 = ema50.slice(start, end);
+
+    const labels = viewBars.map((b) => b.time);
+    const ranges = viewBars.map((b) => [b.low, b.high]);
 
     const candlePlugin = {
       id: "candleBodies",
@@ -58,11 +190,11 @@ export function CandleChartInner({
         const { ctx, scales } = chart;
         const xs = scales.x as unknown as { getPixelForValue: (v: number) => number; width: number };
         const ys = scales.y as unknown as { getPixelForValue: (v: number) => number };
-        const slot = xs.width / Math.max(bars.length, 1);
-        const bodyW = Math.max(1, Math.min(9, slot * 0.6));
+        const slot = xs.width / Math.max(viewBars.length, 1);
+        const bodyW = Math.max(1, Math.min(11, slot * 0.6));
 
         ctx.save();
-        bars.forEach((b, i) => {
+        viewBars.forEach((b, i) => {
           const x = xs.getPixelForValue(i);
           const up = b.close >= b.open;
           const color = up ? UP : DOWN;
@@ -126,7 +258,7 @@ export function CandleChartInner({
       },
     };
 
-    const prices = bars.flatMap((b) => [b.low, b.high]).concat(lines.map((l) => l.price));
+    const prices = viewBars.flatMap((b) => [b.low, b.high]).concat(lines.map((l) => l.price));
     let yMin: number | undefined;
     let yMax: number | undefined;
     if (prices.length > 0) {
@@ -151,14 +283,15 @@ export function CandleChartInner({
             categoryPercentage: 1,
             order: 3,
           },
-          { type: "line", label: "EMA 9", data: ema9 as number[], borderColor: "#FFBE0B", backgroundColor: "transparent", borderWidth: 1.5, pointRadius: 0, spanGaps: true, tension: 0.2, order: 0 },
-          { type: "line", label: "EMA 21", data: ema21 as number[], borderColor: "#4C6FFF", backgroundColor: "transparent", borderWidth: 1.5, pointRadius: 0, spanGaps: true, tension: 0.2, order: 1 },
-          { type: "line", label: "EMA 50", data: ema50 as number[], borderColor: "#B14CFF", backgroundColor: "transparent", borderWidth: 1.5, pointRadius: 0, spanGaps: true, tension: 0.2, order: 2 },
+          { type: "line", label: "EMA 9", data: vEma9 as number[], borderColor: "#FFBE0B", backgroundColor: "transparent", borderWidth: 1.5, pointRadius: 0, spanGaps: true, tension: 0.2, order: 0 },
+          { type: "line", label: "EMA 21", data: vEma21 as number[], borderColor: "#4C6FFF", backgroundColor: "transparent", borderWidth: 1.5, pointRadius: 0, spanGaps: true, tension: 0.2, order: 1 },
+          { type: "line", label: "EMA 50", data: vEma50 as number[], borderColor: "#B14CFF", backgroundColor: "transparent", borderWidth: 1.5, pointRadius: 0, spanGaps: true, tension: 0.2, order: 2 },
         ],
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        animation: false,
         interaction: { mode: "index", intersect: false },
         plugins: {
           legend: { labels: { color: "#8B8FA3", font: { size: 12 }, usePointStyle: true } },
@@ -176,11 +309,43 @@ export function CandleChartInner({
     });
 
     return () => chart.destroy();
-  }, [bars, ema9, ema21, ema50, lines]);
+  }, [bars, ema9, ema21, ema50, lines, start, end, fullscreen]);
 
-  return (
-    <div style={{ height }}>
+  const controls = (
+    <div className="absolute right-2 top-2 z-10 flex items-center gap-1">
+      <span className="mr-1 hidden sm:inline text-[10px] text-text-muted">
+        {start + 1}–{end} / {total}
+      </span>
+      <ZoomButton label="−" title="Zoom out" onClick={() => zoomBy(1.25)} />
+      <ZoomButton label="+" title="Zoom in" onClick={() => zoomBy(0.8)} />
+      <ZoomButton label="⟲" title="Reset zoom" onClick={reset} />
+      <ZoomButton label={fullscreen ? "✕" : "⛶"} title={fullscreen ? "Exit fullscreen" : "Fullscreen"} onClick={() => setFullscreen((v) => !v)} />
+    </div>
+  );
+
+  const chartArea = (
+    <div
+      ref={areaRef}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      className="relative w-full flex-1 min-h-0 touch-none select-none cursor-grab active:cursor-grabbing"
+      style={{ height: fullscreen ? "100%" : height }}
+    >
+      {controls}
       <canvas ref={canvasRef} />
     </div>
   );
+
+  if (fullscreen && mounted) {
+    return createPortal(
+      <div className="fixed inset-0 z-[100] flex flex-col bg-bg-primary p-3 md:p-6">
+        {chartArea}
+      </div>,
+      document.body
+    );
+  }
+
+  return <div className="relative">{chartArea}</div>;
 }

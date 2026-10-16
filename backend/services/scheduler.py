@@ -77,19 +77,24 @@ async def run_scheduled_scan() -> dict:
     """One scan tick with its own SupabaseDB facade. Never raises."""
     global _last_scan
     from backend.db.supabase import SupabaseDB, get_service_client
-    from backend.services import engine_service
+    from backend.services import engine_service, outcome_service
 
     try:
         db = SupabaseDB(await get_service_client())
         alerts = await check_event_alerts(db)
         out = await engine_service.run_scan(db, cooldown_hours=_cooldown_hours())
+        try:
+            resolved = await outcome_service.resolve_active_signals(db)
+        except Exception as e:  # pragma: no cover - defensive
+            resolved = {"error": str(e)[:150]}
         log.info(
-            "scheduled scan: %s signals (%s), errors=%s",
-            out["signals_generated"], out["by_market"], out["errors"],
+            "scheduled scan: %s signals (%s), errors=%s, resolved=%s",
+            out["signals_generated"], out["by_market"], out["errors"], resolved,
         )
         from backend.monitoring.metrics import record_scan
         record_scan(out["signals_generated"], bool(out["errors"]))
         summary = {k: out[k] for k in ("signals_generated", "by_market", "errors")}
+        summary["resolved"] = resolved
         summary["event_alerts"] = alerts
         summary["at"] = __import__("backend.db.supabase", fromlist=["now_iso"]).now_iso()
         _last_scan = summary

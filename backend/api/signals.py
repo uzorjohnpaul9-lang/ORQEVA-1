@@ -14,13 +14,33 @@ from backend.auth import get_current_user, resolve_user_from_token
 from backend.services import signal_service
 from backend.middleware.rate_limiter import check_rate_limit
 from backend.middleware.cache import cache
+from engines.engine_config import HOT_COINS, LARGE_CRYPTO, MEME_COINS, MID_CRYPTO
 
 router = APIRouter(prefix="/api/signals", tags=["signals"])
 logger = logging.getLogger(__name__)
 
 
+def _category(market: str | None, symbol: str | None) -> str:
+    """Human-facing category so memecoins/hot alts are distinguishable.
+
+    Non-crypto markets keep their market name ("stock"/"forex"/"commodity").
+    Crypto splits into meme / hot / major / alt.
+    """
+    sym = (symbol or "").upper()
+    if market != "crypto":
+        return market or "other"
+    if sym in MEME_COINS:
+        return "meme"
+    if sym in HOT_COINS:
+        return "hot"
+    if sym in LARGE_CRYPTO or sym in MID_CRYPTO:
+        return "major"
+    return "alt"
+
+
 def _serialize(signal: dict, with_decay: bool = True) -> dict:
     data = SignalResponse.model_validate(signal).model_dump(mode="json")
+    data["category"] = _category(signal.get("market"), signal.get("symbol"))
     if with_decay:
         eff, age = signal_service.apply_decay(signal.get("confidence"), signal.get("created_at"))
         data["effective_confidence"] = eff

@@ -156,7 +156,8 @@ class BaseEngine(ABC):
                 signal_type=self.market_type,
                 fees=fees,
                 slippage=slippage,
-                metadata={"rsi": rsi, "atr": atr, "macd": macd, **ema},
+                metadata={"rsi": rsi, "atr": atr, "macd": macd,
+                          "data_source": getattr(self, "_last_source", None) or "live", **ema},
             )
 
         except Exception as e:
@@ -201,7 +202,8 @@ class BaseEngine(ABC):
                 signal_type=self.market_type,
                 fees=self.calculate_fees(symbol, quantity, price),
                 slippage=self.calculate_slippage(symbol, quantity, price),
-                metadata={"strategy": cand["strategy"], "source": "methodology"},
+                metadata={"strategy": cand["strategy"], "source": "methodology",
+                          "data_source": getattr(self, "_last_source", None) or "live"},
             )
         except Exception as e:
             logger.error(f"Strategy analysis failed for {symbol}: {e}")

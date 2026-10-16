@@ -15,7 +15,7 @@ export function Sidebar() {
   const items = user?.is_admin ? [...navItems, ...adminNavItems] : navItems;
 
   return (
-    <aside className="hidden xl:flex w-64 flex-col bg-bg-secondary border-r border-border h-screen">
+    <aside className="hidden xl:flex w-64 flex-col bg-bg-secondary border-r border-border h-dvh">
       <div className="flex items-center gap-3 px-6 py-5 border-b border-border">
         <SignalPulse size={34} rings={2}>
           <span className="text-[10px] font-bold">O</span>

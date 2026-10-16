@@ -50,6 +50,7 @@ class ForexEngine(BaseEngine):
     def fetch_prices(self, symbol: str, lookback: int = 30) -> List[float]:
         """Fetch daily closing prices from Twelve Data."""
         if not self._api_key:
+            self._last_source = "simulated"
             return self._simulated_prices(symbol, lookback)
 
         try:
@@ -64,10 +65,12 @@ class ForexEngine(BaseEngine):
             data = r.json()
 
             if "values" in data:
+                self._last_source = "live"
                 return [float(v["close"]) for v in reversed(data["values"])]
         except Exception as e:
             logger.error(f"Twelve Data fetch failed for {symbol}: {e}")
 
+        self._last_source = "simulated"
         return self._simulated_prices(symbol, lookback)
 
     def _simulated_prices(self, symbol: str, lookback: int) -> List[float]:

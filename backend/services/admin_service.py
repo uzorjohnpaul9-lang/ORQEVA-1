@@ -189,3 +189,18 @@ async def invalidate_signal(db: SupabaseDB, signal_id: str) -> dict | None:
 
 async def list_audit(db: SupabaseDB, limit: int = 50) -> list[dict]:
     return await db.fetch_all(AUDIT_LOG, order="created_at.desc", limit=min(limit, 200))
+
+
+# ---- Account termination ------------------------------------------------
+
+def anonymized_identity(user_id: str) -> dict:
+    """Replacement email/username for a deactivated+anonymized account."""
+    short = (user_id or "").replace("-", "")[:12] or "user"
+    return {"email": f"deleted+{short}@orqeva.invalid", "username": f"deleted_{short}"}
+
+
+async def is_last_admin(db: SupabaseDB, target: dict) -> bool:
+    """True when deactivating/deleting ``target`` would remove the last admin."""
+    if not target.get("is_admin"):
+        return False
+    return await db.count(USERS, where={"is_admin": True}) <= 1

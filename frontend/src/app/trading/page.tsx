@@ -58,19 +58,21 @@ export default function TradingPage() {
   }, [token, refresh]);
 
   const [connections, setConnections] = useState<{ exchange: string; is_active: boolean }[]>([]);
+  const [adapterMarkets, setAdapterMarkets] = useState<Record<string, string[]>>({});
   useEffect(() => {
     if (!token) return;
     api<{ exchange: string; is_active: boolean }[]>("/api/exchanges", { token })
       .then(setConnections)
       .catch(() => {});
+    api<{ name: string; markets: string[] }[]>("/api/exchanges/meta", { token })
+      .then((list) => setAdapterMarkets(Object.fromEntries(list.map((a) => [a.name, a.markets ?? []]))))
+      .catch(() => {});
   }, [token]);
 
+  // Any active connection whose adapter serves this market can route the order,
+  // so the venue list stays in sync with the backend registry automatically.
   const liveVenue = connections.find(
-    (c) =>
-      c.is_active &&
-      ((market === "stock" && c.exchange === "alpaca") ||
-        (market === "crypto" && ["kraken", "coinbase"].includes(c.exchange)) ||
-        (market === "forex" && c.exchange === "oanda")),
+    (c) => c.is_active && (adapterMarkets[c.exchange] ?? []).includes(market),
   );
 
   async function placeOrder(e: React.FormEvent) {

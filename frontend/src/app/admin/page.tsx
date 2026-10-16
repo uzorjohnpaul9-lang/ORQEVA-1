@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
+import { Modal } from "@/components/ui/Modal";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useRouter } from "next/navigation";
@@ -102,13 +103,13 @@ export default function AdminPage() {
               </p>
             </div>
           </div>
-          <div className="flex gap-1.5">
+          <div className="flex gap-1.5 overflow-x-auto max-w-full pb-1">
             {TABS.map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
                 className={clsx(
-                  "px-3 py-1.5 rounded-lg text-sm font-medium transition-colors",
+                  "shrink-0 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors",
                   tab === t
                     ? "bg-purple text-bg-primary"
                     : "bg-bg-tertiary text-text-secondary hover:text-text-primary hover:bg-bg-hover"
@@ -237,6 +238,12 @@ function UsersTab({ token }: { token: string }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const [danger, setDanger] = useState<{ user: AdminUser; mode: "deactivate" | "delete" } | null>(null);
+  const [reason, setReason] = useState("");
+  const [confirmText, setConfirmText] = useState("");
+  const [anonymize, setAnonymize] = useState(false);
+  const [dangerBusy, setDangerBusy] = useState(false);
+
   const load = useCallback(async (s = search, t = tier) => {
     try {
       const qs = new URLSearchParams({ limit: "100" });
@@ -269,6 +276,52 @@ function UsersTab({ token }: { token: string }) {
       setNotice(`${u.email} reset - temporary password: ${r.temporary_password}`); setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Reset failed");
+    }
+  }
+
+  function openDanger(u: AdminUser, mode: "deactivate" | "delete") {
+    setDanger({ user: u, mode });
+    setReason("");
+    setConfirmText("");
+    setAnonymize(false);
+  }
+
+  async function runDanger() {
+    if (!danger) return;
+    const { user, mode } = danger;
+    if (reason.trim().length < 2) { setError("A reason is required"); return; }
+    if (mode === "delete" && confirmText.trim().toLowerCase() !== user.email.toLowerCase()) {
+      setError("Type the user's email exactly to confirm deletion"); return;
+    }
+    setDangerBusy(true);
+    setError(null);
+    try {
+      if (mode === "deactivate") {
+        await api(`/api/admin/users/${user.id}/deactivate`, {
+          method: "POST", token, body: JSON.stringify({ reason, anonymize }),
+        });
+        setNotice(`Deactivated ${user.email}`);
+      } else {
+        await api(`/api/admin/users/${user.id}`, {
+          method: "DELETE", token, body: JSON.stringify({ reason, confirm: confirmText }),
+        });
+        setNotice(`Deleted ${user.email}`);
+      }
+      setDanger(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Action failed");
+    } finally {
+      setDangerBusy(false);
+    }
+  }
+
+  async function reactivate(u: AdminUser) {
+    try {
+      await api(`/api/admin/users/${u.id}/reactivate`, { method: "POST", token });
+      setNotice(`Reactivated ${u.email}`); setError(null); await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Reactivate failed");
     }
   }
 
@@ -342,6 +395,12 @@ function UsersTab({ token }: { token: string }) {
                     <div className="flex flex-wrap gap-1.5 items-center">
                       <span className="text-xs text-text-muted">{u.telegram_chat_id ? "linked" : "—"}</span>
                       <Button size="sm" variant="secondary" onClick={() => resetPassword(u)}>Reset PW</Button>
+                      {u.is_active ? (
+                        <Button size="sm" variant="danger" onClick={() => openDanger(u, "deactivate")}>Deactivate</Button>
+                      ) : (
+                        <Button size="sm" variant="secondary" onClick={() => reactivate(u)}>Reactivate</Button>
+                      )}
+                      <Button size="sm" variant="danger" onClick={() => openDanger(u, "delete")}>Delete</Button>
                     </div>
                   </td>
                 </tr>
@@ -350,6 +409,52 @@ function UsersTab({ token }: { token: string }) {
           </table>
         </div>
       </AdminCard>
+
+      <Modal
+        open={!!danger}
+        onClose={() => { if (!dangerBusy) setDanger(null); }}
+        title={danger?.mode === "delete" ? "Permanently delete account" : "Deactivate account"}
+      >
+        {danger && (
+          <div className="space-y-4">
+            <p className="text-sm text-text-secondary">
+              {danger.mode === "delete"
+                ? <>This permanently removes <span className="font-medium text-text-primary">{danger.user.email}</span> and all their data (signals, trades, connections). This cannot be undone.</>
+                : <>This disables <span className="font-medium text-text-primary">{danger.user.email}</span>. They can be reactivated later.</>}
+            </p>
+            <Input
+              label="Reason (kept in the audit log)"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="e.g. fraudulent activity, user request"
+            />
+            {danger.mode === "deactivate" ? (
+              <label className="flex items-center gap-2 text-sm text-text-secondary">
+                <input type="checkbox" checked={anonymize} onChange={(e) => setAnonymize(e.target.checked)} />
+                Also anonymize PII (email/username), restorable on reactivate
+              </label>
+            ) : (
+              <Input
+                label={`Type "${danger.user.email}" to confirm`}
+                value={confirmText}
+                onChange={(e) => setConfirmText(e.target.value)}
+                placeholder={danger.user.email}
+              />
+            )}
+            <div className="flex gap-2">
+              <Button
+                variant="danger"
+                className="flex-1"
+                onClick={runDanger}
+                disabled={dangerBusy || reason.trim().length < 2 || (danger.mode === "delete" && confirmText.trim().toLowerCase() !== danger.user.email.toLowerCase())}
+              >
+                {dangerBusy ? "Working..." : danger.mode === "delete" ? "Permanently delete" : "Deactivate"}
+              </Button>
+              <Button variant="secondary" onClick={() => setDanger(null)} disabled={dangerBusy}>Cancel</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

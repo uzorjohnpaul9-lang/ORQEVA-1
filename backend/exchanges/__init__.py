@@ -10,6 +10,7 @@ Each adapter is a module-level instance of BaseAdapter exposing:
 """
 from backend.exchanges.base import BaseAdapter
 from backend.exchanges.alpaca_adapter import AlpacaAdapter
+from backend.exchanges.binance_us_adapter import BinanceUSAdapter
 from backend.exchanges.kraken_adapter import KrakenAdapter
 from backend.exchanges.oanda_adapter import OandaAdapter
 from backend.exchanges.coinbase_adapter import CoinbaseAdapter
@@ -21,7 +22,7 @@ def register(adapter: BaseAdapter) -> None:
     _REGISTRY[adapter.name] = adapter
 
 
-for _cls in (AlpacaAdapter, KrakenAdapter, OandaAdapter, CoinbaseAdapter):
+for _cls in (AlpacaAdapter, BinanceUSAdapter, KrakenAdapter, OandaAdapter, CoinbaseAdapter):
     register(_cls())
 
 

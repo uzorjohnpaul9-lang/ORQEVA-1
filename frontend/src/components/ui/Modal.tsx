@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { clsx } from "clsx";
 
 interface ModalProps {
@@ -12,23 +13,42 @@ interface ModalProps {
 }
 
 export function Modal({ open, onClose, title, children, align = "center" }: ModalProps) {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => setMounted(true), []);
+
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     if (open) document.addEventListener("keydown", handleEsc);
     return () => document.removeEventListener("keydown", handleEsc);
   }, [open, onClose]);
 
-  if (!open) return null;
+  // Prevent the page behind the modal from scrolling while it is open.
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = prev; };
+  }, [open]);
 
-  return (
-    <div className={clsx("fixed inset-0 z-50 flex", align === "bottom" ? "items-end" : "items-center justify-center")}>
+  // Portal to <body> so position:fixed escapes any transformed page wrapper
+  // (a transformed ancestor becomes the containing block and mis-positions it).
+  if (!open || !mounted) return null;
+
+  return createPortal(
+    <div
+      className={clsx(
+        "fixed inset-0 z-[100] flex",
+        align === "bottom" ? "items-end" : "items-center justify-center p-4"
+      )}
+    >
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-fade-in" onClick={onClose} />
       <div
         className={clsx(
           "relative bg-bg-secondary border border-border rounded-xl shadow-2xl",
           align === "bottom"
-            ? "w-full max-h-[85vh] overflow-y-auto rounded-b-none p-6 animate-slide-up"
-            : "w-full max-w-lg mx-4 p-6 animate-scale-in"
+            ? "w-full max-h-[85dvh] overflow-y-auto rounded-b-none p-6 animate-slide-up"
+            : "w-full max-w-lg max-h-[90dvh] overflow-y-auto animate-scale-in"
         )}
       >
         <div className="flex items-center justify-between mb-4">
@@ -41,6 +61,7 @@ export function Modal({ open, onClose, title, children, align = "center" }: Moda
         </div>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

@@ -48,6 +48,7 @@ class CryptoEngine(BaseEngine):
         try:
             prices = exchange_prices(symbol, lookback, "1day")
             if len(prices) >= 2:
+                self._last_source = "live"
                 return prices
         except Exception as e:
             logger.error(f"Exchange data fetch failed for {symbol}: {e}")
@@ -65,10 +66,12 @@ class CryptoEngine(BaseEngine):
                 data = r.json()
 
                 if "values" in data:
+                    self._last_source = "live"
                     return [float(v["close"]) for v in reversed(data["values"])]
             except Exception as e:
                 logger.error(f"Twelve Data fetch failed for {symbol}: {e}")
 
+        self._last_source = "simulated"
         return self._simulated_prices(symbol, lookback)
 
     def _simulated_prices(self, symbol: str, lookback: int) -> List[float]:

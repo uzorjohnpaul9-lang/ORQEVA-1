@@ -22,6 +22,15 @@ export interface Signal {
   strategy: string | null;
   status: string;
   tier_required: string;
+  /** meme | hot | major | alt for crypto; else the market name. */
+  category?: string | null;
+  /** Resolved outcome once the signal closes: tp | sl | expired | breakeven. */
+  outcome?: string | null;
+  exit_price?: number | null;
+  resolved_at?: string | null;
+  r_multiple?: number | null;
+  /** Provenance of the data behind the signal. */
+  data_source?: "live" | "simulated" | null;
   indicators?: Record<string, unknown> | null;
   created_at: string;
 }
@@ -51,9 +60,29 @@ export interface SignalCounts {
   by_market: Record<string, number>;
 }
 
+export interface OutcomeBucket {
+  market: string;
+  resolved: number;
+  wins: number;
+  win_rate: number;
+}
+
+export interface OutcomeStats {
+  resolved: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+  avg_r: number;
+  by_outcome: Record<string, number>;
+  by_market: OutcomeBucket[];
+  live: number;
+  simulated: number;
+}
+
 export interface AccuracyStats {
   overall: { closed_trades: number; win_rate: number; total_pnl: number };
   signals: SignalCounts;
+  outcomes?: OutcomeStats;
   strategies: StrategyAccuracy[];
   markets: MarketAccuracy[];
 }
