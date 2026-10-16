@@ -36,6 +36,15 @@ def _f(value) -> float | None:
         return None
 
 
+def _as_utc(dt):
+    """Treat naive datetimes as UTC so tz-aware/naive comparisons never raise."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def _bar_time(bar: dict) -> datetime | None:
     t = bar.get("time")
     if not t:
@@ -70,10 +79,10 @@ def evaluate(direction: str, entry, stop_loss, take_profit,
     if entry is None or sl is None or tp is None or not bars:
         return None
 
-    created = parse_dt(created_at) if created_at else None
+    created = _as_utc(parse_dt(created_at)) if created_at else None
     window = bars
     if created is not None:
-        after = [b for b in bars if (_bar_time(b) or created) >= created]
+        after = [b for b in bars if (_as_utc(_bar_time(b)) or created) >= created]
         window = after or bars[-1:]
 
     direction = (direction or "").lower()
@@ -168,7 +177,7 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
                     "r_multiple": r_multiple(direction, entry, sl, exit_price),
                 }
             else:
-                created_dt = parse_dt(created) if created else None
+                created_dt = _as_utc(parse_dt(created)) if created else None
                 if created_dt is not None and created_dt < cutoff:
                     last = _f(bars[-1].get("close")) if bars else None
                     update = {
