@@ -20,7 +20,7 @@ interface AdminUser {
 }
 interface SystemStatus {
   scheduler: { enabled: boolean; interval_minutes: number; cooldown_hours: number };
-  last_scan: { signals_generated?: number; by_market?: Record<string, number>; errors?: unknown[]; at?: string };
+  last_scan: { signals_generated?: number; by_market?: Record<string, number>; errors?: unknown[]; at?: string; resolved?: { tp?: number; sl?: number; expired?: number; skipped?: number; budget_exhausted?: boolean } };
   integrations: {
     trading_enabled: boolean; telegram_free_configured: boolean;
     telegram_premium_configured: boolean; telegram_vip_configured: boolean;
@@ -576,6 +576,22 @@ function SystemTab({ token }: { token: string }) {
     }
   }
 
+  async function resolveOutcomes() {
+    try {
+      const r = await api<{ tp: number; sl: number; expired: number; skipped: number; budget_exhausted?: boolean }>(
+        "/api/admin/outcomes/resolve?budget_seconds=120&limit=2000",
+        { method: "POST", token, timeoutMs: 150000 }
+      );
+      setNotice(
+        `Outcomes: ${r.tp} TP / ${r.sl} SL, ${r.expired} expired, ${r.skipped} skipped` +
+        (r.budget_exhausted ? " (budget hit - run again)" : "")
+      );
+      setError(null); await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Resolve failed");
+    }
+  }
+
   return (
     <div className="space-y-6">
       {error && <p className="text-sm text-red">{error}</p>}
@@ -589,6 +605,12 @@ function SystemTab({ token }: { token: string }) {
             <Row k="Interval" v={system ? `${system.scheduler.interval_minutes} min` : "-"} />
             <Row k="Cooldown" v={system ? `${system.scheduler.cooldown_hours} h` : "-"} />
             <Row k="Last scan" v={system?.last_scan?.at ? new Date(system.last_scan.at).toLocaleString() : "never"} />
+            {system?.last_scan?.resolved && (
+              <Row
+                k="Resolved"
+                v={`${system.last_scan.resolved.tp ?? 0} TP / ${system.last_scan.resolved.sl ?? 0} SL, ${system.last_scan.resolved.expired ?? 0} exp${system.last_scan.resolved.budget_exhausted ? " (partial)" : ""}`}
+              />
+            )}
             {system?.last_scan?.errors && system.last_scan.errors.length > 0 && (
               <p className="text-xs text-red mt-2">Last scan errors: {String(system.last_scan.errors).slice(0, 160)}</p>
             )}
@@ -610,6 +632,7 @@ function SystemTab({ token }: { token: string }) {
           <AdminCardHeader><AdminCardTitle>Actions</AdminCardTitle></AdminCardHeader>
           <div className="space-y-3">
             <Button className="w-full" onClick={runScan}>Run Engine Scan Now</Button>
+            <Button className="w-full" variant="secondary" onClick={resolveOutcomes}>Resolve Signal Outcomes</Button>
             <Button className="w-full" variant="secondary" onClick={resetDaily}>Reset Daily Counters</Button>
             <Button className="w-full" variant="ghost" onClick={load}>Refresh</Button>
           </div>

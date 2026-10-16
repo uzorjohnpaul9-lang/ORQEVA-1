@@ -54,7 +54,18 @@ def _alpaca_data_client():
         api_key = os.getenv("ALPACA_API_KEY", "")
         secret = os.getenv("ALPACA_SECRET_KEY", "")
         if api_key and secret:
-            return StockHistoricalDataClient(api_key, secret)
+            client = StockHistoricalDataClient(api_key, secret)
+            # The SDK's requests.Session has no timeout, so a stalled endpoint
+            # can block a worker thread forever. Inject one at the session level.
+            try:
+                import functools
+                timeout = float(os.getenv("ALPACA_DATA_TIMEOUT", "10"))
+                client._session.request = functools.partial(
+                    client._session.request, timeout=timeout
+                )
+            except Exception:
+                pass
+            return client
     except Exception as e:
         logger.warning(f"Alpaca data client unavailable: {e}")
     return None

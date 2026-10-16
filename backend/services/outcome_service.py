@@ -150,6 +150,7 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
     counts = {"tp": 0, "sl": 0, "expired": 0, "skipped": 0, "budget_exhausted": False}
     bar_cache: dict[tuple[str, str], list[dict]] = {}
     errors: list[str] = []
+    slow: list[dict] = []
     deadline = time.monotonic() + budget_seconds
 
     for s in rows:
@@ -161,6 +162,7 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
             symbol = s.get("symbol")
             key = (market, symbol)
             if key not in bar_cache:
+                started = time.monotonic()
                 try:
                     bar_cache[key] = await asyncio.wait_for(
                         asyncio.to_thread(_bars_for, market, symbol),
@@ -169,6 +171,9 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
                 except Exception:
                     # Stalled provider (incl. asyncio.TimeoutError): treat as no bars.
                     bar_cache[key] = []
+                elapsed = time.monotonic() - started
+                if elapsed >= 2.0:
+                    slow.append({"symbol": symbol, "market": market, "seconds": round(elapsed, 2)})
             bars = bar_cache[key]
 
             direction = s.get("direction") or ""
@@ -213,6 +218,8 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
 
     if errors:
         counts["errors"] = errors[:10]
+    if slow:
+        counts["slowest"] = sorted(slow, key=lambda x: x["seconds"], reverse=True)[:8]
     log.info("outcome resolver: %s", {k: v for k, v in counts.items() if k != "errors"})
     return counts
 

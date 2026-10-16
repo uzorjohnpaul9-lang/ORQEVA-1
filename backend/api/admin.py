@@ -284,6 +284,27 @@ async def system(
     return await admin_service.system_status(db)
 
 
+@router.post("/outcomes/resolve")
+async def resolve_outcomes(
+    budget_seconds: int = Query(240, ge=10, le=600),
+    limit: int = Query(5000, ge=1, le=20000),
+    db: SupabaseDB = Depends(get_db),
+    admin: dict = Depends(require_admin),
+):
+    """Run one bounded outcome-resolution pass on demand (ops + verification)."""
+    check_rate_limit(admin["id"], "admin")
+    from backend.services import outcome_service
+
+    counts = await outcome_service.resolve_active_signals(
+        db, limit=limit, budget_seconds=budget_seconds
+    )
+    await admin_service.log_action(
+        db, admin, "outcomes.resolve", "signal", "batch",
+        {"limit": limit, "budget_seconds": budget_seconds, **counts},
+    )
+    return counts
+
+
 @router.get("/market/providers")
 async def market_providers(
     symbol: str = Query("BTC/USD"),
