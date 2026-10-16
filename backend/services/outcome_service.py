@@ -226,16 +226,32 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
 
 async def outcome_stats(db: SupabaseDB) -> dict:
     """Aggregate resolved-signal hit-rate, overall and per market."""
-    try:
-        rows = await db.fetch_all(
-            SIGNALS,
-            where={"status": ["closed", "expired"]},
-            columns="market,outcome,r_multiple,data_source",
-        )
-    except Exception as e:  # pragma: no cover - defensive
-        log.warning("outcome_stats fetch failed: %s", str(e)[:120])
-        return {"resolved": 0, "wins": 0, "losses": 0, "win_rate": 0.0,
-                "avg_r": 0.0, "by_outcome": {}, "by_market": {}, "live": 0, "simulated": 0}
+    # Page through in chunks so aggregates are not silently truncated by
+    # PostgREST's 1000-row fetch cap (same fix as get_signal_stats).
+    rows: list[dict] = []
+    page_size = 1000
+    offset = 0
+    while True:
+        try:
+            page = await db.fetch_all(
+                SIGNALS,
+                where={"status": ["closed", "expired"]},
+                columns="market,outcome,r_multiple,data_source",
+                order="id.asc",
+                limit=page_size,
+                offset=offset,
+            )
+        except Exception as e:
+            log.warning("outcome_stats fetch failed: %s", str(e)[:120])
+            if not rows:
+                return {"resolved": 0, "wins": 0, "losses": 0, "win_rate": 0.0,
+                        "avg_r": 0.0, "by_outcome": {}, "by_market": {}, "live": 0, "simulated": 0}
+            break
+        rows.extend(page)
+        if len(page) < page_size:
+            break
+        offset += page_size
+
 
     total = wins = 0
     r_sum = 0.0
