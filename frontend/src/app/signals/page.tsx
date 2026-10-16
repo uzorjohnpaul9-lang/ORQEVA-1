@@ -414,9 +414,11 @@ export default function SignalsPage() {
               </table>
             </div>
           )}
-          {accuracy.outcomes.simulated > 0 && (
+          {(accuracy.outcomes.live > 0 || accuracy.outcomes.simulated > 0 || accuracy.outcomes.unknown > 0) && (
             <p className="text-xs text-text-muted mt-3">
-              {accuracy.outcomes.simulated} resolved signal{accuracy.outcomes.simulated === 1 ? "" : "s"} used simulated data and are included for reference.
+              Data source across resolved signals: {accuracy.outcomes.live} live
+              {accuracy.outcomes.simulated > 0 ? `, ${accuracy.outcomes.simulated} simulated (included for reference)` : ""}
+              {accuracy.outcomes.unknown > 0 ? `, ${accuracy.outcomes.unknown} unclassified` : ""}.
             </p>
           )}
         </Card>

@@ -271,9 +271,11 @@ export default function AnalyticsPage() {
                 </Card>
               </div>
 
-              {hasOutcomes && outcomes!.simulated > 0 && (
+              {(outcomes!.live > 0 || outcomes!.simulated > 0 || outcomes!.unknown > 0) && (
                 <p className="text-xs text-text-muted">
-                  {outcomes!.simulated} resolved signal{outcomes!.simulated === 1 ? "" : "s"} used simulated data and are included for reference.
+                  Data source across resolved signals: {outcomes!.live} live
+                  {outcomes!.simulated > 0 ? `, ${outcomes!.simulated} simulated (included for reference)` : ""}
+                  {outcomes!.unknown > 0 ? `, ${outcomes!.unknown} unclassified` : ""}.
                 </p>
               )}
             </>

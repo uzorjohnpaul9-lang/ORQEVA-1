@@ -77,6 +77,7 @@ export interface OutcomeStats {
   by_market: OutcomeBucket[];
   live: number;
   simulated: number;
+  unknown: number;
 }
 
 export interface AccuracyStats {

@@ -245,7 +245,8 @@ async def outcome_stats(db: SupabaseDB) -> dict:
             log.warning("outcome_stats fetch failed: %s", str(e)[:120])
             if not rows:
                 return {"resolved": 0, "wins": 0, "losses": 0, "win_rate": 0.0,
-                        "avg_r": 0.0, "by_outcome": {}, "by_market": {}, "live": 0, "simulated": 0}
+                        "avg_r": 0.0, "by_outcome": {}, "by_market": {},
+                        "live": 0, "simulated": 0, "unknown": 0}
             break
         rows.extend(page)
         if len(page) < page_size:
@@ -258,7 +259,7 @@ async def outcome_stats(db: SupabaseDB) -> dict:
     r_count = 0
     by_outcome: dict[str, int] = {}
     by_market: dict[str, dict] = {}
-    live = simulated = 0
+    live = simulated = unknown = 0
 
     for r in rows:
         outcome = r.get("outcome")
@@ -285,6 +286,9 @@ async def outcome_stats(db: SupabaseDB) -> dict:
             live += 1
         elif src == "simulated":
             simulated += 1
+        else:
+            # Rows created before data_source was captured; recorded, not guessed.
+            unknown += 1
 
     markets = []
     for name, m in by_market.items():
@@ -306,4 +310,5 @@ async def outcome_stats(db: SupabaseDB) -> dict:
         "by_market": markets,
         "live": live,
         "simulated": simulated,
+        "unknown": unknown,
     }
