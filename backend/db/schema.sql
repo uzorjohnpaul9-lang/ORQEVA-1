@@ -126,6 +126,10 @@ create table if not exists public.user_preferences (
   push_alerts          boolean not null default true,
   telegram_linked      boolean not null default false,
   telegram_chat_id     text,
+  watchlist            text[] not null default '{}',
+  directions           text[] not null default '{}',
+  min_confidence       numeric(4,3) not null default 0,
+  telegram_weekly_digest boolean not null default false,
   created_at           timestamptz not null default timezone('utc', now()),
   updated_at           timestamptz not null default timezone('utc', now())
 );

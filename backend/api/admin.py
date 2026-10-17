@@ -305,6 +305,38 @@ async def resolve_outcomes(
     return counts
 
 
+@router.post("/forward-test")
+async def forward_test(
+    resolve: bool = Query(False, description="Run an outcome-resolution pass first"),
+    budget_seconds: int = Query(120, ge=10, le=600),
+    limit: int = Query(2000, ge=1, le=20000),
+    db: SupabaseDB = Depends(get_db),
+    admin: dict = Depends(require_admin),
+):
+    """Live-only forward test: per-market/strategy hit-rate excluding simulated data.
+
+    Optionally runs one bounded outcome-resolution pass first (``resolve=true``)
+    so a freshly-resolved batch is reflected immediately.
+    """
+    check_rate_limit(admin["id"], "admin")
+    from backend.services import outcome_service
+
+    resolved: dict | None = None
+    if resolve:
+        resolved = await outcome_service.resolve_active_signals(
+            db, limit=limit, budget_seconds=budget_seconds
+        )
+        await admin_service.log_action(
+            db, admin, "forward_test.run", "signal", "batch",
+            {"limit": limit, "budget_seconds": budget_seconds, **resolved},
+        )
+
+    stats = await outcome_service.forward_test_stats(db)
+    if resolved is not None:
+        stats["resolved_now"] = resolved
+    return stats
+
+
 @router.get("/market/providers")
 async def market_providers(
     symbol: str = Query("BTC/USD"),

@@ -19,6 +19,10 @@ interface Prefs {
   default_market: string;
   risk_tolerance: string;
   theme: string;
+  watchlist: string[];
+  directions: string[];
+  min_confidence: number;
+  telegram_weekly_digest: boolean;
   telegram_chat_id?: string | null;
   telegram_linked?: boolean;
 }
@@ -35,6 +39,7 @@ export default function SettingsPage() {
   const { user, token } = useAuth();
   const [prefs, setPrefs] = useState<Prefs | null>(null);
   const [chatId, setChatId] = useState("");
+  const [watchInput, setWatchInput] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -43,6 +48,7 @@ export default function SettingsPage() {
     try {
       const p = await api<Prefs>("/api/preferences", { token });
       setPrefs(p);
+      setWatchInput((p.watchlist ?? []).join(", "));
     } catch {}
   }, [token]);
 
@@ -78,8 +84,33 @@ export default function SettingsPage() {
     setBusy(false);
   }
 
-  async function linkTelegram() {
-    if (!token || chatId.trim().length < 4) { setNotice("Enter a valid chat ID"); return; }
+  function toggleDirection(d: "buy" | "sell") {
+    if (!prefs) return;
+    const cur = prefs.directions ?? [];
+    const next = cur.includes(d) ? cur.filter((x) => x !== d) : [...cur, d];
+    setPrefs({ ...prefs, directions: next });
+  }
+
+  async function saveFilters() {
+    if (!token || !prefs) return;
+    setBusy(true);
+    try {
+      const watchlist = watchInput.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
+      const body = {
+        watchlist,
+        directions: prefs.directions ?? [],
+        min_confidence: prefs.min_confidence ?? 0,
+        telegram_weekly_digest: prefs.telegram_weekly_digest ?? false,
+      };
+      const updated = await api<Prefs>("/api/preferences", { method: "PUT", token, body });
+      setPrefs({ ...prefs, ...updated });
+      setWatchInput((updated.watchlist ?? []).join(", "));
+      setNotice("Signal filters saved");
+    } catch { setNotice("Save failed"); }
+    setBusy(false);
+  }
+
+  async function linkTelegram() {    if (!token || chatId.trim().length < 4) { setNotice("Enter a valid chat ID"); return; }
     setBusy(true);
     try {
       const res = await api<{ telegram_chat_id: string; test: { ok: boolean; detail: string } }>(
@@ -169,6 +200,64 @@ export default function SettingsPage() {
           ))}
         </div>
         <p className="pt-3 text-xs text-text-secondary">Free tier receives signals and system alerts. TP/SL, analysis and risk alerts require Premium or VIP.</p>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle>Signal Filters</CardTitle></CardHeader>
+        <p className="text-xs text-text-secondary">Only alerts matching these filters are pushed to Telegram.</p>
+        <div className="mt-3 space-y-4">
+          <Input
+            label="Watchlist (comma-separated, empty = all symbols)"
+            value={watchInput}
+            onChange={(e) => setWatchInput(e.target.value)}
+            placeholder="e.g. BTC, ETH, AAPL, EUR/USD"
+          />
+          <div>
+            <span className="text-sm">Directions</span>
+            <div className="mt-1 flex gap-2">
+              {(["buy", "sell"] as const).map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => toggleDirection(d)}
+                  className={`rounded-md border px-4 py-1.5 text-sm uppercase transition-colors ${
+                    (prefs?.directions ?? []).includes(d)
+                      ? "border-green bg-green/15 text-green"
+                      : "border-border bg-bg-tertiary text-text-secondary"
+                  }`}
+                >
+                  {d}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1 text-xs text-text-secondary">Unselected = both sides.</p>
+          </div>
+          <Select
+            label="Minimum Confidence"
+            value={String(prefs?.min_confidence ?? 0)}
+            onChange={(e) => prefs && setPrefs({ ...prefs, min_confidence: parseFloat(e.target.value) })}
+            options={[
+              { value: "0", label: "Any" },
+              { value: "0.5", label: "50%+" },
+              { value: "0.6", label: "60%+" },
+              { value: "0.7", label: "70%+" },
+              { value: "0.8", label: "80%+" },
+            ]}
+          />
+          <label className="flex cursor-pointer items-center justify-between">
+            <span className="text-sm">Weekly Performance Digest (Sundays)</span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={prefs ? Boolean(prefs.telegram_weekly_digest) : false}
+              onClick={() => toggle("telegram_weekly_digest")}
+              className={`relative h-5 w-10 rounded-full transition-colors ${prefs && prefs.telegram_weekly_digest ? "bg-green" : "bg-bg-tertiary"}`}
+            >
+              <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${prefs && prefs.telegram_weekly_digest ? "left-[22px]" : "left-0.5"}`} />
+            </button>
+          </label>
+          <Button variant="primary" size="sm" onClick={saveFilters} disabled={busy || !prefs}>Save Filters</Button>
+        </div>
       </Card>
 
       <Card>

@@ -108,6 +108,34 @@ def _td_quote(symbol: str) -> dict[str, Any] | None:
         return None
 
 
+def _keyless_quote(market: str, symbol: str) -> dict[str, Any] | None:
+    """Keyless snapshot quote (Yahoo) - no API key needed. None on failure."""
+    try:
+        from engines.tradfi_data import fetch_quote
+        q = fetch_quote(symbol, market)
+    except Exception as e:
+        logger.warning(f"Keyless quote error for {symbol}: {e}")
+        return None
+    if not q:
+        return None
+    q.setdefault("previous_close", None)
+    q.setdefault("is_market_open", None)
+    return q
+
+
+def _tradfi_bars(market: str, symbol: str, interval: str, outputsize: int) -> dict[str, Any]:
+    """Keyless Yahoo/Stooq OHLC series - no API key needed."""
+    try:
+        from engines.tradfi_data import fetch_bars
+        bars, source = fetch_bars(symbol, interval, outputsize, market)
+    except Exception as e:
+        logger.warning(f"Keyless bars error for {symbol}: {e}")
+        return {"error": "bars_unavailable"}
+    if not bars:
+        return {"error": "bars_unavailable"}
+    return {"symbol": symbol, "interval": interval, "bars": bars, "source": source}
+
+
 def _alpaca_quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
     """Batch latest trades + daily change for stocks via Alpaca snapshots."""
     out: dict[str, dict[str, Any]] = {}
@@ -159,12 +187,18 @@ def get_quote(market: str, symbol: str) -> dict[str, Any]:
         if symbol in quotes:
             result = quotes[symbol]
         else:
-            # Alpaca not configured/unavailable -> Twelve Data also covers US equities.
-            q = _td_quote(symbol)
-            result = q if q else {"symbol": symbol, "error": "quote_unavailable"}
+            # Keyless (Yahoo) then Twelve Data, which also covers US equities.
+            result = (
+                _keyless_quote(market, symbol)
+                or _td_quote(symbol)
+                or {"symbol": symbol, "error": "quote_unavailable"}
+            )
     else:
-        q = _td_quote(symbol)
-        result = q if q else {"symbol": symbol, "error": "quote_unavailable"}
+        result = (
+            _keyless_quote(market, symbol)
+            or _td_quote(symbol)
+            or {"symbol": symbol, "error": "quote_unavailable"}
+        )
 
     cache.set(cache_key, result, ttl=QUOTE_TTL)
     return result
@@ -197,6 +231,20 @@ def get_overview() -> dict[str, Any]:
         if q and "error" not in q:
             stock_quotes[sym] = q
     td_by_symbol = {item["symbol"]: q for item, q in zip(td_symbols, td_results)}
+
+    # Keyless (Yahoo) fallback when Alpaca and/or Twelve Data are unavailable.
+    missing_stocks = [s for s in alpaca_symbols if s not in stock_quotes]
+    missing_td = [item for item in td_symbols if not td_by_symbol.get(item["symbol"])]
+    if missing_stocks or missing_td:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            k_stock = list(pool.map(lambda s: _keyless_quote("stock", s), missing_stocks))
+            k_td = list(pool.map(lambda item: _keyless_quote(item["market"], item["symbol"]), missing_td))
+        for sym, q in zip(missing_stocks, k_stock):
+            if q:
+                stock_quotes[sym] = q
+        for item, q in zip(missing_td, k_td):
+            if q:
+                td_by_symbol[item["symbol"]] = q
     for item in OVERVIEW_SYMBOLS:
         label, market, symbol = item["label"], item["market"], item["symbol"]
         if market == "stock":
@@ -262,7 +310,9 @@ def get_bars(market: str, symbol: str, interval: str = "1day", outputsize: int =
     if market == "stock":
         result = _alpaca_bars(symbol, interval, outputsize)
         if "bars" not in result:
-            # Fallback: stocks via Twelve Data when Alpaca is unavailable.
+            # Keyless (Yahoo/Stooq) then Twelve Data when Alpaca is unavailable.
+            result = _tradfi_bars(market, symbol, interval, outputsize)
+        if "bars" not in result:
             result = _td_bars(symbol, interval, outputsize)
     elif market == "crypto":
         # Keyless public exchange data (Binance -> Bybit) first; Twelve Data as
@@ -275,7 +325,10 @@ def get_bars(market: str, symbol: str, interval: str = "1day", outputsize: int =
             else _td_bars(symbol, interval, outputsize)
         )
     else:
-        result = _td_bars(symbol, interval, outputsize)
+        # Forex/commodity: keyless (Yahoo/Stooq) first, then Twelve Data.
+        result = _tradfi_bars(market, symbol, interval, outputsize)
+        if "bars" not in result:
+            result = _td_bars(symbol, interval, outputsize)
 
     if "bars" in result:
         cache.set(cache_key, result, ttl=BARS_TTL)

@@ -21,11 +21,47 @@ def _cooldown_hours() -> int:
 
 _last_scan: dict | None = None
 _alerted_events: set[str] = set()
+_last_digest_date: str | None = None
 
 
 def get_last_scan() -> dict | None:
     """Most recent scheduler scan summary (for /api/admin/system). Single worker, in-memory."""
     return _last_scan
+
+
+def should_send_digest(now, last_date: str | None, hour: int = 18) -> bool:
+    """True when it's the weekly digest window (Sunday >= hour UTC) and the
+    digest has not already been sent today."""
+    if now.weekday() != 6:  # 6 == Sunday
+        return False
+    if now.hour < hour:
+        return False
+    return last_date != now.strftime("%Y-%m-%d")
+
+
+async def maybe_send_weekly_digests(db) -> int:
+    """Send the weekly digest once per Sunday to opted-in users. Never raises."""
+    global _last_digest_date
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    try:
+        hour = int(os.getenv("WEEKLY_DIGEST_HOUR_UTC", "18"))
+    except ValueError:
+        hour = 18
+    if not should_send_digest(now, _last_digest_date, max(0, min(23, hour))):
+        return 0
+    # Mark first so a crash mid-send doesn't cause a second blast this tick.
+    _last_digest_date = now.strftime("%Y-%m-%d")
+    try:
+        from backend.services import telegram_service
+
+        sent = await telegram_service.send_weekly_digests(db)
+        log.info("weekly digest sent to %s users", sent)
+        return sent
+    except Exception as e:  # pragma: no cover - defensive
+        log.warning("weekly digest failed: %s", str(e)[:150])
+        return 0
 
 
 async def check_event_alerts(db) -> int:
@@ -92,6 +128,10 @@ async def run_scheduled_scan() -> dict:
             )
         except Exception as e:  # pragma: no cover - defensive
             resolved = {"error": str(e)[:150]}
+        try:
+            digest = await maybe_send_weekly_digests(db)
+        except Exception:  # pragma: no cover - defensive
+            digest = 0
         log.info(
             "scheduled scan: %s signals (%s), errors=%s, resolved=%s",
             out["signals_generated"], out["by_market"], out["errors"], resolved,
@@ -101,6 +141,7 @@ async def run_scheduled_scan() -> dict:
         summary = {k: out[k] for k in ("signals_generated", "by_market", "errors")}
         summary["resolved"] = resolved
         summary["event_alerts"] = alerts
+        summary["weekly_digest"] = digest
         summary["at"] = __import__("backend.db.supabase", fromlist=["now_iso"]).now_iso()
         _last_scan = summary
         return summary

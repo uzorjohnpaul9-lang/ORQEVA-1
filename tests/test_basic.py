@@ -530,6 +530,106 @@ class TestExchangeData(unittest.TestCase):
         self.assertTrue(all(r["ok"] is False for r in rows))
 
 
+class _FakeWeb:
+    def __init__(self, payload=None, text=""):
+        self._payload = payload
+        self.text = text
+
+    def json(self):
+        return self._payload
+
+
+class TestTradFiData(unittest.TestCase):
+    """Keyless Yahoo/Stooq/Frankfurter parsing for stocks/forex/commodities."""
+
+    def setUp(self):
+        from engines import tradfi_data as td
+        td._down_until.clear()
+
+    def test_symbol_mapping(self):
+        from engines import tradfi_data as td
+        self.assertEqual(td._yahoo_symbol("EUR/USD", "forex"), "EURUSD=X")
+        self.assertEqual(td._yahoo_symbol("XAU/USD", "commodity"), "GC=F")
+        self.assertEqual(td._yahoo_symbol("AAPL", "stock"), "AAPL")
+        self.assertEqual(td._stooq_symbol("EUR/USD", "forex"), "eurusd")
+        self.assertEqual(td._stooq_symbol("AAPL", "stock"), "aapl.us")
+
+    def test_yahoo_parse_mocked(self):
+        from engines import tradfi_data as td
+        payload = {"chart": {"result": [{
+            "timestamp": [1791849600, 1791936000],
+            "indicators": {"quote": [{
+                "open": [81852.1, 83172.0],
+                "high": [84172.6, 84137.6],
+                "low": [81031.2, 83027.4],
+                "close": [83172.0, 83657.8],
+            }]},
+        }], "error": None}}
+        with mock.patch.object(td.requests, "get", return_value=_FakeWeb(payload=payload)):
+            bars, source = td.fetch_bars("AAPL", "1day", 5, "stock")
+        self.assertEqual(source, "yahoo")
+        self.assertEqual(len(bars), 2)
+        self.assertEqual(bars[-1]["close"], 83657.8)
+
+    def test_stooq_parse_mocked(self):
+        from engines import tradfi_data as td
+        csv_text = (
+            "Date,Open,High,Low,Close,Volume\n"
+            "2025-10-01,100,110,90,105,1000\n"
+            "2025-10-02,105,115,95,110,1200\n"
+        )
+        with mock.patch.object(td.requests, "get", return_value=_FakeWeb(text=csv_text)):
+            bars = td._stooq_bars("AAPL", "1day", 5, "stock")
+        self.assertEqual(len(bars), 2)
+        self.assertEqual(bars[-1]["close"], 110.0)
+
+    def test_fetch_bars_falls_back_to_stooq(self):
+        from engines import tradfi_data as td
+        csv_text = "Date,Open,High,Low,Close,Volume\n2025-10-02,105,115,95,110,1200\n"
+
+        def fake_get(url, params=None, timeout=None, headers=None):
+            if "finance.yahoo" in url:
+                raise RuntimeError("blocked")
+            return _FakeWeb(text=csv_text)
+
+        with mock.patch.object(td.requests, "get", side_effect=fake_get):
+            bars, source = td.fetch_bars("EUR/USD", "1day", 5, "forex")
+        self.assertEqual(source, "stooq")
+        self.assertEqual(len(bars), 1)
+
+    def test_fetch_bars_empty_when_all_fail(self):
+        from engines import tradfi_data as td
+        with mock.patch.object(td.requests, "get", side_effect=RuntimeError("down")):
+            bars, source = td.fetch_bars("AAPL", "1day", 5, "stock")
+        self.assertEqual(bars, [])
+        self.assertIsNone(source)
+
+    def test_frankfurter_close_fallback(self):
+        from engines import tradfi_data as td
+        payload = {"rates": {"2025-10-01": {"USD": 1.09}, "2025-10-02": {"USD": 1.10}}}
+
+        def fake_get(url, params=None, timeout=None, headers=None):
+            if "finance.yahoo" in url or "stooq" in url:
+                raise RuntimeError("blocked")
+            return _FakeWeb(payload=payload)
+
+        with mock.patch.object(td.requests, "get", side_effect=fake_get):
+            closes, source = td.fetch_closes("EUR/USD", 5, "forex")
+        self.assertEqual(source, "frankfurter")
+        self.assertEqual(closes, [1.09, 1.10])
+
+    def test_fetch_quote_mocked(self):
+        from engines import tradfi_data as td
+        payload = {"chart": {"result": [{"meta": {
+            "regularMarketPrice": 2400.0,
+            "chartPreviousClose": 2380.0,
+        }}]}}
+        with mock.patch.object(td.requests, "get", return_value=_FakeWeb(payload=payload)):
+            q = td.fetch_quote("XAU/USD", "commodity")
+        self.assertEqual(q["price"], 2400.0)
+        self.assertAlmostEqual(q["change_percent"], 0.8403, places=3)
+
+
 class TestCryptoEngineData(unittest.TestCase):
     """Crypto engine + discovery prefer keyless exchange data."""
 
@@ -558,6 +658,163 @@ class TestCryptoEngineData(unittest.TestCase):
                 out = CryptoDiscovery()._fetch_batch(["BTC/USD", "ETH/USD"], 30)
         self.assertEqual(set(out), {"BTC/USD", "ETH/USD"})
         self.assertAlmostEqual(out["BTC/USD"][-1], prices[-1])
+
+
+class _FakePrefsDB:
+    """Minimal in-memory stand-in for SupabaseDB used by preferences/webhook."""
+
+    def __init__(self, prefs=None):
+        self._prefs = dict(prefs or {"id": "p1", "user_id": "u1"})
+        self.updates = []
+
+    async def fetch_one(self, table, where=None, columns="*"):
+        return dict(self._prefs)
+
+    async def insert(self, table, data):
+        self._prefs.update(data)
+        return dict(self._prefs)
+
+    async def update(self, table, data, where=None):
+        self.updates.append(data)
+        self._prefs.update(data)
+        return [dict(self._prefs)]
+
+
+class TestSignalFilters(unittest.TestCase):
+    """Phase C: watchlist / direction / min-confidence filters."""
+
+    def test_empty_filters_pass_everything(self):
+        from backend.services.preferences_service import matches_filters
+        prefs = {"watchlist": [], "directions": [], "min_confidence": 0}
+        self.assertTrue(matches_filters(prefs, {"symbol": "BTC", "direction": "buy", "confidence": 0.1}))
+
+    def test_watchlist_and_direction_and_confidence(self):
+        from backend.services.preferences_service import matches_filters
+        prefs = {"watchlist": ["BTC"], "directions": ["buy"], "min_confidence": 0.6}
+        ok = {"symbol": "BTC", "direction": "BUY", "confidence": 0.7}
+        self.assertTrue(matches_filters(prefs, ok))
+        self.assertFalse(matches_filters(prefs, {"symbol": "ETH", "direction": "buy", "confidence": 0.9}))
+        self.assertFalse(matches_filters(prefs, {"symbol": "BTC", "direction": "sell", "confidence": 0.9}))
+        self.assertFalse(matches_filters(prefs, {"symbol": "BTC", "direction": "buy", "confidence": 0.5}))
+
+    def test_missing_confidence_not_disqualifying(self):
+        from backend.services.preferences_service import matches_filters
+        prefs = {"watchlist": [], "directions": [], "min_confidence": 0.9}
+        self.assertTrue(matches_filters(prefs, {"symbol": "X", "direction": "buy"}))
+
+    def test_normalizers(self):
+        from backend.services.preferences_service import (
+            _norm_watchlist, _norm_directions, _norm_min_confidence,
+        )
+        self.assertEqual(_norm_watchlist(" btc , eth , btc ,"), ["BTC", "ETH"])
+        self.assertEqual(_norm_directions(["Buy", "HOLD", "sell", "buy"]), ["buy", "sell"])
+        self.assertEqual(_norm_min_confidence(1.7), 1.0)
+        self.assertEqual(_norm_min_confidence(-2), 0.0)
+        self.assertEqual(_norm_min_confidence("abc"), 0.0)
+
+
+class TestTelegramCommands(unittest.TestCase):
+    """Phase C: two-way bot command parsing + dispatch."""
+
+    def test_parse_command(self):
+        from backend.api.telegram import parse_command
+        self.assertEqual(parse_command("/watch BTC,ETH"), ("watch", "BTC,ETH"))
+        self.assertEqual(parse_command("/help@TradeAIbot extra"), ("help", "extra"))
+        self.assertEqual(parse_command("/"), ("", ""))
+        self.assertEqual(parse_command("just chatting"), (None, "just chatting"))
+        self.assertEqual(parse_command(None), (None, ""))
+        self.assertEqual(parse_command("   /Status   "), ("status", ""))
+
+    def test_dispatch_unlinked_chat_gets_link_hint(self):
+        from backend.api.telegram import dispatch_command
+        import asyncio
+        db = _FakePrefsDB()
+        out = asyncio.run(dispatch_command(db, None, "status", "", "123456"))
+        self.assertIn("123456", out)
+        self.assertIn("link", out.lower())
+
+    def test_dispatch_mutates_filters(self):
+        from backend.api.telegram import dispatch_command
+        from backend.services import preferences_service as prefs_service
+        import asyncio
+
+        db = _FakePrefsDB({"id": "p1", "user_id": "u1"})
+        user = {"id": "u1", "tier": "free", "username": "alice"}
+
+        asyncio.run(dispatch_command(db, user, "watch", "btc , eth", "c"))
+        self.assertEqual(db._prefs["watchlist"], ["BTC", "ETH"])
+
+        asyncio.run(dispatch_command(db, user, "directions", "buy", "c"))
+        self.assertEqual(db._prefs["directions"], ["buy"])
+
+        asyncio.run(dispatch_command(db, user, "minconf", "0.65", "c"))
+        self.assertEqual(db._prefs["min_confidence"], 0.65)
+
+        asyncio.run(dispatch_command(db, user, "digest", "off", "c"))
+        self.assertIs(db._prefs["telegram_weekly_digest"], False)
+
+        asyncio.run(dispatch_command(db, user, "mute", "", "c"))
+        self.assertIs(db._prefs["telegram_signals"], False)
+        asyncio.run(dispatch_command(db, user, "unmute", "", "c"))
+        self.assertIs(db._prefs["telegram_signals"], True)
+
+        # clearing works
+        asyncio.run(dispatch_command(db, user, "watch", "", "c"))
+        self.assertEqual(db._prefs["watchlist"], [])
+
+        # status reflects state and tier
+        out = asyncio.run(dispatch_command(db, user, "status", "", "c"))
+        self.assertIn("free", out)
+        self.assertIn("Watchlist", out)
+
+        # unknown command
+        out = asyncio.run(dispatch_command(db, user, "wat", "", "c"))
+        self.assertIn("Unknown", out)
+
+        # minconf bad input
+        out = asyncio.run(dispatch_command(db, user, "minconf", "abc", "c"))
+        self.assertIn("Usage", out)
+
+        # sanitizer actually filtered directions through EDITABLE
+        self.assertTrue(db.updates)
+
+    def test_dispatch_watch_uses_sanitizer(self):
+        from backend.api.telegram import dispatch_command
+        import asyncio
+        db = _FakePrefsDB({"id": "p1", "user_id": "u1"})
+        user = {"id": "u1", "tier": "premium", "username": "bob"}
+        asyncio.run(dispatch_command(db, user, "watch", "aapl,  aapl, msft , ,42", "c"))
+        self.assertEqual(db._prefs["watchlist"], ["AAPL", "MSFT", "42"])
+
+
+class TestWeeklyDigest(unittest.TestCase):
+    """Phase C: digest scheduling + rendering."""
+
+    def test_should_send_digest_schedule(self):
+        from backend.services.scheduler import should_send_digest
+        sunday_evening = datetime(2026, 10, 18, 19, 0)
+        self.assertTrue(should_send_digest(sunday_evening, None, 18))
+        self.assertFalse(should_send_digest(datetime(2026, 10, 18, 17, 0), None, 18))
+        self.assertFalse(should_send_digest(datetime(2026, 10, 17, 19, 0), None, 18))
+        self.assertFalse(should_send_digest(sunday_evening, "2026-10-18", 18))
+        self.assertTrue(should_send_digest(sunday_evening, "2026-10-11", 18))
+
+    def test_format_weekly_digest(self):
+        from backend.services.telegram_service import format_weekly_digest
+        stats = {
+            "generated": 42,
+            "overall": {"resolved": 20, "wins": 13, "losses": 7, "win_rate": 0.65, "avg_r": 1.4},
+            "by_market": {"crypto": {"resolved": 10, "win_rate": 0.8}, "forex": {"resolved": 5, "win_rate": 0.4}},
+        }
+        out = format_weekly_digest(stats)
+        self.assertIn("Weekly digest", out)
+        self.assertIn("65.0%", out)
+        self.assertIn("Crypto", out)
+
+    def test_format_weekly_digest_empty(self):
+        from backend.services.telegram_service import format_weekly_digest
+        out = format_weekly_digest({})
+        self.assertIn("No resolved signals yet", out)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,48 @@
 """Notifications + preferences."""
+import os
+
 import httpx
 
 from tests.conftest import register_and_login
+
+
+async def test_telegram_webhook_secret_and_ack(client: httpx.AsyncClient):
+    """Two-way bot webhook: secret-token auth + always-ack, never 500s."""
+    os.environ["TELEGRAM_WEBHOOK_SECRET"] = "test-secret"
+    # blank the bot tokens so no real network call to api.telegram.org happens
+    saved_tokens = {
+        k: os.environ.pop(k) for k in list(os.environ) if k.startswith("TELEGRAM_BOT_TOKEN")
+    }
+    try:
+        # missing secret -> rejected
+        r = await client.post("/api/telegram/webhook",
+                              json={"message": {"chat": {"id": 424242}, "text": "/help"}})
+        assert r.status_code == 403
+
+        # correct secret -> acknowledged even for an unknown chat
+        headers = {"X-Telegram-Bot-Api-Secret-Token": "test-secret"}
+        r = await client.post("/api/telegram/webhook", headers=headers,
+                              json={"message": {"chat": {"id": 424242}, "text": "/help"}})
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+
+        # non-command text and update without a chat still ack
+        r = await client.post("/api/telegram/webhook", headers=headers,
+                              json={"message": {"chat": {"id": 424242}, "text": "hello"}})
+        assert r.status_code == 200 and r.json()["ok"] is True
+        r = await client.post("/api/telegram/webhook", headers=headers, json={"update_id": 1})
+        assert r.status_code == 200 and r.json()["ok"] is True
+
+        # malformed body is acked so Telegram stops retrying
+        r = await client.post(
+            "/api/telegram/webhook",
+            headers={"X-Telegram-Bot-Api-Secret-Token": "test-secret",
+                     "Content-Type": "application/json"},
+            content=b"not-json")
+        assert r.status_code == 200 and r.json()["ok"] is True
+    finally:
+        os.environ.pop("TELEGRAM_WEBHOOK_SECRET", None)
+        os.environ.update(saved_tokens)
 
 
 async def test_notification_lifecycle(client: httpx.AsyncClient):

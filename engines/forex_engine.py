@@ -48,7 +48,13 @@ class ForexEngine(BaseEngine):
         return True
 
     def fetch_prices(self, symbol: str, lookback: int = 30) -> List[float]:
-        """Fetch daily closing prices from Twelve Data."""
+        """Fetch daily closing prices (keyless tradFI -> Twelve Data -> simulated)."""
+        from . import tradfi_data
+        closes, _ = tradfi_data.fetch_closes(symbol, lookback, "forex")
+        if closes:
+            self._last_source = "live"
+            return closes
+
         if not self._api_key:
             self._last_source = "simulated"
             return self._simulated_prices(symbol, lookback)

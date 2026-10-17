@@ -80,7 +80,7 @@ class StockEngine(BaseEngine):
         return True
 
     def fetch_prices(self, symbol: str, lookback: int = 40) -> List[float]:
-        """Fetch daily closing prices from Alpaca, falling back to Twelve Data."""
+        """Fetch daily closing prices from Alpaca, then keyless tradFI, then Twelve Data."""
         if self._data_client:
             try:
                 from alpaca.data.requests import StockBarsRequest
@@ -97,6 +97,12 @@ class StockEngine(BaseEngine):
                     return [bar.close for bar in bars[symbol]]
             except Exception as e:
                 logger.error(f"Alpaca fetch failed for {symbol}: {e}")
+
+        from . import tradfi_data
+        closes, _ = tradfi_data.fetch_closes(symbol, lookback, "stock")
+        if closes:
+            self._last_source = "live"
+            return closes
 
         closes = self._twelve_data_prices(symbol, lookback)
         if closes:

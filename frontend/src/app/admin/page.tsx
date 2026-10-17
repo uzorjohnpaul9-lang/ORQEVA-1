@@ -48,6 +48,17 @@ interface EngineStatus {
   crypto_alt?: { active: boolean };
   commodity?: { active: boolean };
 }
+interface ForwardTestBucket {
+  market?: string; strategy?: string; markets?: string[];
+  resolved: number; wins: number; losses: number; win_rate: number;
+}
+interface ForwardTestStats {
+  overall: { resolved: number; wins: number; losses: number; win_rate: number; avg_r: number };
+  by_market: ForwardTestBucket[];
+  by_strategy: ForwardTestBucket[];
+  excluded: { simulated: number; unknown: number };
+  resolved_now?: { tp: number; sl: number; expired: number; skipped: number; budget_exhausted?: boolean };
+}
 
 const TABS = ["Overview", "Users", "Billing", "Signals", "System"] as const;
 type Tab = (typeof TABS)[number];
@@ -541,8 +552,17 @@ function SignalsTab({ token }: { token: string }) {
 function SystemTab({ token }: { token: string }) {
   const [system, setSystem] = useState<SystemStatus | null>(null);
   const [engine, setEngine] = useState<EngineStatus | null>(null);
+  const [forwardTest, setForwardTest] = useState<ForwardTestStats | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const loadForwardTest = useCallback(async () => {
+    try {
+      setForwardTest(await api<ForwardTestStats>("/api/admin/forward-test", { method: "POST", token }));
+    } catch {
+      /* forward-test is non-critical; leave the last value in place */
+    }
+  }, [token]);
 
   const load = useCallback(async () => {
     try {
@@ -554,7 +574,8 @@ function SystemTab({ token }: { token: string }) {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load system status");
     }
-  }, [token]);
+    await loadForwardTest();
+  }, [token, loadForwardTest]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -573,6 +594,29 @@ function SystemTab({ token }: { token: string }) {
       setNotice("Daily counters reset"); setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Reset failed");
+    }
+  }
+
+  async function runForwardTest() {
+    try {
+      const r = await api<ForwardTestStats>(
+        "/api/admin/forward-test?resolve=true&budget_seconds=120&limit=2000",
+        { method: "POST", token, timeoutMs: 150000 }
+      );
+      setForwardTest(r);
+      if (r.resolved_now) {
+        const rn = r.resolved_now;
+        setNotice(
+          `Forward test: ${rn.tp} TP / ${rn.sl} SL, ${rn.expired} expired, ${rn.skipped} skipped` +
+          (rn.budget_exhausted ? " (budget hit - run again)" : "")
+        );
+      } else {
+        setNotice("Forward test refreshed");
+      }
+      setError(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Forward test failed");
     }
   }
 
@@ -632,12 +676,93 @@ function SystemTab({ token }: { token: string }) {
           <AdminCardHeader><AdminCardTitle>Actions</AdminCardTitle></AdminCardHeader>
           <div className="space-y-3">
             <Button className="w-full" onClick={runScan}>Run Engine Scan Now</Button>
+            <Button className="w-full" variant="secondary" onClick={runForwardTest}>Run Live-Only Forward Test</Button>
             <Button className="w-full" variant="secondary" onClick={resolveOutcomes}>Resolve Signal Outcomes</Button>
             <Button className="w-full" variant="secondary" onClick={resetDaily}>Reset Daily Counters</Button>
             <Button className="w-full" variant="ghost" onClick={load}>Refresh</Button>
           </div>
         </AdminCard>
       </div>
+
+      <AdminCard>
+        <AdminCardHeader>
+          <AdminCardTitle>Live-Only Forward Test (excludes simulated)</AdminCardTitle>
+        </AdminCardHeader>
+        <div className="space-y-6 text-sm">
+          {forwardTest === null && <p className="text-text-muted">Loading forward-test...</p>}
+          {forwardTest && (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                <AdminStatCard label="Live Resolved" value={forwardTest.overall.resolved.toLocaleString()} />
+                <AdminStatCard label="Win Rate" value={`${forwardTest.overall.win_rate.toFixed(1)}%`} />
+                <AdminStatCard label="Wins / Losses" value={`${forwardTest.overall.wins} / ${forwardTest.overall.losses}`} />
+                <AdminStatCard label="Avg R (live)" value={forwardTest.overall.avg_r.toFixed(3)} />
+              </div>
+              {forwardTest.excluded.simulated > 0 || forwardTest.excluded.unknown > 0 && (
+                <p className="text-xs text-text-muted">
+                  Excluded: {forwardTest.excluded.simulated} simulated, {forwardTest.excluded.unknown} unknown data-source.
+                </p>
+              )}
+              {forwardTest.by_market.length > 0 && (
+                <div>
+                  <h4 className="font-medium mb-2">Per Market (live-only)</h4>
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[480px]">
+                      <thead>
+                        <tr className="text-left text-text-muted border-b border-border/50">
+                          <th className="py-1.5 pr-3">Market</th>
+                          <th className="py-1.5 pr-3">Resolved</th>
+                          <th className="py-1.5 pr-3">Wins/Losses</th>
+                          <th className="py-1.5">Win %</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {forwardTest.by_market.map((m) => (
+                          <tr key={m.market} className="border-b border-border/50 last:border-0">
+                            <td className="py-1.5 pr-3 capitalize">{m.market}</td>
+                            <td className="py-1.5 pr-3">{m.resolved}</td>
+                            <td className="py-1.5 pr-3">{m.wins} / {m.losses}</td>
+                            <td className="py-1.5">{m.win_rate.toFixed(1)}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+              {forwardTest.by_strategy.length > 0 && (
+                <div>
+                  <h4 className="font-medium mb-2">Per Strategy (live-only)</h4>
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[640px]">
+                      <thead>
+                        <tr className="text-left text-text-muted border-b border-border/50">
+                          <th className="py-1.5 pr-3">Strategy</th>
+                          <th className="py-1.5 pr-3">Markets</th>
+                          <th className="py-1.5 pr-3">Resolved</th>
+                          <th className="py-1.5 pr-3">Wins/Losses</th>
+                          <th className="py-1.5">Win %</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {forwardTest.by_strategy.map((s) => (
+                          <tr key={s.strategy} className="border-b border-border/50 last:border-0">
+                            <td className="py-1.5 pr-3">{s.strategy}</td>
+                            <td className="py-1.5 pr-3 text-text-muted truncate">{(s.markets || []).join(", ")}</td>
+                            <td className="py-1.5 pr-3">{s.resolved}</td>
+                            <td className="py-1.5 pr-3">{s.wins} / {s.losses}</td>
+                            <td className="py-1.5">{s.win_rate.toFixed(1)}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </AdminCard>
     </div>
   );
 }

@@ -312,3 +312,113 @@ async def outcome_stats(db: SupabaseDB) -> dict:
         "simulated": simulated,
         "unknown": unknown,
     }
+
+
+def _rate(wins: int, resolved: int) -> float:
+    return round(wins / resolved * 100, 1) if resolved else 0.0
+
+
+async def forward_test_stats(db: SupabaseDB) -> dict:
+    """Live-only forward test: out-of-sample performance of resolved signals.
+
+    Only signals resolved from live market data (``data_source == "live"``) count;
+    simulated/unknown rows are reported as *excluded* so a demo-filled history can
+    never flatter the hit-rate. Broken down overall, per market and per strategy.
+    """
+    rows: list[dict] = []
+    page_size = 1000
+    offset = 0
+    while True:
+        try:
+            page = await db.fetch_all(
+                SIGNALS,
+                where={"status": ["closed", "expired"]},
+                columns="market,strategy,outcome,r_multiple,data_source",
+                order="id.asc",
+                limit=page_size,
+                offset=offset,
+            )
+        except Exception as e:  # pragma: no cover - defensive
+            log.warning("forward_test_stats fetch failed: %s", str(e)[:120])
+            break
+        rows.extend(page)
+        if len(page) < page_size:
+            break
+        offset += page_size
+
+    resolved = wins = 0
+    r_sum = 0.0
+    r_count = 0
+    by_market: dict[str, dict] = {}
+    by_strategy: dict[str, dict] = {}
+    excluded = {"simulated": 0, "unknown": 0}
+
+    for r in rows:
+        src = r.get("data_source")
+        if src != "live":
+            excluded["simulated" if src == "simulated" else "unknown"] += 1
+            continue
+
+        outcome = r.get("outcome")
+        if not outcome:
+            continue
+        win = outcome == "tp"
+
+        resolved += 1
+        wins += 1 if win else 0
+        rmul = _f(r.get("r_multiple"))
+        if rmul is not None:
+            r_sum += rmul
+            r_count += 1
+
+        market = r.get("market") or "unknown"
+        m = by_market.setdefault(market, {"resolved": 0, "wins": 0})
+        m["resolved"] += 1
+        m["wins"] += 1 if win else 0
+
+        strategy = r.get("strategy")
+        if strategy:
+            s = by_strategy.setdefault(strategy, {"resolved": 0, "wins": 0, "markets": set()})
+            s["resolved"] += 1
+            s["wins"] += 1 if win else 0
+            if r.get("market"):
+                s["markets"].add(market)
+
+    markets = [
+        {
+            "market": name,
+            "resolved": m["resolved"],
+            "wins": m["wins"],
+            "losses": m["resolved"] - m["wins"],
+            "win_rate": _rate(m["wins"], m["resolved"]),
+        }
+        for name, m in by_market.items()
+    ]
+    markets.sort(key=lambda x: x["resolved"], reverse=True)
+
+    strategies = [
+        {
+            "strategy": name,
+            "markets": sorted(s["markets"]),
+            "resolved": s["resolved"],
+            "wins": s["wins"],
+            "losses": s["resolved"] - s["wins"],
+            "win_rate": _rate(s["wins"], s["resolved"]),
+        }
+        for name, s in by_strategy.items()
+    ]
+    strategies.sort(key=lambda x: x["resolved"], reverse=True)
+
+    return {
+        "overall": {
+            "resolved": resolved,
+            "wins": wins,
+            "losses": resolved - wins,
+            "win_rate": _rate(wins, resolved),
+            "avg_r": round(r_sum / r_count, 3) if r_count else 0.0,
+        },
+        "by_market": markets,
+        "by_strategy": strategies,
+        "excluded": excluded,
+        "live_only": True,
+    }
