@@ -12,7 +12,7 @@ import { useRouter } from "next/navigation";
 import { BillingAdmin } from "@/components/admin/BillingAdmin";
 import { AdminCard, AdminCardHeader, AdminCardTitle, AdminStatCard } from "@/components/admin/AdminCard";
 import { clsx } from "clsx";
-import type { AdminUserContext, SupportTicket } from "@/lib/types";
+import type { AdminUserContext, BlockedIp, SecurityEvent, SupportTicket } from "@/lib/types";
 
 interface AdminUser {
   id: string; email: string; username: string; tier: string;
@@ -61,7 +61,7 @@ interface ForwardTestStats {
   resolved_now?: { tp: number; sl: number; expired: number; skipped: number; budget_exhausted?: boolean };
 }
 
-const TABS = ["Overview", "Users", "Support", "Billing", "Signals", "System"] as const;
+const TABS = ["Overview", "Users", "Support", "Billing", "Signals", "Security", "System"] as const;
 type Tab = (typeof TABS)[number];
 
 export default function AdminPage() {
@@ -139,6 +139,7 @@ export default function AdminPage() {
       {tab === "Support" && <SupportTab token={token} />}
       {tab === "Billing" && <BillingAdmin token={token} />}
       {tab === "Signals" && <SignalsTab token={token} />}
+      {tab === "Security" && <SecurityTab token={token} />}
       {tab === "System" && <SystemTab token={token} />}
     </div>
   );
@@ -664,6 +665,122 @@ function SupportTab({ token }: { token: string }) {
           </div>
         </AdminCard>
       )}
+    </div>
+  );
+}
+
+// ---- Security (Phase G) ---------------------------------------------------
+function SecurityTab({ token }: { token: string }) {
+  const [events, setEvents] = useState<SecurityEvent[]>([]);
+  const [blocks, setBlocks] = useState<BlockedIp[]>([]);
+  const [kind, setKind] = useState("");
+  const [severity, setSeverity] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const q = new URLSearchParams({ limit: "150" });
+      if (kind) q.set("kind", kind);
+      if (severity) q.set("severity", severity);
+      const [ev, bl] = await Promise.all([
+        api<SecurityEvent[]>(`/api/admin/sentinel?${q.toString()}`, { token }),
+        api<BlockedIp[]>("/api/admin/sentinel/blocks", { token }).catch(() => []),
+      ]);
+      setEvents(ev); setBlocks(bl); setError(null);
+    } catch (e) { setError(e instanceof Error ? e.message : "load failed"); }
+  }, [token, kind, severity]);
+  useEffect(() => { load(); }, [load]);
+
+  const resolve = async (id: string) => {
+    setBusy(true); setError(null);
+    try {
+      await api(`/api/admin/sentinel/${id}/resolve`, { method: "POST", token });
+      setNotice("Event resolved"); await load();
+    } catch (e) { setError(e instanceof Error ? e.message : "resolve failed"); }
+    finally { setBusy(false); }
+  };
+
+  const unblock = async (ip: string) => {
+    setBusy(true); setError(null);
+    try {
+      await api(`/api/admin/sentinel/blocks/${encodeURIComponent(ip)}/unblock`, { method: "POST", token });
+      setNotice(`Unblocked ${ip}`); await load();
+    } catch (e) { setError(e instanceof Error ? e.message : "unblock failed"); }
+    finally { setBusy(false); }
+  };
+
+  const sevBadge = (s: string) =>
+    s === "critical" ? "red" : s === "high" ? "yellow" : s === "warn" ? "blue" : "gray";
+
+  return (
+    <div className="space-y-4">
+      {error && <p className="text-sm text-red">{error}</p>}
+      {notice && <p className="text-sm text-green">{notice}</p>}
+
+      <div className="flex flex-wrap items-end gap-3">
+        <Select label="Kind" value={kind} onChange={(e) => { setKind(e.target.value); setNotice(null); }}
+          options={[{ value: "", label: "all" }, { value: "login_fail", label: "login_fail" }, { value: "rate_limit", label: "rate_limit" }, { value: "abuse", label: "abuse" }, { value: "suspicious", label: "suspicious" }, { value: "geo", label: "geo" }, { value: "anomaly", label: "anomaly" }]} />
+        <Select label="Severity" value={severity} onChange={(e) => { setSeverity(e.target.value); setNotice(null); }}
+          options={[{ value: "", label: "all" }, { value: "info", label: "info" }, { value: "warn", label: "warn" }, { value: "high", label: "high" }, { value: "critical", label: "critical" }]} />
+        <Button size="sm" variant="secondary" onClick={load}>Refresh</Button>
+        <p className="text-xs text-text-muted ml-auto max-w-md">
+          Sentinel complements Cloudflare WAF and Supabase RLS; blocks auto-expire (TTL) and are re-checked each scan.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <AdminCard padding={false} className="lg:col-span-2">
+          <div className="px-4 pt-4"><AdminCardTitle>Security Events</AdminCardTitle></div>
+          <div className="overflow-x-auto mt-2">
+            <table className="w-full text-sm min-w-[760px]">
+              <thead><tr className="border-b border-purple/25 text-left text-text-muted">
+                <th className="px-4 py-2">Severity</th><th className="px-4 py-2">Kind</th><th className="px-4 py-2">IP</th><th className="px-4 py-2">Details</th><th className="px-4 py-2">When</th><th className="px-4 py-2">Actions</th>
+              </tr></thead>
+              <tbody>
+                {events.length === 0 && <tr><td colSpan={6} className="px-4 py-6 text-center text-text-muted">No events.</td></tr>}
+                {events.map((e) => (
+                  <tr key={e.id} className="border-b border-border/50 last:border-0">
+                    <td className="px-4 py-2.5"><Badge variant={sevBadge(e.severity) as "red" | "yellow" | "blue" | "gray"}>{e.severity}</Badge></td>
+                    <td className="px-4 py-2.5">{e.kind}</td>
+                    <td className="px-4 py-2.5 font-mono text-xs">{e.ip || "-"}</td>
+                    <td className="px-4 py-2.5 text-xs text-text-muted max-w-[260px] truncate" title={JSON.stringify(e.details || {})}>{JSON.stringify(e.details || {})}</td>
+                    <td className="px-4 py-2.5 text-xs text-text-muted">{new Date(e.created_at).toLocaleString()}</td>
+                    <td className="px-4 py-2.5">
+                      {e.resolved
+                        ? <Badge variant="green">resolved</Badge>
+                        : <Button size="sm" variant="secondary" disabled={busy} onClick={() => resolve(e.id)}>Resolve</Button>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </AdminCard>
+
+        <AdminCard padding={false}>
+          <div className="px-4 pt-4"><AdminCardTitle>Auto-blocked IPs</AdminCardTitle></div>
+          <div className="overflow-x-auto mt-2">
+            <table className="w-full text-sm min-w-[280px]">
+              <thead><tr className="border-b border-purple/25 text-left text-text-muted">
+                <th className="px-4 py-2">IP</th><th className="px-4 py-2">Reason</th><th className="px-4 py-2">Until</th><th className="px-4 py-2" />
+              </tr></thead>
+              <tbody>
+                {blocks.length === 0 && <tr><td colSpan={4} className="px-4 py-6 text-center text-text-muted">No active blocks.</td></tr>}
+                {blocks.map((b) => (
+                  <tr key={b.ip} className="border-b border-border/50 last:border-0">
+                    <td className="px-4 py-2.5 font-mono text-xs">{b.ip}</td>
+                    <td className="px-4 py-2.5 text-xs text-text-muted max-w-[140px] truncate" title={b.reason}>{b.reason || "-"}</td>
+                    <td className="px-4 py-2.5 text-xs text-text-muted">{b.blocked_until ? new Date(b.blocked_until).toLocaleTimeString() : "-"}</td>
+                    <td className="px-4 py-2.5"><Button size="sm" variant="secondary" disabled={busy} onClick={() => unblock(b.ip)}>Unblock</Button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </AdminCard>
+      </div>
     </div>
   );
 }

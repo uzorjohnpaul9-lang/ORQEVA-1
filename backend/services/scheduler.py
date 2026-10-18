@@ -132,6 +132,12 @@ async def run_scheduled_scan() -> dict:
             digest = await maybe_send_weekly_digests(db)
         except Exception:  # pragma: no cover - defensive
             digest = 0
+        try:
+            # Phase G: expire sentinel auto-blocks whose TTL has passed.
+            from backend.services import sentinel_service
+            expired_blocks = await sentinel_service.expire_stale_blocks(db)
+        except Exception:  # pragma: no cover - defensive
+            expired_blocks = 0
         log.info(
             "scheduled scan: %s signals (%s), errors=%s, resolved=%s",
             out["signals_generated"], out["by_market"], out["errors"], resolved,
@@ -142,6 +148,7 @@ async def run_scheduled_scan() -> dict:
         summary["resolved"] = resolved
         summary["event_alerts"] = alerts
         summary["weekly_digest"] = digest
+        summary["blocks_expired"] = expired_blocks
         summary["at"] = __import__("backend.db.supabase", fromlist=["now_iso"]).now_iso()
         _last_scan = summary
         return summary

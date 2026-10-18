@@ -522,6 +522,12 @@ async def user_context(
 ):
     """Read-only support context: profile, prefs, activity, connections."""
     check_rate_limit(admin["id"], "admin")
+    ctx = await admin_service.user_context(db, user_id)
+    if not ctx:
+        raise HTTPException(status_code=404, detail="User not found")
+    return ctx
+
+
 @router.get("/sentinel")
 async def sentinel_list(
     limit: int = Query(100, ge=1, le=200),
@@ -551,3 +557,27 @@ async def sentinel_resolve(
         db, admin, "sentinel.resolve", "security_event", event_id, {"resolved": True}
     )
     return ev
+
+
+@router.get("/sentinel/blocks")
+async def sentinel_blocks(
+    active_only: bool = Query(True),
+    db: SupabaseDB = Depends(get_db),
+    admin: dict = Depends(require_admin),
+):
+    """Auto-block list (active = not yet expired/cleared)."""
+    check_rate_limit(admin["id"], "admin")
+    return await sentinel_service.list_blocks(db, active_only=active_only)
+
+
+@router.post("/sentinel/blocks/{ip}/unblock")
+async def sentinel_unblock(
+    ip: str,
+    db: SupabaseDB = Depends(get_db),
+    admin: dict = Depends(require_admin),
+):
+    check_rate_limit(admin["id"], "admin")
+    row = await sentinel_service.unblock(db, ip, admin)
+    if not row:
+        raise HTTPException(status_code=404, detail="IP not blocked")
+    return row

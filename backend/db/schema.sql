@@ -193,6 +193,23 @@ create index if not exists security_events_user_idx on public.security_events (u
 create index if not exists security_events_kind_sev_idx on public.security_events (kind, severity);
 
 -- ---------------------------------------------------------------------------
+-- blocked_ips (Phase G: auto-block TTL list)
+-- ---------------------------------------------------------------------------
+create table if not exists public.blocked_ips (
+  ip            text primary key,
+  reason        text not null default '',
+  hits          integer not null default 1,
+  blocked_until timestamptz,
+  created_at    timestamptz not null default timezone('utc', now()),
+  created_by    text not null default 'sentinel',
+  cleared_at    timestamptz
+);
+
+alter table public.blocked_ips enable row level security;
+
+create index if not exists blocked_ips_until_idx on public.blocked_ips (blocked_until);
+
+-- ---------------------------------------------------------------------------
 -- exchange_connections (encrypted payloads)
 -- ---------------------------------------------------------------------------
 create table if not exists public.exchange_connections (

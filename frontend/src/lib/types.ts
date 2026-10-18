@@ -284,6 +284,29 @@ export interface SupportTicket {
   replied_by?: string | null;
 }
 
+export interface SecurityEvent {
+  id: string;
+  user_id?: string | null;
+  ip?: string | null;
+  kind: string;
+  severity: string;
+  details?: Record<string, unknown>;
+  resolved: boolean;
+  resolved_by?: string | null;
+  resolved_at?: string | null;
+  created_at: string;
+}
+
+export interface BlockedIp {
+  ip: string;
+  reason?: string;
+  hits?: number;
+  blocked_until?: string | null;
+  created_at: string;
+  created_by?: string;
+  cleared_at?: string | null;
+}
+
 export interface AdminUserContext {
   profile: {
     id: string;

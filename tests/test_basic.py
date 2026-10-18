@@ -1149,5 +1149,197 @@ class TestMarketSentiment(unittest.TestCase):
         self.assertFalse(sig.metadata["sentiment"]["available"])
 
 
+class TestSentinelMiddleware(unittest.TestCase):
+    """Phase G: honeypot / injection / auto-block request pipeline."""
+
+    def _client(self, **kw):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from backend.middleware import sentinel
+        from backend.middleware.sentinel import SentinelMiddleware
+
+        sentinel._blocked.clear()
+        sentinel._failures.clear()
+        sentinel._blocklist_loaded_at = 0.0
+
+        app = FastAPI()
+
+        @app.get("/api/health")
+        def health():
+            return {"ok": True}
+
+        app.add_middleware(SentinelMiddleware)
+        for k, v in kw.items():
+            setattr(sentinel, k, v)
+        return TestClient(app, raise_server_exceptions=False)
+
+    def setUp(self):
+        from backend.middleware import sentinel
+        self.sentinel = sentinel
+        self._blocked_orig = dict(sentinel._blocked)
+        self._fail_orig = {k: list(v) for k, v in sentinel._failures.items()}
+        self._persist_calls = []
+        # never hit the network in tests
+        async def _noop_event(ip, kind, severity, details):
+            self._persist_calls.append(("event", ip, kind, severity))
+        async def _noop_block(ip, reason, ttl):
+            self._persist_calls.append(("block", ip, reason, ttl))
+        async def _noop_load(force=False):
+            return None
+        self._patches = [
+            mock.patch.object(sentinel, "_persist_event", new=_noop_event),
+            mock.patch.object(sentinel, "_persist_block", new=_noop_block),
+            mock.patch.object(sentinel, "_load_blocks", new=_noop_load),
+        ]
+        for p in self._patches:
+            p.start()
+
+    def tearDown(self):
+        from backend.middleware import sentinel
+        for p in self._patches:
+            p.stop()
+        sentinel._blocked.clear()
+        sentinel._blocked.update(self._blocked_orig)
+        sentinel._failures.clear()
+        sentinel._failures.update(self._fail_orig)
+
+    def test_clean_request_passes(self):
+        c = self._client()
+        r = c.get("/api/health")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json(), {"ok": True})
+
+    def test_honeypot_returns_404_and_blocks(self):
+        c = self._client()
+        r = c.get("/wp-admin/setup-config.php")
+        self.assertEqual(r.status_code, 404)
+        # same IP now blocked
+        r2 = c.get("/api/health")
+        self.assertEqual(r2.status_code, 403)
+        self.assertTrue(any(p[0] == "block" for p in self._persist_calls))
+
+    def test_env_probe_returns_404_and_blocks(self):
+        c = self._client()
+        r = c.get("/.env")
+        # .env is a honeypot path -> always 404, and the IP gets blocked
+        self.assertEqual(r.status_code, 404)
+        r2 = c.get("/api/health")
+        self.assertEqual(r2.status_code, 403)
+
+    def test_sqli_in_query_is_blocked(self):
+        c = self._client()
+        r = c.get("/api/health?q=1' OR '1'='1")
+        self.assertEqual(r.status_code, 403)
+        self.assertTrue(any(p[0] == "block" for p in self._persist_calls))
+
+    def test_xss_in_query_is_blocked(self):
+        c = self._client()
+        r = c.get("/api/health?q=<script>alert(1)</script>")
+        self.assertEqual(r.status_code, 403)
+
+    def test_traversal_is_blocked(self):
+        c = self._client()
+        r = c.get("/api/health?q=../../etc/passwd")
+        self.assertEqual(r.status_code, 403)
+
+    def test_preblocked_ip_forbidden(self):
+        from backend.middleware import sentinel
+        sentinel.block_ip("1.2.3.4", 60)
+        c = self._client()
+        # TestClient sends from "testclient" host, so seed that instead
+        sentinel.block_ip("testclient", 60)
+        r = c.get("/api/health")
+        self.assertEqual(r.status_code, 403)
+
+    def test_auth_spike_blocks_after_threshold(self):
+        from backend.middleware import sentinel
+        n = 0
+        for _ in range(sentinel.BLOCK_AFTER + 5):
+            n = sentinel._note_failure("9.9.9.9")
+        self.assertGreaterEqual(n, sentinel.BLOCK_AFTER)
+        self.assertGreater(sentinel.BLOCK_AFTER, sentinel.AUTH_FAIL_LIMIT)
+
+    def test_success_clears_failure_streak(self):
+        from backend.middleware import sentinel
+        c = self._client()
+        for _ in range(3):
+            sentinel._note_failure("testclient")
+        self.assertTrue(sentinel._failures.get("testclient"))
+        c.get("/api/health")  # 200 clears
+        self.assertFalse(sentinel._failures.get("testclient"))
+
+    def test_client_ip_prefers_cf_header(self):
+        from starlette.requests import Request
+        scope = {
+            "type": "http", "method": "GET", "path": "/", "query_string": b"",
+            "headers": [(b"cf-connecting-ip", b"5.6.7.8")],
+            "client": ("9.9.9.9", 1), "scheme": "http", "server": ("t", 1),
+        }
+        self.assertEqual(self.sentinel.client_ip(Request(scope)), "5.6.7.8")
+
+    def test_sentinel_never_raises_on_dispatch_error(self):
+        c = self._client()
+        # unknown route -> 404 from FastAPI, not a sentinel failure
+        r = c.get("/definitely/not/a/route")
+        self.assertEqual(r.status_code, 404)
+
+
+class TestSentinelService(unittest.TestCase):
+    """Phase G: event recording + blocklist helpers (failure-tolerant)."""
+
+    def test_kinds_and_severities_are_constrained(self):
+        from backend.services import sentinel_service as ss
+        self.assertIn("login_fail", ss.KINDS)
+        self.assertIn("suspicious", ss.KINDS)
+        self.assertIn("critical", ss.SEVERITIES)
+        self.assertEqual(set(ss.HIGH), {"high", "critical"})
+
+    def test_record_never_raises_when_db_fails(self):
+        import asyncio
+        from backend.services import sentinel_service as ss
+
+        class BrokenDB:
+            async def insert(self, *a, **k):
+                raise RuntimeError("db down")
+
+        out = asyncio.run(ss.record_anomaly(BrokenDB(), kind="anomaly",
+                                             severity="high", ip="1.1.1.1"))
+        self.assertIsNone(out)
+
+    def test_login_fail_severity_escalates_with_count(self):
+        import asyncio
+        from backend.services import sentinel_service as ss
+
+        class DB:
+            def __init__(self):
+                self.sev = None
+            async def insert(self, table, row):
+                self.sev = row["severity"]
+                return row
+            async def fetch_all(self, *a, **k):
+                return []
+
+        ss._windows.clear()
+        db = DB()
+        for _ in range(10):
+            asyncio.run(ss.record_login_fail(db, ip="2.2.2.2", email="a@b.c"))
+        self.assertEqual(db.sev, "high")
+
+    def test_list_blocks_and_unblock_tolerant(self):
+        import asyncio
+        from backend.services import sentinel_service as ss
+
+        class BrokenDB:
+            async def fetch_all(self, *a, **k):
+                raise RuntimeError("down")
+            async def update(self, *a, **k):
+                raise RuntimeError("down")
+
+        rows = asyncio.run(ss.list_blocks(BrokenDB()))
+        self.assertEqual(rows, [])
+        out = asyncio.run(ss.unblock(BrokenDB(), "1.2.3.4", {"id": "adm"}))
+        self.assertIsNone(out)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

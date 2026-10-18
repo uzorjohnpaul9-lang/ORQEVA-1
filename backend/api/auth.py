@@ -17,6 +17,7 @@ from backend.db.models import USER_PREFERENCES, USERS, PASSWORD_RESET_TOKENS, ge
 from backend.db.schemas import UserRegister, UserLogin, Token, UserResponse
 from backend.auth import get_current_user
 from backend.middleware import brute_force
+from backend.services import sentinel_service
 
 log = logging.getLogger("auth")
 
@@ -95,6 +96,7 @@ async def login(data: UserLogin, request: Request, db: SupabaseDB = Depends(get_
     email = data.email.strip().lower()
     locked_for = brute_force.is_locked(email, ip)
     if locked_for:
+        await sentinel_service.record_rate_limit(db, user_id=None, ip=ip, route="/api/auth/login")
         raise HTTPException(
             status_code=429,
             detail=f"Too many failed attempts - try again in {locked_for}s",
@@ -121,6 +123,7 @@ async def login(data: UserLogin, request: Request, db: SupabaseDB = Depends(get_
                 detail="Login temporarily unavailable - please retry",
             )
         brute_force.record_failure(email, ip)
+        await sentinel_service.record_login_fail(db, user_id=None, ip=ip, email=email)
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     user = await db.fetch_one(USERS, {"id": auth_user.id})

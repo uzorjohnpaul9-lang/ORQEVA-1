@@ -11,6 +11,7 @@ from backend.config import settings
 from backend.db.database import init_db, readyz
 from backend.api import auth, signals, portfolio, market, risk, dashboard, engine, trading, ai, exchanges, billing, preferences, notifications, admin, auto_trade, learn, calendar, telegram, support
 from backend.middleware.security_headers import SecurityHeadersMiddleware
+from backend.middleware.sentinel import SentinelMiddleware
 from backend.monitoring.metrics import MetricsMiddleware, render as render_metrics
 from backend.services import scheduler
 
@@ -50,6 +51,7 @@ app = FastAPI(
 )
 
 app.add_middleware(MetricsMiddleware)
+app.add_middleware(SentinelMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
