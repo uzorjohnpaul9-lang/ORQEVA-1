@@ -346,6 +346,11 @@ def format_signal_alert(sig: dict) -> str:
     if levels:
         lines.append(" | ".join(levels))
     lines.append(f"Confidence: {conf:.0f}% | Strategy: {sig.get('strategy', 'ai')}")
+    sent = (sig.get("indicators") or {}).get("sentiment") or {}
+    if isinstance(sent, dict) and sent.get("tag"):
+        adj = float(sent.get("modifier") or 0) * 100
+        sign = "+" if adj >= 0 else ""
+        lines.append(f"Sentiment: {sent['tag']} ({sign}{adj:.1f}%)")
     return "\n".join(lines)
 
 

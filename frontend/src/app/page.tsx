@@ -60,6 +60,12 @@ export default function OverviewPage() {
                 <div>
                   <p className="text-sm font-medium">{s.symbol}</p>
                   <p className="text-xs text-text-muted">{s.strategy || s.market}</p>
+                  {(() => {
+                    const sent = (s as { indicators?: { sentiment?: { tag?: string | null; modifier?: number } } }).indicators?.sentiment;
+                    if (!sent?.tag) return null;
+                    const m = sent.modifier ?? 0;
+                    return <p className="text-xs text-text-muted">Sentiment: {sent.tag} ({m >= 0 ? "+" : ""}{(m * 100).toFixed(1)}%)</p>;
+                  })()}
                 </div>
                 <Badge variant={s.direction === "buy" ? "green" : "red"}>{s.direction.toUpperCase()}</Badge>
               </div>

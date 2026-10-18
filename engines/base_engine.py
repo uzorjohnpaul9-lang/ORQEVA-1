@@ -17,6 +17,10 @@ from . import strategy_library
 logger = logging.getLogger(__name__)
 
 
+def _clamp01(v: float) -> float:
+    return max(0.0, min(1.0, v))
+
+
 class Signal:
     """Trading signal produced by an engine."""
     def __init__(self, symbol: str, direction: str, price: float,
@@ -131,6 +135,20 @@ class BaseEngine(ABC):
             confidence = result["confidence"]
             reason = " + ".join(result["reasons"])
 
+            # Phase H: crypto sentiment is a quality dial (confidence modifier
+            # + confirmation tag), never a new signal source. Never raises.
+            sentiment: Dict[str, Any] = {"available": False, "modifier": 0.0, "tag": None, "feeds": {}}
+            if self.market_type == "crypto":
+                try:
+                    from . import market_sentiment
+                    sentiment = market_sentiment.sentiment_for(symbol, direction)
+                    if sentiment["available"]:
+                        confidence = _clamp01(confidence + sentiment["modifier"])
+                        if sentiment["tag"]:
+                            reason = f"{reason} [sentiment: {sentiment['tag']}]"
+                except Exception as e:
+                    logger.debug("sentiment skipped for %s: %s", symbol, e)
+
             # Calculate target and stop loss using risk params
             rp = self.risk_params
             if direction == "BUY":
@@ -157,7 +175,9 @@ class BaseEngine(ABC):
                 fees=fees,
                 slippage=slippage,
                 metadata={"rsi": rsi, "atr": atr, "macd": macd,
-                          "data_source": getattr(self, "_last_source", None) or "live", **ema},
+                          "data_source": getattr(self, "_last_source", None) or "live",
+                          "sentiment": {k: sentiment[k] for k in ("available", "modifier", "tag")},
+                          **ema},
             )
 
         except Exception as e:

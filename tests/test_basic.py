@@ -1005,5 +1005,149 @@ class TestPasswordResetEmail(unittest.TestCase):
         self.assertFalse(any(t == NOTIFICATIONS for t, _ in db.inserts))
 
 
+class TestMarketSentiment(unittest.TestCase):
+    """Phase H: keyless sentiment feeds + confidence modifier (never raises)."""
+
+    def setUp(self):
+        from engines import market_sentiment as ms
+        self.ms = ms
+        self._down = dict(ms._down_until)
+        ms._down_until.clear()
+        ms._cache.clear()
+
+    def tearDown(self):
+        self.ms._down_until.clear()
+        self.ms._down_until.update(self._down)
+        self.ms._cache.clear()
+
+    def _resp(self, payload):
+        r = mock.Mock()
+        r.raise_for_status.return_value = None
+        r.json.return_value = payload
+        return r
+
+    def test_orderbook_imbalance_computes_and_clamps(self):
+        payload = {"bids": [["100", "5"], ["99", "5"]], "asks": [["101", "1"], ["102", "1"]]}
+        with mock.patch.object(self.ms.requests, "get", return_value=self._resp(payload)):
+            out = self.ms.orderbook_imbalance("BTC/USD")
+        self.assertIsNotNone(out)
+        self.assertEqual(out["source"], "binance_us")
+        self.assertGreater(out["imbalance"], 0)   # bid-heavy
+        self.assertTrue(-1.0 <= out["imbalance"] <= 1.0)
+
+    def test_orderbook_failure_returns_none_not_raise(self):
+        with mock.patch.object(self.ms.requests, "get", side_effect=RuntimeError("down")):
+            self.assertIsNone(self.ms.orderbook_imbalance("BTC/USD"))
+        self.assertTrue(self.ms._down_until)  # cooldown marked
+
+    def test_fear_greed_parses_value(self):
+        payload = {"data": [{"value": "78", "value_classification": "Greed"},
+                            {"value": "65", "value_classification": "Greed"}]}
+        with mock.patch.object(self.ms.requests, "get", return_value=self._resp(payload)):
+            out = self.ms.fear_greed()
+        self.assertEqual(out["value"], 78)
+        self.assertEqual(out["prev_value"], 65)
+
+    def test_btc_dominance_parses(self):
+        payload = {"data": {"market_cap_percentage": {"btc": 52.5},
+                            "total_market_cap": {"usd": 2.1e12}}}
+        with mock.patch.object(self.ms.requests, "get", return_value=self._resp(payload)):
+            out = self.ms.btc_dominance()
+        self.assertEqual(out["btc_dominance"], 52.5)
+
+    def test_sentiment_no_feeds_is_noop(self):
+        with mock.patch.object(self.ms, "orderbook_imbalance", return_value=None), \
+             mock.patch.object(self.ms, "funding_oi", return_value=None), \
+             mock.patch.object(self.ms, "fear_greed", return_value=None), \
+             mock.patch.object(self.ms, "btc_dominance", return_value=None):
+            out = self.ms.sentiment_for("BTC/USD", "BUY")
+        self.assertFalse(out["available"])
+        self.assertEqual(out["modifier"], 0.0)
+        self.assertIsNone(out["tag"])
+
+    def test_sentiment_modifier_never_exceeds_cap(self):
+        ob = {"imbalance": 1.0, "bid_volume": 10, "ask_volume": 0, "source": "coinbase"}
+        fo = {"funding_rate": -0.001, "open_interest": 1.0, "source": "bybit"}
+        fg = {"value": 20, "classification": "Fear", "prev_value": 30, "source": "alternative.me"}
+        bd = {"btc_dominance": 58.0, "source": "coingecko"}
+        with mock.patch.object(self.ms, "orderbook_imbalance", return_value=ob), \
+             mock.patch.object(self.ms, "funding_oi", return_value=fo), \
+             mock.patch.object(self.ms, "fear_greed", return_value=fg), \
+             mock.patch.object(self.ms, "btc_dominance", return_value=bd):
+            out = self.ms.sentiment_for("ETH/USD", "BUY")
+        self.assertTrue(out["available"])
+        self.assertTrue(-self.ms.MAX_ADJUST <= out["modifier"] <= self.ms.MAX_ADJUST)
+
+    def test_crowded_longs_tag_on_extreme_funding(self):
+        fo = {"funding_rate": 0.001, "open_interest": 100.0, "source": "bybit"}
+        with mock.patch.object(self.ms, "orderbook_imbalance", return_value=None), \
+             mock.patch.object(self.ms, "funding_oi", return_value=fo), \
+             mock.patch.object(self.ms, "fear_greed", return_value=None), \
+             mock.patch.object(self.ms, "btc_dominance", return_value=None):
+            out = self.ms.sentiment_for("BTC/USD", "BUY")
+        self.assertIn("crowded_longs", out["tag"])
+        self.assertLess(out["modifier"], 0)
+
+    def test_probe_never_raises_when_all_down(self):
+        with mock.patch.object(self.ms.requests, "get", side_effect=RuntimeError("down")):
+            rows = self.ms.probe("BTC/USD")
+        self.assertEqual([r["feed"] for r in rows],
+                         ["orderflow", "derivatives", "fear_greed", "btc_dominance"])
+        self.assertTrue(all(r["ok"] is False for r in rows))
+
+    def test_base_engine_hooks_sentiment_for_crypto(self):
+        from engines import base_engine as be
+        from unittest import mock as m
+
+        class _Crypto(be.BaseEngine):
+            market_type = "crypto"
+            risk_params = be.EngineRiskParams(max_position_size=0.1, max_daily_trades=5, max_positions=3, stop_loss_pct=0.02, take_profit_pct=0.04, trailing_stop_pct=0.01, max_spread_pct=0.01, fee_per_trade=0.0, fee_percentage=0.001)
+            indicator_config = be.IndicatorConfig()
+            fetch_prices = lambda self, s, n: [100.0] * 40
+            get_symbols = lambda self: ["BTC/USD"]
+            is_market_hours = lambda self: True
+            calculate_fees = lambda self, s, q, p: 0.0
+            calculate_slippage = lambda self, s, q, p: 0.0
+            calculate_position_size = lambda self, s, p, a: 1.0
+
+        eng = _Crypto()
+        fake = {"available": True, "modifier": -0.05, "tag": "crowded_longs", "feeds": {}}
+        with m.patch.object(be, "score_signal",
+                            return_value={"direction": "BUY", "confidence": 0.72,
+                                          "reasons": ["rsi"]}), \
+             m.patch("engines.market_sentiment.sentiment_for", return_value=fake):
+            sig = eng.analyze("BTC/USD")
+        self.assertIsNotNone(sig)
+        self.assertIn("[sentiment: crowded_longs]", sig.reason)
+        self.assertAlmostEqual(sig.confidence, 0.67, places=2)
+        self.assertEqual(sig.metadata["sentiment"]["tag"], "crowded_longs")
+
+    def test_base_engine_sentiment_noop_for_stock(self):
+        from engines import base_engine as be
+        from unittest import mock as m
+
+        class _Stock(be.BaseEngine):
+            market_type = "stock"
+            risk_params = be.EngineRiskParams(max_position_size=0.1, max_daily_trades=5, max_positions=3, stop_loss_pct=0.02, take_profit_pct=0.04, trailing_stop_pct=0.01, max_spread_pct=0.01, fee_per_trade=0.0, fee_percentage=0.001)
+            indicator_config = be.IndicatorConfig()
+            fetch_prices = lambda self, s, n: [100.0] * 40
+            get_symbols = lambda self: ["AAPL"]
+            is_market_hours = lambda self: True
+            calculate_fees = lambda self, s, q, p: 0.0
+            calculate_slippage = lambda self, s, q, p: 0.0
+            calculate_position_size = lambda self, s, p, a: 1.0
+
+        eng = _Stock()
+        with m.patch.object(be, "score_signal",
+                            return_value={"direction": "BUY", "confidence": 0.72,
+                                          "reasons": ["rsi"]}), \
+             m.patch("engines.market_sentiment.sentiment_for",
+                     side_effect=AssertionError("should not be called")):
+            sig = eng.analyze("AAPL")
+        self.assertIsNotNone(sig)
+        self.assertNotIn("[sentiment", sig.reason)
+        self.assertFalse(sig.metadata["sentiment"]["available"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

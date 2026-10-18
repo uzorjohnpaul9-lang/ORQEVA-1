@@ -545,7 +545,15 @@ export default function SignalsPage() {
                     <div key={k} className="flex justify-between gap-2">
                       <span className="text-text-muted">{k}</span>
                       <span>
-                        {typeof v === "number"
+                        {k === "sentiment" && v && typeof v === "object"
+                          ? (() => {
+                              const s = v as { available?: boolean; modifier?: number; tag?: string | null };
+                              if (!s.available) return "n/a";
+                              const m = s.modifier ?? 0;
+                              const adj = m >= 0 ? `+${(m * 100).toFixed(1)}%` : `${(m * 100).toFixed(1)}%`;
+                              return s.tag ? `${s.tag} ${adj}` : adj;
+                            })()
+                          : typeof v === "number"
                           ? v.toFixed(3)
                           : v && typeof v === "object"
                             ? Object.values(v as Record<string, number>)

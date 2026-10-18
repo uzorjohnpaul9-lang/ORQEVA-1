@@ -351,6 +351,19 @@ async def market_providers(
     return {"symbol": symbol, "interval": interval, "providers": providers}
 
 
+@router.get("/market/sentiment")
+async def market_sentiment_probe(
+    symbol: str = Query("BTC/USD"),
+    admin: dict = Depends(require_admin),
+):
+    """Diagnostic: probe each keyless sentiment feed from this host (Phase H)."""
+    check_rate_limit(admin["id"], "admin")
+    from engines import market_sentiment as ms
+
+    rows = await asyncio.to_thread(ms.probe, symbol)
+    return {"symbol": symbol, "feeds": rows}
+
+
 @router.post("/telegram/test-channel")
 async def telegram_test_channel(
     tier: str = Query(..., pattern="^(free|premium|vip)$"),
