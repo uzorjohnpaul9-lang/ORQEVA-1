@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useState } from "react";
 import { Badge } from "@/components/ui/Badge";
@@ -12,6 +12,7 @@ import { useRouter } from "next/navigation";
 import { BillingAdmin } from "@/components/admin/BillingAdmin";
 import { AdminCard, AdminCardHeader, AdminCardTitle, AdminStatCard } from "@/components/admin/AdminCard";
 import { clsx } from "clsx";
+import type { AdminUserContext, SupportTicket } from "@/lib/types";
 
 interface AdminUser {
   id: string; email: string; username: string; tier: string;
@@ -60,7 +61,7 @@ interface ForwardTestStats {
   resolved_now?: { tp: number; sl: number; expired: number; skipped: number; budget_exhausted?: boolean };
 }
 
-const TABS = ["Overview", "Users", "Billing", "Signals", "System"] as const;
+const TABS = ["Overview", "Users", "Support", "Billing", "Signals", "System"] as const;
 type Tab = (typeof TABS)[number];
 
 export default function AdminPage() {
@@ -92,7 +93,7 @@ export default function AdminPage() {
 
   return (
     <div className="space-y-6">
-      {/* Distinct admin chrome — purple accent, banner header */}
+      {/* Distinct admin chrome â€” purple accent, banner header */}
       <div className="relative overflow-hidden rounded-xl bg-gradient-to-r from-bg-secondary via-bg-tertiary to-bg-secondary border border-purple/30">
         <div className="absolute inset-y-0 left-0 w-1 bg-purple" />
         <div className="flex items-center justify-between flex-wrap gap-3 px-5 py-4">
@@ -110,7 +111,7 @@ export default function AdminPage() {
                 </span>
               </div>
               <p className="text-xs text-text-muted mt-0.5">
-                Signed in as <span className="text-text-secondary font-medium">{user.email}</span> — all actions are audited
+                Signed in as <span className="text-text-secondary font-medium">{user.email}</span> â€” all actions are audited
               </p>
             </div>
           </div>
@@ -135,6 +136,7 @@ export default function AdminPage() {
 
       {tab === "Overview" && <OverviewTab token={token} />}
       {tab === "Users" && <UsersTab token={token} />}
+      {tab === "Support" && <SupportTab token={token} />}
       {tab === "Billing" && <BillingAdmin token={token} />}
       {tab === "Signals" && <SignalsTab token={token} />}
       {tab === "System" && <SystemTab token={token} />}
@@ -373,7 +375,7 @@ function UsersTab({ token }: { token: string }) {
                 <tr key={u.id} className="border-b border-border/50 last:border-0">
                   <td className="px-4 py-2.5">
                     <p className="font-medium">{u.email}</p>
-                    <p className="text-xs text-text-muted">@{u.username} · {new Date(u.created_at).toLocaleDateString()}</p>
+                    <p className="text-xs text-text-muted">@{u.username} Â· {new Date(u.created_at).toLocaleDateString()}</p>
                   </td>
                   <td className="px-4 py-2.5">
                     <Select
@@ -404,7 +406,7 @@ function UsersTab({ token }: { token: string }) {
                   </td>
                   <td className="px-4 py-2.5">
                     <div className="flex flex-wrap gap-1.5 items-center">
-                      <span className="text-xs text-text-muted">{u.telegram_chat_id ? "linked" : "—"}</span>
+                      <span className="text-xs text-text-muted">{u.telegram_chat_id ? "linked" : "â€”"}</span>
                       <Button size="sm" variant="secondary" onClick={() => resetPassword(u)}>Reset PW</Button>
                       {u.is_active ? (
                         <Button size="sm" variant="danger" onClick={() => openDanger(u, "deactivate")}>Deactivate</Button>
@@ -548,6 +550,123 @@ function SignalsTab({ token }: { token: string }) {
 }
 
 // ---- System --------------------------------------------------------------
+
+
+
+function SupportTab({ token }: { token: string }) {
+  const [tickets, setTickets] = useState<SupportTicket[]>([]);
+  const [stats, setStats] = useState<{open:number;in_progress:number;total:number}|null>(null);
+  const [selected, setSelected] = useState<SupportTicket | null>(null);
+  const [reply, setReply] = useState("");
+  const [status, setStatus] = useState("in_progress");
+  const [priority, setPriority] = useState("normal");
+  const [notice, setNotice] = useState<string|null>(null);
+  const [error, setError] = useState<string|null>(null);
+  const [busy, setBusy] = useState(false);
+  const [ctx, setCtx] = useState<AdminUserContext|null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const [t,s] = await Promise.all([
+        api<SupportTicket[]>("/api/admin/support", {token}),
+        api<{open:number;in_progress:number;total:number}>("/api/admin/support/stats",{token}).catch(()=>null),
+      ]);
+      setTickets(t); setStats(s); setError(null);
+    } catch (e){ setError(e instanceof Error?e.message:"load failed"); }
+  },[token]);
+  useEffect(()=>{load()},[load]);
+
+  const open = async (tick: SupportTicket) => {
+    setSelected(tick); setReply(tick.reply||""); setStatus(tick.status||"in_progress"); setPriority(tick.priority||"normal"); setCtx(null); setError(null); setNotice(null);
+    if (tick.user_id) {
+      try { setCtx(await api<AdminUserContext>(`/api/admin/users/${tick.user_id}/context`,{token})); } catch {}
+    }
+  };
+
+  const sendReply = async () => {
+    if (!selected || !reply.trim()) return;
+    setBusy(true); setError(null);
+    try {
+      await api(`/api/admin/support/${selected.id}/reply`, {method:"POST",token,body:{message:reply,status,priority}});
+      setNotice("Replied & updated"); await load(); open(selected);
+    } catch (e){ setError(e instanceof Error?e.message:"reply failed"); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="space-y-4">
+      {error&&<p className="text-sm text-red">{error}</p>}{notice&&<p className="text-sm text-green">{notice}</p>}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <AdminCard padding={false}>
+          <div className="px-4 pt-4 flex items-center justify-between">
+            <AdminCardTitle>Support Queue {stats?`(open ${stats.open} / in-prog ${stats.in_progress})`: ""}</AdminCardTitle>
+            <Button size="sm" variant="secondary" onClick={load}>Refresh</Button>
+          </div>
+          <div className="overflow-x-auto mt-2">
+            <table className="w-full text-sm min-w-[700px]">
+              <thead><tr className="border-b border-purple/25 text-left text-text-muted"><th className="px-4 py-2">Subject</th><th className="px-4 py-2">Email</th><th className="px-4 py-2">Category</th><th className="px-4 py-2">Status</th><th className="px-4 py-2">Priority</th><th className="px-4 py-2">Created</th><th className="px-4 py-2">Actions</th></tr></thead>
+              <tbody>
+                {tickets.length===0 && <tr><td colSpan={7} className="px-4 py-6 text-center text-text-muted">No tickets.</td></tr>}
+                {tickets.map(t=>(
+                  <tr key={t.id} className="border-b border-border/50 last:border-0">
+                    <td className="px-4 py-2.5">{t.subject}</td>
+                    <td className="px-4 py-2.5 text-xs text-text-muted">{t.user_email||t.email}</td>
+                    <td className="px-4 py-2.5 capitalize">{t.category}</td>
+                    <td className="px-4 py-2.5"><Badge variant={t.status==="open"?"yellow":t.status==="in_progress"?"blue":t.status==="resolved"?"green":"gray"}>{t.status}</Badge></td>
+                    <td className="px-4 py-2.5"><Badge variant={t.priority==="high"?"red":t.priority==="low"?"gray":"blue"}>{t.priority||"normal"}</Badge></td>
+                    <td className="px-4 py-2.5 text-xs text-text-muted">{new Date(t.created_at).toLocaleString()}</td>
+                    <td className="px-4 py-2.5"><Button size="sm" variant="secondary" onClick={()=>open(t)}>View</Button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </AdminCard>
+
+        <AdminCard>
+          <AdminCardHeader><AdminCardTitle>Ticket</AdminCardTitle></AdminCardHeader>
+          {!selected ? <p className="text-sm text-text-muted">Select a ticket.</p> : (
+            <div className="space-y-3 text-sm">
+              <div><p className="text-text-muted">From</p><p>{selected.user_email||selected.email} {selected.user_id?`(user:${selected.user_id.slice(0,8)})`: "anon"}</p></div>
+              <div><p className="text-text-muted">Subject</p><p className="font-medium">{selected.subject}</p></div>
+              <div><p className="text-text-muted">Message</p><pre className="whitespace-pre-wrap bg-bg-tertiary rounded p-2 text-xs">{selected.message}</pre></div>
+              <div className="grid grid-cols-2 gap-2">
+                <Select label="Status" value={status} onChange={e=>setStatus(e.target.value)} options={[{value:"open",label:"open"},{value:"in_progress",label:"in_progress"},{value:"resolved",label:"resolved"},{value:"closed",label:"closed"}]} />
+                <Select label="Priority" value={priority} onChange={e=>setPriority(e.target.value)} options={[{value:"low",label:"low"},{value:"normal",label:"normal"},{value:"high",label:"high"}]} />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm text-text-secondary">Reply</label>
+                <textarea className="w-full bg-bg-tertiary border border-border rounded-lg px-3 py-2.5 text-sm text-text-primary min-h-[120px]" value={reply} onChange={e=>setReply(e.target.value)} />
+              </div>
+              <Button disabled={busy} onClick={sendReply}>{busy?"Sending...":"Send Reply"}</Button>
+              {selected.reply && <div><p className="text-text-muted">Last reply</p><pre className="whitespace-pre-wrap bg-bg-tertiary rounded p-2 text-xs">{selected.reply}</pre>{selected.replied_at&&<p className="text-xs text-text-muted mt-1">{new Date(selected.replied_at).toLocaleString()}</p>}</div>}
+            </div>
+          )}
+        </AdminCard>
+      </div>
+
+      {ctx && (
+        <AdminCard>
+          <AdminCardHeader><AdminCardTitle>Read-only Context</AdminCardTitle></AdminCardHeader>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+            <div>
+              <p className="text-text-muted mb-1">Profile</p>
+              <Row k="Email" v={ctx.profile.email} /><Row k="Tier" v={ctx.profile.tier} /><Row k="Admin" v={ctx.profile.is_admin?"yes":"no"} /><Row k="Active" v={ctx.profile.is_active?"yes":"no"} />
+            </div>
+            <div>
+              <p className="text-text-muted mb-1">Activity</p>
+              <Row k="Open" v={String(ctx.activity.open_positions)} /><Row k="Closed" v={String(ctx.activity.closed_positions)} /><Row k="Realized PnL" v={ctx.activity.realized_pnl.toFixed(2)} /><Row k="Unread" v={String(ctx.notifications_unread)} />
+            </div>
+            <div>
+              <p className="text-text-muted mb-1">Tickets</p>
+              {ctx.support_tickets.length===0? <p className="text-xs text-text-muted">None</p>: ctx.support_tickets.map((t: Record<string, unknown>, i: number)=><p key={i} className="text-xs truncate">{String(t.status)}:{String(t.subject)}</p>)}
+            </div>
+          </div>
+        </AdminCard>
+      )}
+    </div>
+  );
+}
 
 function SystemTab({ token }: { token: string }) {
   const [system, setSystem] = useState<SystemStatus | null>(null);
@@ -775,3 +894,6 @@ function Row({ k, v }: { k: string; v: string }) {
     </div>
   );
 }
+// ---- Support --------------------------------------------------------------
+
+

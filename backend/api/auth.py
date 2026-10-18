@@ -1,13 +1,40 @@
+import logging
+from urllib.parse import urljoin
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
-from backend.db.supabase import SupabaseDB, get_db, get_anon_client, get_service_client, now_iso
+from backend.config import settings
+from backend.db.supabase import (
+    SupabaseDB,
+    get_db,
+    get_anon_client,
+    get_service_client,
+    now_iso,
+    parse_dt,
+)
 from backend.db.models import USER_PREFERENCES, USERS, PASSWORD_RESET_TOKENS, gen_uuid
 from backend.db.schemas import UserRegister, UserLogin, Token, UserResponse
 from backend.auth import get_current_user
 from backend.middleware import brute_force
 
+log = logging.getLogger("auth")
+
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+RESET_TTL_MINUTES = 30
+
+
+def _absolute_link(path: str) -> str:
+    """Join APP_BASE_URL + a root-relative path without doubling slashes.
+
+    A trailing slash on APP_BASE_URL previously produced ``https://host//reset``
+    which some mail clients normalise away and others 404 on.
+    """
+    base = (settings.APP_BASE_URL or "").strip()
+    if not base:
+        return path
+    return urljoin(base.rstrip("/") + "/", path.lstrip("/"))
 
 
 class ForgotRequest(BaseModel):
@@ -127,29 +154,38 @@ async def forgot_password(data: ForgotRequest, db: SupabaseDB = Depends(get_db))
                 "id": gen_uuid(),
                 "user_id": user["id"],
                 "token_hash": hashlib.sha256(raw_token.encode()).hexdigest(),
-                "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat().replace("+00:00", "Z"),
+                "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=RESET_TTL_MINUTES)).isoformat().replace("+00:00", "Z"),
                 "used": False,
                 "created_at": now_iso(),
             },
         )
 
-        link = f"/reset?token={raw_token}"
+        link = _absolute_link(f"/reset?token={raw_token}")
         try:
-            from backend.config import settings
             from backend.services import email_service
 
-            subject, html = email_service.reset_email(user["email"], settings.APP_BASE_URL + link)
-            delivered_via_email = await email_service.send_email(user["email"], subject, html)
-        except Exception:
-            pass
+            if email_service.is_configured():
+                if "localhost" in settings.APP_BASE_URL or "127.0.0.1" in settings.APP_BASE_URL:
+                    log.warning(
+                        "SMTP is configured but APP_BASE_URL=%r - reset links will not "
+                        "resolve outside this host", settings.APP_BASE_URL,
+                    )
+                subject, html = email_service.reset_email(user["email"], link)
+                delivered_via_email = await email_service.send_email(user["email"], subject, html)
+        except Exception as e:
+            log.error("reset email delivery failed: %s", e)
 
         if not delivered_via_email:
-            # No SMTP configured: deliver the link through in-app + Telegram instead.
+            # SMTP unavailable: fall back to channels the locked-out user can still
+            # reach. Telegram is the only one that works before sign-in; the in-app
+            # notification is kept as an audit trail for when they get back in.
+            delivery_channels: list[str] = []
             try:
-                from backend.services import notification_service, telegram_service
+                from backend.services import notification_service
 
-                msg = f"Password reset requested. Open this link to choose a new password (valid 30 min): {link}"
+                msg = f"Password reset requested. Open this link to choose a new password (valid {RESET_TTL_MINUTES} min): {link}"
                 await notification_service.create(db, user["id"], "system", "Password reset", msg)
+                delivery_channels.append("in_app")
                 if user.get("telegram_chat_id"):
                     from backend.services.telegram_service import send_message
 
@@ -160,8 +196,17 @@ async def forgot_password(data: ForgotRequest, db: SupabaseDB = Depends(get_db))
                     bot_tok = os.getenv(token_env, "")
                     if bot_tok:
                         await send_message(bot_tok, user["telegram_chat_id"], msg)
-            except Exception:
-                pass
+                        delivery_channels.append("telegram")
+            except Exception as e:
+                log.error("reset fallback delivery failed: %s", e)
+
+            if "telegram" not in delivery_channels:
+                # No channel the user can read while signed out. Log for operators so
+                # they can issue a temp password (admin /users/{id}/reset-password).
+                log.warning(
+                    "password reset for %s delivered via %s only; user may be locked out",
+                    user["email"], delivery_channels or ["none"],
+                )
 
     return {"status": "ok",
             "message": "If that account exists, a reset link has been sent."}
@@ -174,8 +219,11 @@ async def reset_password(data: ResetRequest, db: SupabaseDB = Depends(get_db)):
 
     token_hash = hashlib.sha256(data.token.encode()).hexdigest()
     rec = await db.fetch_one(PASSWORD_RESET_TOKENS, {"token_hash": token_hash, "used": False})
-    expires = rec.get("expires_at") if rec else None
-    if not rec or expires < datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"):
+    # Compare parsed datetimes, not ISO strings: PostgREST returns "...+00:00"
+    # while we store "...Z", and '+' sorts before 'Z' lexicographically - a raw
+    # string compare would flag live tokens as expired.
+    expires = parse_dt(rec.get("expires_at")) if rec else None
+    if not rec or expires is None or expires <= datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="Invalid or expired reset link")
 
     user = await db.fetch_one(USERS, {"id": rec["user_id"]})

@@ -90,6 +90,7 @@ create table if not exists public.trades (
   exit_price       numeric(18,8),
   status           text not null default 'open' check (status in ('open','closed','cancelled','pending')),
   pnl              numeric(18,8),
+  is_demo          boolean not null default false,
   open_time        timestamptz not null default timezone('utc', now()),
   close_time       timestamptz
 );
@@ -130,11 +131,42 @@ create table if not exists public.user_preferences (
   directions           text[] not null default '{}',
   min_confidence       numeric(4,3) not null default 0,
   telegram_weekly_digest boolean not null default false,
+  demo_starting_balance numeric(18,8) not null default 100000,
   created_at           timestamptz not null default timezone('utc', now()),
   updated_at           timestamptz not null default timezone('utc', now())
 );
 
 alter table public.user_preferences enable row level security;
+
+-- ---------------------------------------------------------------------------
+-- support_tickets (Phase F: support channel)
+-- ---------------------------------------------------------------------------
+create table if not exists public.support_tickets (
+  id          text primary key,
+  user_id     text references public.users (id) on delete set null,
+  email       text not null,
+  subject     text not null,
+  message     text not null,
+  category    text not null default 'general'
+              check (category in ('general','billing','technical','account','other')),
+  status      text not null default 'open'
+              check (status in ('open','in_progress','resolved','closed')),
+  priority    text not null default 'normal'
+              check (priority in ('low','normal','high')),
+  source      text not null default 'app'
+              check (source in ('app','login')),
+  assigned_to text references public.users (id) on delete set null,
+  reply       text,
+  replied_by  text,
+  replied_at  timestamptz,
+  created_at  timestamptz not null default timezone('utc', now()),
+  updated_at  timestamptz not null default timezone('utc', now())
+);
+
+alter table public.support_tickets enable row level security;
+
+create index if not exists support_tickets_status_idx on public.support_tickets (status, created_at desc);
+create index if not exists support_tickets_user_idx on public.support_tickets (user_id, created_at desc);
 
 -- ---------------------------------------------------------------------------
 -- exchange_connections (encrypted payloads)

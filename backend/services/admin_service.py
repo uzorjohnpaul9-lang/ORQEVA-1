@@ -9,8 +9,14 @@ import os
 
 from backend.db.models import (
     AUDIT_LOG,
+    EXCHANGE_CONNECTIONS,
+    NOTIFICATIONS,
+    RISK_SETTINGS,
     SIGNALS,
     SUBSCRIPTIONS,
+    SUPPORT_TICKETS,
+    TRADES,
+    USER_PREFERENCES,
     USERS,
     gen_uuid,
 )
@@ -204,3 +210,122 @@ async def is_last_admin(db: SupabaseDB, target: dict) -> bool:
     if not target.get("is_admin"):
         return False
     return await db.count(USERS, where={"is_admin": True}) <= 1
+
+
+# ---- Read-only user context (Phase F) -----------------------------------
+
+_PREF_FIELDS = (
+    "risk_tolerance",
+    "max_drawdown_pct",
+    "auto_manage",
+    "notifications_enabled",
+    "email_alerts",
+    "push_alerts",
+    "telegram_linked",
+    "watchlist",
+    "directions",
+    "min_confidence",
+    "telegram_weekly_digest",
+    "demo_starting_balance",
+)
+
+
+def _trade_view(t: dict) -> dict:
+    return {
+        "id": t.get("id"),
+        "symbol": t.get("symbol"),
+        "market": t.get("market"),
+        "side": t.get("side"),
+        "quantity": t.get("quantity"),
+        "entry_price": t.get("entry_price"),
+        "exit_price": t.get("exit_price"),
+        "status": t.get("status"),
+        "pnl": t.get("pnl"),
+        "is_demo": bool(t.get("is_demo")),
+        "opened_at": t.get("opened_at"),
+        "closed_at": t.get("closed_at"),
+    }
+
+
+async def user_context(db: SupabaseDB, user_id: str) -> dict | None:
+    """A strictly read-only snapshot for admin support work.
+
+    Never returns credentials: exchange connections are reduced to metadata
+    (the encrypted key columns are dropped), and no mutating path exists here.
+    """
+    user = await db.fetch_one(USERS, {"id": user_id})
+    if not user:
+        return None
+
+    prefs = await db.fetch_one(USER_PREFERENCES, {"user_id": user_id})
+    risk = await db.fetch_one(RISK_SETTINGS, {"user_id": user_id})
+    recent = await db.fetch_all(
+        TRADES, where={"user_id": user_id}, order="opened_at.desc", limit=25
+    )
+    closed = await db.fetch_all(
+        TRADES, where={"user_id": user_id, "status": "closed"}, columns="pnl", limit=1000
+    )
+    connections = await db.fetch_all(
+        EXCHANGE_CONNECTIONS,
+        where={"user_id": user_id},
+        order="created_at.desc",
+        columns="id,exchange,status,permissions,created_at",
+        limit=20,
+    )
+    subs = await db.fetch_all(
+        SUBSCRIPTIONS, where={"user_id": user_id}, order="started_at.desc", limit=5
+    )
+    tickets = await db.fetch_all(
+        SUPPORT_TICKETS, where={"user_id": user_id}, order="created_at.desc", limit=5
+    )
+    unread = await db.count(NOTIFICATIONS, where={"user_id": user_id, "is_read": False})
+
+    realized = round(sum(float(t.get("pnl") or 0) for t in closed), 2)
+    return {
+        "profile": user_view(user),
+        "preferences": {f: (prefs or {}).get(f) for f in _PREF_FIELDS} if prefs else None,
+        "risk": {
+            "daily_loss_limit": (risk or {}).get("daily_loss_limit"),
+            "daily_trade_limit": (risk or {}).get("daily_trade_limit"),
+            "max_position_pct": (risk or {}).get("max_position_pct"),
+            "kill_switch_break_only": (risk or {}).get("kill_switch_break_only"),
+        } if risk else None,
+        "activity": {
+            "open_positions": await db.count(TRADES, where={"user_id": user_id, "status": "open"}),
+            "closed_positions": len(closed),
+            "realized_pnl": realized,
+            "recent_trades": [_trade_view(t) for t in recent],
+        },
+        "exchanges": [
+            {
+                "id": c.get("id"),
+                "exchange": c.get("exchange"),
+                "status": c.get("status"),
+                "permissions": c.get("permissions"),
+                "created_at": c.get("created_at"),
+            }
+            for c in connections
+        ],
+        "subscriptions": [
+            {
+                "tier": s.get("tier"),
+                "status": s.get("status"),
+                "auto_renew": bool(s.get("auto_renew")),
+                "started_at": s.get("started_at"),
+                "expires_at": s.get("expires_at"),
+            }
+            for s in subs
+        ],
+        "support_tickets": [
+            {
+                "id": t.get("id"),
+                "subject": t.get("subject"),
+                "status": t.get("status"),
+                "category": t.get("category"),
+                "created_at": t.get("created_at"),
+                "replied_at": t.get("replied_at"),
+            }
+            for t in tickets
+        ],
+        "notifications_unread": unread,
+    }

@@ -20,6 +20,7 @@ interface TradeRow {
   pnl: number | null;
   strategy: string;
   status: string;
+  is_demo?: boolean | null;
   opened_at: string;
   closed_at: string | null;
 }
@@ -48,6 +49,7 @@ export default function HistoryPage() {
   const [outcome, setOutcome] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  const [ledger, setLedger] = useState<"" | "demo" | "live">("");
 
   const query = useMemo(() => {
     const p = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(page * PAGE_SIZE) });
@@ -57,8 +59,9 @@ export default function HistoryPage() {
     if (outcome) p.set("outcome", outcome);
     if (startDate) p.set("start", startDate);
     if (endDate) p.set("end", endDate);
+    if (ledger) p.set("is_demo", String(ledger === "demo"));
     return p.toString();
-  }, [market, symbol, strategy, outcome, startDate, endDate, page]);
+  }, [market, symbol, strategy, outcome, startDate, endDate, ledger, page]);
 
   const refresh = useCallback(async () => {
     if (!token) return;
@@ -79,7 +82,7 @@ export default function HistoryPage() {
 
   function resetFilters() {
     setMarket(""); setSymbol(""); setStrategy(""); setOutcome("");
-    setStartDate(""); setEndDate(""); setPage(0);
+    setStartDate(""); setEndDate(""); setLedger(""); setPage(0);
   }
 
   const s = data?.summary;
@@ -96,7 +99,16 @@ export default function HistoryPage() {
       </div>
 
       <Card>
-        <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-6 gap-3 items-end">
+        <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-4 gap-3 items-end">
+          <select
+            value={ledger}
+            onChange={(e) => { setLedger(e.target.value as "" | "demo" | "live"); setPage(0); }}
+            className="bg-bg-tertiary border border-border rounded-lg px-3 py-2 text-sm text-text-primary outline-none focus:border-green/50 transition-colors"
+          >
+            <option value="">All Accounts</option>
+            <option value="demo">Demo</option>
+            <option value="live">Live</option>
+          </select>
           <select
             value={market}
             onChange={(e) => { setMarket(e.target.value); setPage(0); }}
@@ -133,7 +145,12 @@ export default function HistoryPage() {
       <Card padding={false}>
         <DataTable
           columns={[
-            { key: "symbol", header: "Symbol", render: (t: TradeRow) => <span className="font-medium">{t.symbol}</span> },
+            { key: "symbol", header: "Symbol", render: (t: TradeRow) => (
+              <span className="flex items-center gap-2">
+                <span className="font-medium">{t.symbol}</span>
+                {t.is_demo && <Badge variant="purple">DEMO</Badge>}
+              </span>
+            ) },
             { key: "market", header: "Market", render: (t: TradeRow) => <Badge variant={t.market === "stock" ? "blue" : t.market === "forex" ? "green" : "purple"}>{t.market}</Badge> },
             { key: "side", header: "Side", render: (t: TradeRow) => <Badge variant={t.side === "buy" ? "green" : "red"}>{t.side.toUpperCase()}</Badge> },
             { key: "qty", header: "Qty", render: (t: TradeRow) => <span className="font-mono">{t.quantity.toLocaleString()}</span> },

@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
@@ -75,7 +75,7 @@ export default function LoginPage() {
           </form>
 
           <div className="mt-6 text-center text-sm text-text-secondary">
-            Don&apos;t have an account?{" "}
+            Need help? <Link href='/support' className='text-green hover:underline'>Contact support</Link>. Don&apos;t have an account?{" "}
             <Link href="/register" className="text-green hover:underline">Sign up</Link>
           </div>
         </Card>

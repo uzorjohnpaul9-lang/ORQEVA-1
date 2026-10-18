@@ -213,10 +213,12 @@ async def _place_order_inner(db: SupabaseDB, user: dict, body: OrderRequest) -> 
     # fills the protective leg immediately at the worst possible price.
     _validate_protective_levels(body.side, price, body.stop_loss, body.take_profit)
 
-    # Risk gate: kill switch, max positions, daily loss, position size, exposure
-    risk_status = await risk_service.get_risk_status(db, user["id"])
+    # Risk gate: kill switch, max positions, daily loss, position size, exposure.
+    # Paper orders are the demo ledger and are gated on the demo balance.
+    risk_status = await risk_service.get_risk_status(db, user["id"], is_demo=(body.route != "live"))
     allowed, reason = await risk_service.pre_trade_check(
-        db, user["id"], body.market, body.quantity, price, status=risk_status
+        db, user["id"], body.market, body.quantity, price, status=risk_status,
+        is_demo=(body.route != "live"),
     )
     if not allowed:
         raise HTTPException(status_code=403, detail=reason)
@@ -305,6 +307,7 @@ async def history(
     outcome: str | None = Query(None, pattern="^(win|loss|open)$"),
     start: str | None = Query(None),
     end: str | None = Query(None),
+    is_demo: bool | None = Query(None),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: SupabaseDB = Depends(get_db),
@@ -321,6 +324,8 @@ async def history(
         where["symbol"] = symbol.upper()
     if strategy:
         where["strategy"] = strategy
+    if is_demo is not None:
+        where["is_demo"] = bool(is_demo)
     if outcome == "open":
         where["status"] = "open"
     elif outcome == "win":
@@ -357,6 +362,7 @@ async def history(
                 "pnl": t.get("pnl"),
                 "strategy": t.get("strategy"),
                 "status": t.get("status"),
+                "is_demo": t.get("is_demo"),
                 "opened_at": t.get("opened_at"),
                 "closed_at": t.get("closed_at"),
             }
@@ -377,16 +383,18 @@ async def analytics(
     days: int | None = Query(None, ge=1, le=365),
     start: str | None = Query(None),
     end: str | None = Query(None),
+    is_demo: bool | None = Query(None),
     db: SupabaseDB = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
     check_rate_limit(user["id"], user.get("tier", "free"))
     s, e = analytics_service.parse_range(start, end, days)
-    trades = await analytics_service.get_closed_trades(db, user["id"], start=s, end=e)
+    trades = await analytics_service.get_closed_trades(db, user["id"], start=s, end=e, is_demo=is_demo)
 
     wins = sum(1 for t in trades if (t.get("pnl") or 0) > 0)
     losses = sum(1 for t in trades if (t.get("pnl") or 0) < 0)
     total_pnl = round(sum(float(t.get("pnl") or 0) for t in trades), 2)
+    starting_value = await trade_service.get_starting_balance(db, user["id"], bool(is_demo))
 
     return {
         "range": {"start": s.isoformat() if s else None, "end": e.isoformat() if e else None},
@@ -396,7 +404,7 @@ async def analytics(
         "win_rate": round(wins / len(trades) * 100, 1) if trades else 0.0,
         "total_pnl": total_pnl,
         "pnl_series": analytics_service.pnl_series(trades),
-        "drawdown_series": analytics_service.drawdown_series(trades),
+        "drawdown_series": analytics_service.drawdown_series(trades, starting_value),
         "by_strategy": analytics_service.win_loss_by_strategy(trades),
         "correlation": analytics_service.correlation_matrix(trades),
     }
@@ -408,12 +416,13 @@ async def export_trades(
     days: int | None = Query(None, ge=1, le=365),
     start: str | None = Query(None),
     end: str | None = Query(None),
+    is_demo: bool | None = Query(None),
     db: SupabaseDB = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
     check_rate_limit(user["id"], user.get("tier", "free"))
     s, e = analytics_service.parse_range(start, end, days)
-    trades = await analytics_service.get_closed_trades(db, user["id"], start=s, end=e)
+    trades = await analytics_service.get_closed_trades(db, user["id"], start=s, end=e, is_demo=is_demo)
 
     csv_text = analytics_service.trades_to_csv(trades)
     filename = f"trades_{(s.date() if s else 'all')}_{(e.date() if e else 'all')}.csv"
@@ -422,3 +431,32 @@ async def export_trades(
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.get("/demo")
+async def demo_account(
+    db: SupabaseDB = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """Virtual (demo) account snapshot: balance, realized P&L, open positions."""
+    check_rate_limit(user["id"], user.get("tier", "free"))
+    return await trade_service.get_demo_account(db, user["id"])
+
+
+@router.post("/demo/reset")
+async def demo_reset(
+    db: SupabaseDB = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """Clear all demo trades and restore the demo starting balance."""
+    check_rate_limit(user["id"], user.get("tier", "free"))
+    result = await trade_service.reset_demo(db, user["id"])
+    try:
+        await notif_service.create(
+            db, user["id"], "trade", "Demo account reset",
+            f"Cleared {result['deleted']} demo trade(s). Balance restored to "
+            f"${result['starting_balance']:,.2f}.",
+        )
+    except Exception:
+        pass
+    return result

@@ -1,4 +1,4 @@
-export interface NavItem {
+﻿export interface NavItem {
   href: string;
   label: string;
   icon: string;
@@ -22,7 +22,7 @@ export const navItems: NavItem[] = [
   { href: "/ai-analysis", label: "AI Analysis", icon: "brain" },
   { href: "/exchanges", label: "Exchanges", icon: "link" },
   { href: "/notifications", label: "Notifications", icon: "bell" },
-  { href: "/help", label: "Help & Guide", icon: "question" },
+{ href: "/help", label: "Help & Guide", icon: "question" }, { href: "/support", label: "Support", icon: "question" },
   { href: "/settings", label: "Settings", icon: "settings" },
   { href: "/vip", label: "VIP", icon: "crown" },
 ];

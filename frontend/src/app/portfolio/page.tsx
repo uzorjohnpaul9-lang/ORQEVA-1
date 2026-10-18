@@ -17,17 +17,21 @@ export default function PortfolioPage() {
   const { token } = useAuth();
   const [perf, setPerf] = useState<PortfolioPerformance | null>(null);
   const [closed, setClosed] = useState<Trade[]>([]);
+  const [ledger, setLedger] = useState<"" | "demo" | "live">("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!token) return;
     let active = true;
+    const demoSuffix = ledger ? `is_demo=${ledger === "demo"}` : "";
+    const perfUrl = demoSuffix ? `/api/portfolio/performance?${demoSuffix}` : "/api/portfolio/performance";
+    const tradesUrl = `/api/portfolio/trades?status=closed&limit=50${demoSuffix ? `&${demoSuffix}` : ""}`;
     (async () => {
       try {
         const [p, t] = await Promise.all([
-          api<PortfolioPerformance>("/api/portfolio/performance", { token }),
-          api<Trade[]>("/api/portfolio/trades?status=closed&limit=50", { token }),
+          api<PortfolioPerformance>(perfUrl, { token }),
+          api<Trade[]>(tradesUrl, { token }),
         ]);
         if (active) { setPerf(p); setClosed(t); }
       } catch {
@@ -37,13 +41,29 @@ export default function PortfolioPage() {
       }
     })();
     return () => { active = false; };
-  }, [token]);
+  }, [token, ledger]);
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Portfolio</h1>
-        <p className="text-sm text-text-secondary mt-1">Holdings and realized performance</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">Portfolio</h1>
+          <p className="text-sm text-text-secondary mt-1">Holdings and realized performance</p>
+        </div>
+        <div className="flex items-center gap-1 rounded-lg border border-border bg-bg-tertiary p-1">
+          {([["", "All"], ["demo", "Demo"], ["live", "Live"]] as const).map(([val, label]) => (
+            <button
+              key={val}
+              type="button"
+              onClick={() => setLedger(val)}
+              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                ledger === val ? "bg-green text-bg" : "text-text-secondary hover:text-text-primary"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {error && <p className="text-sm text-red">{error}</p>}
@@ -111,6 +131,7 @@ export default function PortfolioPage() {
                       <span className="flex items-center gap-2">
                         <span className="font-medium">{t.symbol}</span>
                         <Badge variant={t.side === "buy" ? "green" : "red"}>{t.side.toUpperCase()}</Badge>
+                        {t.is_demo && <Badge variant="purple">DEMO</Badge>}
                       </span>
                     ),
                   },

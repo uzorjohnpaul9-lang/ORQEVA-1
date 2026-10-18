@@ -99,8 +99,18 @@ export interface Trade {
   pnl: number | null;
   status: "open" | "closed";
   strategy: string | null;
+  /** True for virtual/demo (paper) trades; false for live broker trades. */
+  is_demo?: boolean | null;
   opened_at: string;
   closed_at: string | null;
+}
+
+export interface DemoAccount {
+  starting_balance: number;
+  realized_pnl: number;
+  portfolio_value: number;
+  open_positions: number;
+  closed_trades: number;
 }
 
 export interface Position extends Trade {
@@ -253,4 +263,48 @@ export interface CalendarEventContext {
   events: CalendarEvent[];
   affected_markets: string[];
   attribution: CalendarAttribution;
+}
+
+export interface SupportTicket {
+  id: string;
+  subject: string;
+  message: string;
+  category: string;
+  status: string;
+  reply?: string | null;
+  replied_at?: string | null;
+  created_at: string;
+  updated_at?: string;
+  user_id?: string | null;
+  email?: string;
+  user_email?: string;
+  priority?: string;
+  source?: string;
+  assigned_to?: string | null;
+  replied_by?: string | null;
+}
+
+export interface AdminUserContext {
+  profile: {
+    id: string;
+    email: string;
+    username: string;
+    tier: string;
+    is_admin: boolean;
+    is_active: boolean;
+    telegram_chat_id: string | null;
+    created_at: string;
+  };
+  preferences: Record<string, unknown> | null;
+  risk: Record<string, unknown> | null;
+  activity: {
+    open_positions: number;
+    closed_positions: number;
+    realized_pnl: number;
+    recent_trades: Array<Record<string, unknown>>;
+  };
+  exchanges: Array<Record<string, unknown>>;
+  subscriptions: Array<Record<string, unknown>>;
+  support_tickets: Array<Record<string, unknown>>;
+  notifications_unread: number;
 }

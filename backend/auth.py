@@ -7,6 +7,7 @@ from backend.db.supabase import SupabaseDB, get_db, get_service_client
 from backend.db.models import USERS
 
 security = HTTPBearer()
+optional_security = HTTPBearer(auto_error=False)
 
 
 async def resolve_user_from_token(token: str) -> str | None:
@@ -53,4 +54,24 @@ async def get_current_user(
 async def require_admin(user: dict = Depends(get_current_user)) -> dict:
     if not user.get("is_admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    return user
+
+
+async def get_optional_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(optional_security),
+    db: SupabaseDB = Depends(get_db),
+) -> dict | None:
+    """Return the caller when a valid token is supplied, else None.
+
+    For endpoints that are public but enrich the response when signed in
+    (e.g. the support channel, reachable from the login page).
+    """
+    if credentials is None:
+        return None
+    user_id = await resolve_user_from_token(credentials.credentials)
+    if not user_id:
+        return None
+    user = await db.fetch_one(USERS, {"id": user_id})
+    if not user or not user.get("is_active"):
+        return None
     return user

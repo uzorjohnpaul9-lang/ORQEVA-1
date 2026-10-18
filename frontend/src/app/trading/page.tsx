@@ -20,6 +20,8 @@ const MARKETS = [
 export default function TradingPage() {
   const { token } = useAuth();
   const [positions, setPositions] = useState<Position[]>([]);
+  const [mode, setMode] = useState<"demo" | "live">("demo");
+  const [resetting, setResetting] = useState(false);
   const [recent, setRecent] = useState<Trade[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -30,27 +32,28 @@ export default function TradingPage() {
   const [market, setMarket] = useState("forex");
   const [side, setSide] = useState("buy");
   const [quantity, setQuantity] = useState("10000");
-  const [route, setRoute] = useState("paper");
   const [stopLoss, setStopLoss] = useState("");
   const [takeProfit, setTakeProfit] = useState("");
+  const route = mode === "live" ? "live" : "paper";
   const [submitting, setSubmitting] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!token) return;
+    const demo = mode === "demo";
     try {
-      const [p, r] = await Promise.all([
-        api<Position[]>("/api/portfolio/positions", { token }),
-        api<Trade[]>("/api/portfolio/trades?limit=10", { token }),
+      const [p, t] = await Promise.all([
+        api<Position[]>(`/api/portfolio/positions?is_demo=${demo}`, { token }),
+        api<Trade[]>(`/api/portfolio/trades?limit=50&is_demo=${demo}`, { token }),
       ]);
       setPositions(p);
-      setRecent(r);
+      setRecent(t);
       setError(null);
     } catch {
-      setError("Could not load trading data");
+      setError("Could not load trades");
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, [token, mode]);
 
   useEffect(() => {
     if (!token) return;
@@ -128,12 +131,80 @@ export default function TradingPage() {
   const invested = positions.reduce((s, t) => s + t.entry_price * t.quantity, 0);
   const unrealized = positions.reduce((s, t) => s + (t.unrealized_pnl ?? 0), 0);
 
+  async function resetDemo() {
+    if (!token || !window.confirm("Clear all demo trades and restore the starting balance?")) return;
+    setResetting(true);
+    setError(null);
+    try {
+      const res = await api<{ deleted: number; starting_balance: number }>("/api/trading/demo/reset", {
+        method: "POST",
+        token,
+        body: "{}",
+      });
+      setNotice(`Demo reset: cleared ${res.deleted} trade(s). Balance $${res.starting_balance.toLocaleString()}`);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Demo reset failed");
+    } finally {
+      setResetting(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Trading</h1>
-        <p className="text-sm text-text-secondary mt-1">Place paper orders and manage open positions</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">Trading</h1>
+          <p className="text-sm text-text-secondary mt-1">
+            {mode === "demo"
+              ? "Practice with a virtual balance - no real money at risk"
+              : "Place live orders at your connected broker"}
+          </p>
+        </div>
+        <div className="flex items-center gap-1 rounded-lg border border-border bg-bg-tertiary p-1">
+          {(["demo", "live"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setMode(m)}
+              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                mode === m ? "bg-green text-bg" : "text-text-secondary hover:text-text-primary"
+              }`}
+            >
+              {m === "demo" ? "Demo" : "Live"}
+            </button>
+          ))}
+        </div>
       </div>
+
+      {mode === "demo" ? (
+        <Card className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Badge variant="purple">DEMO</Badge>
+            <p className="text-sm text-text-secondary">
+              You are trading a virtual account. Connect a broker to trade live.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="secondary" size="sm" onClick={resetDemo} disabled={resetting}>
+              {resetting ? "Resetting..." : "Reset Demo"}
+            </Button>
+            <a
+              href="/exchanges"
+              className="inline-flex items-center rounded-lg border border-green px-3 py-2 text-sm font-medium text-green hover:bg-green hover:text-bg transition-colors"
+            >
+              Go Live
+            </a>
+          </div>
+        </Card>
+      ) : (
+        <Card>
+          <p className="text-sm text-text-secondary">
+            Live orders execute at your connected broker. Demo trades stay separate and are not
+            affected by live activity.
+          </p>
+        </Card>
+      )}
 
       {error && <p className="text-sm text-red">{error}</p>}
       {notice && <p className="text-sm text-green">{notice}</p>}
@@ -173,15 +244,12 @@ export default function TradingPage() {
               onChange={(e) => setQuantity(e.target.value)}
               required
             />
-            <Select
-              label="Route"
-              value={route}
-              options={[
-                { value: "paper", label: "Paper (simulated)" },
-                { value: "live", label: "Live (broker)" },
-              ]}
-              onChange={(e) => setRoute(e.target.value)}
-            />
+            <div className="flex items-center justify-between rounded-lg border border-border bg-bg-tertiary px-3 py-2 text-sm">
+              <span className="text-text-muted">Account</span>
+              <Badge variant={mode === "demo" ? "purple" : "green"}>
+                {mode === "demo" ? "DEMO" : "LIVE"}
+              </Badge>
+            </div>
             {route === "live" && (
               <div className="grid grid-cols-2 gap-3">
                 <Input
@@ -256,6 +324,7 @@ export default function TradingPage() {
                     <Badge variant={t.side === "buy" ? "green" : "red"}>{t.side.toUpperCase()}</Badge>
                     <span className="font-medium">{t.symbol}</span>
                     <span className="text-text-muted">{t.quantity}</span>
+                    {t.is_demo && <Badge variant="purple">DEMO</Badge>}
                   </span>
                   <span className="flex items-center gap-3">
                     <span className="font-mono">{t.entry_price.toLocaleString()}</span>

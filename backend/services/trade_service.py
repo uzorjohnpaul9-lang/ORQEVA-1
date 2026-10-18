@@ -1,13 +1,35 @@
 from datetime import datetime, timezone
 
-from backend.db.models import TRADES, gen_uuid
+from backend.db.models import TRADES, USER_PREFERENCES, gen_uuid
 from backend.db.supabase import SupabaseDB, now_iso, parse_dt
+
+DEFAULT_STARTING_BALANCE = 100000.0
+
+
+async def get_starting_balance(db: SupabaseDB, user_id: str, is_demo: bool = False) -> float:
+    """Starting balance for a ledger: the per-user demo balance, or the live default.
+
+    Paper/demo accounts carry a virtual balance the user can reset; the live
+    ledger keeps the fixed platform baseline.
+    """
+    if not is_demo:
+        return DEFAULT_STARTING_BALANCE
+    prefs = await db.fetch_one(
+        USER_PREFERENCES, {"user_id": user_id}, columns="demo_starting_balance"
+    )
+    if prefs and prefs.get("demo_starting_balance") is not None:
+        try:
+            return float(prefs["demo_starting_balance"])
+        except (TypeError, ValueError):
+            return DEFAULT_STARTING_BALANCE
+    return DEFAULT_STARTING_BALANCE
 
 
 async def save_trade(db: SupabaseDB, user_id: str, symbol: str, market: str,
                      side: str, quantity: float, entry_price: float,
                      strategy: str | None = None, exchange: str | None = None,
-                     broker_order_id: str | None = None) -> dict:
+                     broker_order_id: str | None = None,
+                     is_demo: bool = False) -> dict:
     trade = {
         "id": gen_uuid(),
         "user_id": user_id,
@@ -24,6 +46,7 @@ async def save_trade(db: SupabaseDB, user_id: str, symbol: str, market: str,
         "broker_order_id": broker_order_id,
         "stop_loss": None,
         "take_profit": None,
+        "is_demo": is_demo,
         "opened_at": now_iso(),
         "closed_at": None,
     }
@@ -54,19 +77,25 @@ async def close_trade(db: SupabaseDB, trade_id: str, exit_price: float) -> dict 
 
 
 async def list_trades(db: SupabaseDB, user_id: str, market: str | None = None,
-                      status: str | None = None, limit: int = 50) -> list[dict]:
+                      status: str | None = None, limit: int = 50,
+                      is_demo: bool | None = None) -> list[dict]:
     where: dict[str, object] = {"user_id": user_id}
     if market:
         where["market"] = market
     if status:
         where["status"] = status
+    if is_demo is not None:
+        where["is_demo"] = bool(is_demo)
     return await db.fetch_all(TRADES, where=where, order="opened_at.desc", limit=limit)
 
 
-async def get_portfolio_summary(db: SupabaseDB, user_id: str):
-    total = await db.count(TRADES, where={"user_id": user_id})
-    open_count = await db.count(TRADES, where={"user_id": user_id, "status": "open"})
-    pnl_rows = await db.fetch_all(TRADES, where={"user_id": user_id}, columns="pnl")
+async def get_portfolio_summary(db: SupabaseDB, user_id: str, is_demo: bool | None = None):
+    where: dict[str, object] = {"user_id": user_id}
+    if is_demo is not None:
+        where["is_demo"] = bool(is_demo)
+    total = await db.count(TRADES, where=where)
+    open_count = await db.count(TRADES, where={**where, "status": "open"})
+    pnl_rows = await db.fetch_all(TRADES, where=where, columns="pnl")
     total_pnl = sum(float(r.get("pnl") or 0) for r in pnl_rows)
     wins = sum(1 for r in pnl_rows if (r.get("pnl") or 0) > 0)
 
@@ -78,9 +107,12 @@ async def get_portfolio_summary(db: SupabaseDB, user_id: str):
     }
 
 
-async def get_holdings(db: SupabaseDB, user_id: str) -> list[dict]:
+async def get_holdings(db: SupabaseDB, user_id: str, is_demo: bool | None = None) -> list[dict]:
     """Aggregate open trades into per-symbol holdings (net quantity + avg entry)."""
-    trades = await db.fetch_all(TRADES, where={"user_id": user_id, "status": "open"})
+    where: dict[str, object] = {"user_id": user_id, "status": "open"}
+    if is_demo is not None:
+        where["is_demo"] = bool(is_demo)
+    trades = await db.fetch_all(TRADES, where=where)
 
     groups: dict[tuple[str, str], dict] = {}
     for tr in trades:
@@ -113,15 +145,14 @@ async def get_holdings(db: SupabaseDB, user_id: str) -> list[dict]:
     return out
 
 
-async def get_performance(db: SupabaseDB, user_id: str) -> dict:
+async def get_performance(db: SupabaseDB, user_id: str, is_demo: bool | None = None) -> dict:
     """Realized performance: equity curve, win/loss stats, allocation by market."""
-    trades = await db.fetch_all(
-        TRADES,
-        where={"user_id": user_id, "status": "closed"},
-        order="closed_at.asc",
-    )
+    where: dict[str, object] = {"user_id": user_id, "status": "closed"}
+    if is_demo is not None:
+        where["is_demo"] = bool(is_demo)
+    trades = await db.fetch_all(TRADES, where=where, order="closed_at.asc")
 
-    START = 100000.0
+    START = await get_starting_balance(db, user_id, bool(is_demo))
     equity_curve: list[dict] = []
     allocation: dict[str, float] = {}
     cum = 0.0
@@ -161,4 +192,34 @@ async def get_performance(db: SupabaseDB, user_id: str) -> dict:
             {"market": k, "value": round(v, 2)}
             for k, v in sorted(allocation.items(), key=lambda kv: -kv[1])
         ],
+    }
+
+
+async def get_demo_account(db: SupabaseDB, user_id: str) -> dict:
+    """Snapshot of the user's virtual (demo) trading account."""
+    starting = await get_starting_balance(db, user_id, is_demo=True)
+    closed = await db.fetch_all(
+        TRADES, where={"user_id": user_id, "is_demo": True, "status": "closed"}, columns="pnl"
+    )
+    realized = sum(float(r.get("pnl") or 0) for r in closed)
+    open_count = await db.count(
+        TRADES, where={"user_id": user_id, "is_demo": True, "status": "open"}
+    )
+    return {
+        "starting_balance": round(starting, 2),
+        "realized_pnl": round(realized, 2),
+        "portfolio_value": round(starting + realized, 2),
+        "open_positions": open_count,
+        "closed_trades": len(closed),
+    }
+
+
+async def reset_demo(db: SupabaseDB, user_id: str) -> dict:
+    """Clear the user's demo trades, restoring the starting balance."""
+    deleted = await db.delete(TRADES, {"user_id": user_id, "is_demo": True})
+    starting = await get_starting_balance(db, user_id, is_demo=True)
+    return {
+        "deleted": len(deleted),
+        "starting_balance": round(starting, 2),
+        "portfolio_value": round(starting, 2),
     }

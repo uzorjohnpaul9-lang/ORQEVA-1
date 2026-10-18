@@ -216,7 +216,8 @@ async def execute_for_signal(db: SupabaseDB, signal: dict, settings_rows: list[d
                     continue
 
             # Size from risk-per-trade %, capped by the user's max position %.
-            status = await risk_service.get_risk_status(db, s["user_id"])
+            # Scope the balance to the ledger this order routes to.
+            status = await risk_service.get_risk_status(db, s["user_id"], is_demo=(route != "live"))
             account_value = float(status.get("account_value") or 0)
             pos_size_pct = status.get("limits", {}).get("max_position_size_pct", 10.0)
             qty = _size_trade(signal, account_value, s.get("per_trade_risk_pct"), pos_size_pct, price)

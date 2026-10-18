@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 from backend.db.models import TRADES, RISK_SETTINGS, gen_uuid
 from backend.db.supabase import SupabaseDB, now_iso, parse_dt
+from backend.services import trade_service
 
 
 async def get_or_create_settings(db: SupabaseDB, user_id: str) -> dict:
@@ -33,15 +34,22 @@ def _utc_day_start() -> datetime:
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-async def get_risk_status(db: SupabaseDB, user_id: str) -> dict:
-    """User-level risk metrics computed from their trades + settings."""
+async def get_risk_status(db: SupabaseDB, user_id: str, is_demo: bool | None = None) -> dict:
+    """User-level risk metrics computed from their trades + settings.
+
+    ``is_demo`` scopes the metrics to one ledger: True = virtual/demo account,
+    False = live account, None = both (legacy, unscoped).
+    """
     settings = await get_or_create_settings(db, user_id)
 
+    base: dict = {"user_id": user_id}
+    ledger: dict = {} if is_demo is None else {"is_demo": bool(is_demo)}
+
     closed = await db.fetch_all(
-        TRADES, where={"user_id": user_id, "status": "closed"}, columns="id,pnl,closed_at"
+        TRADES, where={**base, "status": "closed", **ledger}, columns="id,pnl,closed_at"
     )
     realized = sum(float(r.get("pnl") or 0) for r in closed)
-    account_value = 100000.0 + realized
+    account_value = await trade_service.get_starting_balance(db, user_id, bool(is_demo)) + realized
 
     day_start = _utc_day_start()
     today_closed = [r for r in closed if parse_dt(r.get("closed_at")) and parse_dt(r["closed_at"]) >= day_start]
@@ -49,12 +57,15 @@ async def get_risk_status(db: SupabaseDB, user_id: str) -> dict:
 
     opened_today = await db.fetch_all(
         TRADES,
-        where={"user_id": user_id, "opened_at": {"op": "gte", "value": day_start.isoformat().replace("+00:00", "Z")}},
+        where={
+            **base, **ledger,
+            "opened_at": {"op": "gte", "value": day_start.isoformat().replace("+00:00", "Z")},
+        },
         columns="id",
     )
     trades_today = len(opened_today)
 
-    open_trades = await db.fetch_all(TRADES, where={"user_id": user_id, "status": "open"})
+    open_trades = await db.fetch_all(TRADES, where={**base, "status": "open", **ledger})
     exposure_by_market: dict[str, float] = {}
     for t in open_trades:
         mkt = t.get("market") or "other"
@@ -122,15 +133,17 @@ async def get_risk_status(db: SupabaseDB, user_id: str) -> dict:
 
 async def pre_trade_check(db: SupabaseDB, user_id: str, market: str,
                           quantity: float, price: float,
-                          status: dict | None = None) -> tuple[bool, str]:
+                          status: dict | None = None,
+                          is_demo: bool | None = None) -> tuple[bool, str]:
     """Gate for placing new orders. Returns (allowed, reason).
 
     ``price`` must be a resolved market price: the size and exposure caps below
     are proportional to ``quantity * price``, so a zero price silently passes.
     Callers that also need the status (e.g. to feed the central risk engine)
-    can pass a pre-fetched one to avoid a second round of queries.
+    can pass a pre-fetched one to avoid a second round of queries. ``is_demo``
+    selects which ledger's balance the caps are measured against.
     """
-    status = status or await get_risk_status(db, user_id)
+    status = status or await get_risk_status(db, user_id, is_demo)
 
     if price is None or price <= 0:
         return False, "Price unavailable - cannot evaluate position size or exposure"

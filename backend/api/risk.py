@@ -1,6 +1,6 @@
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.db.database import get_db
@@ -33,11 +33,12 @@ class KillSwitchRequest(BaseModel):
 
 @router.get("/status")
 async def risk_status(
+    is_demo: bool | None = Query(None),
     db: SupabaseDB = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
     check_rate_limit(user["id"], user.get("tier", "free"))
-    status = await risk_service.get_risk_status(db, user["id"])
+    status = await risk_service.get_risk_status(db, user["id"], is_demo=is_demo)
     # Cross-market engine summary (shared state across all users' activity)
     status["engine"] = await asyncio.to_thread(central.get_portfolio_summary)
     return status
@@ -45,11 +46,12 @@ async def risk_status(
 
 @router.get("/exposure")
 async def risk_exposure(
+    is_demo: bool | None = Query(None),
     db: SupabaseDB = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
     check_rate_limit(user["id"], user.get("tier", "free"))
-    status = await risk_service.get_risk_status(db, user["id"])
+    status = await risk_service.get_risk_status(db, user["id"], is_demo=is_demo)
     return {
         "exposure_by_market": status["exposure_by_market"],
         "total_exposure": status["total_exposure"],

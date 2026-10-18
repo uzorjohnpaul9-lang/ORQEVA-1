@@ -13,11 +13,14 @@ def _iso(dt: datetime) -> str:
 
 async def get_closed_trades(db: SupabaseDB, user_id: str,
                             start: datetime | None = None,
-                            end: datetime | None = None) -> list[dict]:
+                            end: datetime | None = None,
+                            is_demo: bool | None = None) -> list[dict]:
     where: dict = {"user_id": user_id, "status": "closed"}
-    if start is not None:
+    if is_demo is not None:
+        where["is_demo"] = bool(is_demo)
+    if start:
         where["closed_at"] = {"op": "gte", "value": _iso(start)}
-    if end is not None:
+    if end:
         where["closed_at"] = {"op": "lte", "value": _iso(end)}
     return await db.fetch_all(TRADES, where=where, order="closed_at.asc")
 
@@ -44,7 +47,7 @@ def pnl_series(trades: list[dict]) -> list[dict]:
     return out
 
 
-def drawdown_series(trades: list[dict]) -> list[dict]:
+def drawdown_series(trades: list[dict], starting_value: float = 100000.0) -> list[dict]:
     """Running drawdown from peak equity."""
     out = []
     cum = 0.0
@@ -53,10 +56,11 @@ def drawdown_series(trades: list[dict]) -> list[dict]:
         cum += float(t.get("pnl") or 0.0)
         peak = max(peak, cum)
         dd = cum - peak
+        base = starting_value + peak
         out.append({
             "date": _day_key(parse_dt(t.get("closed_at"))),
             "drawdown": round(dd, 2),
-            "drawdown_pct": round((dd / (100000.0 + peak) * 100), 3) if (100000.0 + peak) else 0.0,
+            "drawdown_pct": round((dd / base * 100), 3) if base else 0.0,
         })
     return out
 

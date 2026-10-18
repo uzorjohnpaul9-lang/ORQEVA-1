@@ -789,7 +789,6 @@ class TestTelegramCommands(unittest.TestCase):
 
 class TestWeeklyDigest(unittest.TestCase):
     """Phase C: digest scheduling + rendering."""
-
     def test_should_send_digest_schedule(self):
         from backend.services.scheduler import should_send_digest
         sunday_evening = datetime(2026, 10, 18, 19, 0)
@@ -815,6 +814,195 @@ class TestWeeklyDigest(unittest.TestCase):
         from backend.services.telegram_service import format_weekly_digest
         out = format_weekly_digest({})
         self.assertIn("No resolved signals yet", out)
+
+
+class _FakeTradeDB:
+    """In-memory stand-in for SupabaseDB scoped to demo-account logic."""
+
+    def __init__(self, prefs=None, rows=None):
+        self._prefs = dict(prefs or {})
+        self.rows = [dict(r) for r in (rows or [])]
+
+    @staticmethod
+    def _match(row, where):
+        for k, v in (where or {}).items():
+            if isinstance(v, dict) and "op" in v:
+                op, val, rv = v["op"], v.get("value"), row.get(k)
+                if rv is None:
+                    return False
+                if op == "gte" and not rv >= val:
+                    return False
+                if op == "lte" and not rv <= val:
+                    return False
+                if op == "gt" and not rv > val:
+                    return False
+                if op == "lt" and not rv < val:
+                    return False
+            elif row.get(k) != v:
+                return False
+        return True
+
+    async def fetch_one(self, table, where=None, columns="*"):
+        return dict(self._prefs) if self._prefs else None
+
+    async def fetch_all(self, table, where=None, columns="*"):
+        return [dict(r) for r in self.rows if self._match(r, where)]
+
+    async def count(self, table, where=None):
+        return sum(1 for r in self.rows if self._match(r, where))
+
+    async def delete(self, table, where=None):
+        removed = [r for r in self.rows if self._match(r, where)]
+        self.rows = [r for r in self.rows if not self._match(r, where)]
+        return removed
+
+
+class TestDemoAccounts(unittest.TestCase):
+    """Phase D: virtual/demo ledger isolation + balance."""
+
+    def test_starting_balance_from_prefs(self):
+        import asyncio
+        from backend.services.trade_service import get_starting_balance, DEFAULT_STARTING_BALANCE
+        db = _FakeTradeDB({"user_id": "u1", "demo_starting_balance": 250000})
+        self.assertEqual(asyncio.run(get_starting_balance(db, "u1", is_demo=True)), 250000.0)
+        self.assertEqual(asyncio.run(get_starting_balance(db, "u1", is_demo=False)), DEFAULT_STARTING_BALANCE)
+
+    def test_reset_demo_clears_only_demo_trades(self):
+        import asyncio
+        from backend.services.trade_service import reset_demo
+        db = _FakeTradeDB(
+            {"user_id": "u1", "demo_starting_balance": 50000},
+            [
+                {"id": "a", "user_id": "u1", "is_demo": True, "status": "closed", "pnl": 100},
+                {"id": "b", "user_id": "u1", "is_demo": False, "status": "closed", "pnl": 999},
+            ],
+        )
+        res = asyncio.run(reset_demo(db, "u1"))
+        self.assertEqual(res["deleted"], 1)
+        self.assertEqual(res["starting_balance"], 50000.0)
+        self.assertEqual([t["id"] for t in db.rows], ["b"])
+
+    def test_demo_account_snapshot(self):
+        import asyncio
+        from backend.services.trade_service import get_demo_account
+        db = _FakeTradeDB(
+            {"user_id": "u1", "demo_starting_balance": 10000},
+            [
+                {"id": "a", "user_id": "u1", "is_demo": True, "status": "closed", "pnl": 150},
+                {"id": "b", "user_id": "u1", "is_demo": True, "status": "closed", "pnl": -50},
+                {"id": "c", "user_id": "u1", "is_demo": True, "status": "open"},
+                {"id": "d", "user_id": "u1", "is_demo": False, "status": "closed", "pnl": 500},
+            ],
+        )
+        snap = asyncio.run(get_demo_account(db, "u1"))
+        self.assertEqual(snap["starting_balance"], 10000.0)
+        self.assertEqual(snap["realized_pnl"], 100.0)
+        self.assertEqual(snap["portfolio_value"], 10100.0)
+        self.assertEqual(snap["open_positions"], 1)
+        self.assertEqual(snap["closed_trades"], 2)
+
+    def test_risk_status_uses_demo_balance(self):
+        import asyncio
+        from backend.services.risk_service import get_risk_status
+        db = _FakeTradeDB(
+            {"user_id": "u1", "demo_starting_balance": 10000},
+            [
+                {"id": "a", "user_id": "u1", "is_demo": True, "status": "closed", "pnl": 250},
+                {"id": "z", "user_id": "u1", "is_demo": False, "status": "closed", "pnl": 99999},
+            ],
+        )
+        status = asyncio.run(get_risk_status(db, "u1", is_demo=True))
+        self.assertEqual(status["account_value"], 10250.0)
+
+
+class _FakeResetDB:
+    def __init__(self, user):
+        self.user = user
+        self.inserts = []
+
+    async def fetch_one(self, table, where, columns=None):
+        from backend.db.models import USERS
+
+        return self.user if table == USERS else None
+
+    async def insert(self, table, row):
+        self.inserts.append((table, row))
+        return row
+
+
+class TestPasswordResetEmail(unittest.TestCase):
+    """Phase E: reset-link construction, SMTP toggle and fallback delivery."""
+
+    def test_reset_email_embeds_link(self):
+        from backend.services.email_service import reset_email
+        subject, html = reset_email("u@test.dev", "https://app.orqeva.test/reset?token=abc123")
+        self.assertIn("password reset", subject.lower())
+        self.assertIn("https://app.orqeva.test/reset?token=abc123", html)
+
+    def test_absolute_link_joins_base(self):
+        from backend.api.auth import _absolute_link
+        from backend.config import settings as st
+        orig = st.APP_BASE_URL
+        try:
+            st.APP_BASE_URL = "https://app.orqeva.test/"
+            self.assertEqual(_absolute_link("/reset?token=x"), "https://app.orqeva.test/reset?token=x")
+            st.APP_BASE_URL = "https://app.orqeva.test"
+            self.assertEqual(_absolute_link("/reset?token=x"), "https://app.orqeva.test/reset?token=x")
+            st.APP_BASE_URL = ""
+            self.assertEqual(_absolute_link("/reset?token=x"), "/reset?token=x")
+        finally:
+            st.APP_BASE_URL = orig
+
+    def test_send_email_disabled_is_false(self):
+        import asyncio
+        from backend.config import settings as st
+        from backend.services import email_service
+        orig = st.SMTP_HOST
+        try:
+            st.SMTP_HOST = ""
+            self.assertFalse(email_service.is_configured())
+            self.assertFalse(asyncio.run(email_service.send_email("u@test.dev", "s", "<p>x</p>")))
+        finally:
+            st.SMTP_HOST = orig
+
+    def test_forgot_fallback_delivers_link(self):
+        import asyncio
+        from backend.api.auth import ForgotRequest, forgot_password
+        from backend.config import settings as st
+        from backend.db.models import NOTIFICATIONS, PASSWORD_RESET_TOKENS
+        db = _FakeResetDB({"id": "u1", "email": "u@test.dev", "is_active": True,
+                           "telegram_chat_id": None, "tier": "free"})
+        orig_host, orig_base = st.SMTP_HOST, st.APP_BASE_URL
+        try:
+            st.SMTP_HOST = ""
+            st.APP_BASE_URL = "https://app.orqeva.test"
+            res = asyncio.run(forgot_password(ForgotRequest(email="u@test.dev"), db=db))
+        finally:
+            st.SMTP_HOST, st.APP_BASE_URL = orig_host, orig_base
+        self.assertEqual(res["status"], "ok")
+        self.assertTrue(any(t == PASSWORD_RESET_TOKENS for t, _ in db.inserts))
+        notes = [r for t, r in db.inserts if t == NOTIFICATIONS]
+        self.assertEqual(len(notes), 1)
+        self.assertIn("https://app.orqeva.test/reset?token=", notes[0]["message"])
+
+    def test_forgot_email_path_skips_fallback(self):
+        import asyncio
+        from unittest import mock
+        from backend.api.auth import ForgotRequest, forgot_password
+        from backend.config import settings as st
+        from backend.db.models import NOTIFICATIONS
+        from backend.services import email_service
+        db = _FakeResetDB({"id": "u1", "email": "u@test.dev", "is_active": True,
+                           "telegram_chat_id": None, "tier": "free"})
+        orig = st.APP_BASE_URL
+        try:
+            st.APP_BASE_URL = "https://app.orqeva.test"
+            with mock.patch.object(email_service, "is_configured", return_value=True), \
+                 mock.patch.object(email_service, "send_email", new=mock.AsyncMock(return_value=True)):
+                asyncio.run(forgot_password(ForgotRequest(email="u@test.dev"), db=db))
+        finally:
+            st.APP_BASE_URL = orig
+        self.assertFalse(any(t == NOTIFICATIONS for t, _ in db.inserts))
 
 
 if __name__ == "__main__":

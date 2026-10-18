@@ -72,7 +72,7 @@ class TradeResponse(BaseModel):
     pnl: float | None
     status: str
     strategy: str | None
-    exchange: str | None
+    is_demo: bool | None = None
     opened_at: datetime
     closed_at: datetime | None
 

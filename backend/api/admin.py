@@ -12,7 +12,7 @@ from backend.db.database import get_db
 from backend.db.models import USERS
 from backend.db.supabase import SupabaseDB, get_service_client, now_iso
 from backend.middleware.rate_limiter import check_rate_limit
-from backend.services import admin_service, notification_service, telegram_service
+from backend.services import admin_service, notification_service, telegram_service, support_service
 
 logger = logging.getLogger(__name__)
 
@@ -408,3 +408,108 @@ async def invalidate_signal(
         {"symbol": sig.get("symbol"), "market": sig.get("market")},
     )
     return admin_service.signal_view(sig)
+
+
+# ---- Support queue (Phase F) --------------------------------------------
+
+class SupportReply(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    status: str | None = Field(default=None, pattern="^(open|in_progress|resolved|closed)$")
+    priority: str | None = Field(default=None, pattern="^(low|normal|high)$")
+
+
+class SupportUpdate(BaseModel):
+    status: str | None = Field(default=None, pattern="^(open|in_progress|resolved|closed)$")
+    priority: str | None = Field(default=None, pattern="^(low|normal|high)$")
+
+
+@router.get("/support")
+async def support_list(
+    status: str | None = Query(None, pattern="^(open|in_progress|resolved|closed)$"),
+    limit: int = Query(100, ge=1, le=200),
+    db: SupabaseDB = Depends(get_db),
+    admin: dict = Depends(require_admin),
+):
+    check_rate_limit(admin["id"], "admin")
+    return await support_service.list_all(db, status=status, limit=limit)
+
+
+@router.get("/support/stats")
+async def support_stats(
+    db: SupabaseDB = Depends(get_db),
+    admin: dict = Depends(require_admin),
+):
+    check_rate_limit(admin["id"], "admin")
+    return await support_service.stats(db)
+
+
+@router.get("/support/{ticket_id}")
+async def support_get(
+    ticket_id: str,
+    db: SupabaseDB = Depends(get_db),
+    admin: dict = Depends(require_admin),
+):
+    check_rate_limit(admin["id"], "admin")
+    ticket = await support_service.get_ticket(db, ticket_id)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    return ticket
+
+
+@router.post("/support/{ticket_id}/reply")
+async def support_reply(
+    ticket_id: str,
+    body: SupportReply,
+    db: SupabaseDB = Depends(get_db),
+    admin: dict = Depends(require_admin),
+):
+    check_rate_limit(admin["id"], "admin")
+    ticket = await support_service.reply(
+        db, admin, ticket_id, body.message, status=body.status, priority=body.priority
+    )
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    await admin_service.log_action(
+        db, admin, "support.reply", "support_ticket", ticket_id,
+        {"status": ticket.get("status")},
+    )
+    if ticket.get("user_id"):
+        await notification_service.create(
+            db, ticket["user_id"], "system", "Support replied",
+            f"Re: {ticket.get('subject')} - {body.message[:400]}",
+        )
+    return ticket
+
+
+@router.patch("/support/{ticket_id}")
+async def support_update(
+    ticket_id: str,
+    body: SupportUpdate,
+    db: SupabaseDB = Depends(get_db),
+    admin: dict = Depends(require_admin),
+):
+    check_rate_limit(admin["id"], "admin")
+    ticket = await support_service.set_status(
+        db, admin, ticket_id, body.status, priority=body.priority
+    )
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    await admin_service.log_action(
+        db, admin, "support.update", "support_ticket", ticket_id,
+        {"status": ticket.get("status"), "priority": ticket.get("priority")},
+    )
+    return ticket
+
+
+@router.get("/users/{user_id}/context")
+async def user_context(
+    user_id: str,
+    db: SupabaseDB = Depends(get_db),
+    admin: dict = Depends(require_admin),
+):
+    """Read-only support context: profile, prefs, activity, connections."""
+    check_rate_limit(admin["id"], "admin")
+    ctx = await admin_service.user_context(db, user_id)
+    if not ctx:
+        raise HTTPException(status_code=404, detail="User not found")
+    return ctx

@@ -72,6 +72,8 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: str = ""
     SMTP_FROM: str = "ORQEVA <no-reply@orqeva.com>"
     APP_BASE_URL: str = "http://localhost:3000"
+    # Where support tickets are announced (optional). Empty = no email notify.
+    SUPPORT_EMAIL: str = os.getenv("SUPPORT_EMAIL", "")
 
     # Error tracking (optional). Empty = Sentry disabled.
     SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")

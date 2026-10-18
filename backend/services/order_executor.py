@@ -107,6 +107,7 @@ async def place_and_record(db: SupabaseDB, *, user: dict, symbol: str, market: s
         db, user_id=user["id"], symbol=symbol.upper(), market=market,
         side=side, quantity=quantity, entry_price=float(fill_price),
         strategy=strategy, exchange=venue, broker_order_id=broker_order_id,
+        is_demo=(route != "live"),
     )
     # Only claim protection the broker actually accepted. Recording an SL/TP that
     # was never placed shows a stop in the dashboard that does not exist.

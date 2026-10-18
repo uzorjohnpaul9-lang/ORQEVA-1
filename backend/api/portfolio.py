@@ -30,32 +30,39 @@ async def _quote_price(market: str, symbol: str) -> float | None:
 async def list_trades(
     status: str | None = Query(None),
     market: str | None = Query(None),
+    is_demo: bool | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     db: SupabaseDB = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
     check_rate_limit(user["id"], user.get("tier", "free"))
-    trades = await trade_service.list_trades(db, user["id"], market=market, status=status, limit=limit)
+    trades = await trade_service.list_trades(
+        db, user["id"], market=market, status=status, limit=limit, is_demo=is_demo
+    )
     return [TradeResponse.model_validate(t) for t in trades]
 
 
 @router.get("/summary")
 async def portfolio_summary(
+    is_demo: bool | None = Query(None),
     db: SupabaseDB = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
     check_rate_limit(user["id"], user.get("tier", "free"))
-    return await trade_service.get_portfolio_summary(db, user["id"])
+    return await trade_service.get_portfolio_summary(db, user["id"], is_demo=is_demo)
 
 
 @router.get("/positions")
 async def open_positions(
+    is_demo: bool | None = Query(None),
     db: SupabaseDB = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
     """Open trades enriched with live price + unrealized P&L."""
     check_rate_limit(user["id"], user.get("tier", "free"))
-    trades = await trade_service.list_trades(db, user["id"], status="open", limit=200)
+    trades = await trade_service.list_trades(
+        db, user["id"], status="open", limit=200, is_demo=is_demo
+    )
 
     # Live quotes for unique (market, symbol) pairs
     unique = sorted({(t["market"], t["symbol"]) for t in trades})
@@ -80,12 +87,13 @@ async def open_positions(
 
 @router.get("/holdings")
 async def holdings(
+    is_demo: bool | None = Query(None),
     db: SupabaseDB = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
     """Per-symbol aggregation of open positions with live valuation."""
     check_rate_limit(user["id"], user.get("tier", "free"))
-    rows = await trade_service.get_holdings(db, user["id"])
+    rows = await trade_service.get_holdings(db, user["id"], is_demo=is_demo)
 
     unique = sorted({(h["market"], h["symbol"]) for h in rows})
     prices: dict[tuple[str, str], float | None] = {}
@@ -111,8 +119,9 @@ async def holdings(
 
 @router.get("/performance")
 async def performance(
+    is_demo: bool | None = Query(None),
     db: SupabaseDB = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
     check_rate_limit(user["id"], user.get("tier", "free"))
-    return await trade_service.get_performance(db, user["id"])
+    return await trade_service.get_performance(db, user["id"], is_demo=is_demo)

@@ -18,6 +18,7 @@ export function TradePanel({ trade }: TradePanelProps) {
           <div className="flex items-center gap-2">
             <h3 className="font-semibold">{trade.symbol}</h3>
             <Badge variant={trade.side === "buy" ? "green" : "red"}>{trade.side.toUpperCase()}</Badge>
+            {trade.is_demo && <Badge variant="purple">DEMO</Badge>}
           </div>
           <p className="text-xs text-text-muted mt-1">{trade.strategy} · {trade.market}</p>
         </div>
