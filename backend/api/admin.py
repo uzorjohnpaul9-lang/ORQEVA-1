@@ -12,7 +12,7 @@ from backend.db.database import get_db
 from backend.db.models import USERS
 from backend.db.supabase import SupabaseDB, get_service_client, now_iso
 from backend.middleware.rate_limiter import check_rate_limit
-from backend.services import admin_service, notification_service, telegram_service, support_service
+from backend.services import admin_service, notification_service, telegram_service, support_service, sentinel_service
 
 logger = logging.getLogger(__name__)
 
@@ -509,7 +509,32 @@ async def user_context(
 ):
     """Read-only support context: profile, prefs, activity, connections."""
     check_rate_limit(admin["id"], "admin")
-    ctx = await admin_service.user_context(db, user_id)
-    if not ctx:
-        raise HTTPException(status_code=404, detail="User not found")
-    return ctx
+@router.get("/sentinel")
+async def sentinel_list(
+    limit: int = Query(100, ge=1, le=200),
+    kind: str | None = Query(None),
+    severity: str | None = Query(None),
+    resolved: bool | None = Query(None),
+    db: SupabaseDB = Depends(get_db),
+    admin: dict = Depends(require_admin),
+):
+    check_rate_limit(admin["id"], "admin")
+    return await sentinel_service.list_events(
+        db, limit=limit, kind=kind, severity=severity, resolved=resolved
+    )
+
+
+@router.post("/sentinel/{event_id}/resolve")
+async def sentinel_resolve(
+    event_id: str,
+    db: SupabaseDB = Depends(get_db),
+    admin: dict = Depends(require_admin),
+):
+    check_rate_limit(admin["id"], "admin")
+    ev = await sentinel_service.resolve_event(db, event_id, admin["id"])
+    if not ev:
+        raise HTTPException(status_code=404, detail="Event not found")
+    await admin_service.log_action(
+        db, admin, "sentinel.resolve", "security_event", event_id, {"resolved": True}
+    )
+    return ev

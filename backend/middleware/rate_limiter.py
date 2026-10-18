@@ -1,4 +1,4 @@
-import time
+﻿import time
 from collections import defaultdict
 from fastapi import Request, HTTPException
 
@@ -16,6 +16,7 @@ class RateLimiter:
     def __init__(self):
         self._hits: dict[str, list[float]] = defaultdict(list)
 
+
     def check(self, user_id: str, tier: str = "free") -> bool:
         now = time.time()
         limit = self.LIMITS.get(tier, self.LIMITS["free"])
@@ -25,7 +26,6 @@ class RateLimiter:
         self._hits[user_id] = [t for t in self._hits[user_id] if now - t < window]
         if len(self._hits[user_id]) >= max_req:
             return False
-        self._hits[user_id].append(now)
         return True
 
     def remaining(self, user_id: str, tier: str = "free") -> int:
