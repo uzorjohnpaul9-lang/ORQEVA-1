@@ -2069,5 +2069,209 @@ class TestTelegramLatencyQueue(unittest.TestCase):
         tg._PENDING_ALERTS.clear()
 
 
+class TestAnnualPlans(unittest.TestCase):
+    """Phase K: yearly terms priced from the shared payment config."""
+
+    def test_plans_advertise_annual_pricing(self):
+        from backend.services import billing_service as billing
+        by_tier = {p["tier"]: p for p in billing.plans()}
+        prem = by_tier["premium"]
+        self.assertEqual(prem["price_usd"], 49)
+        self.assertEqual(prem["annual_price_usd"], 490)
+        self.assertEqual(prem["annual_days"], 365)
+        self.assertEqual(prem["annual_savings_usd"], 98.0)
+        self.assertEqual(by_tier["vip"]["annual_price_usd"], 1990)
+        self.assertEqual(by_tier["vip"]["annual_savings_usd"], 398.0)
+        self.assertNotIn("free", by_tier)
+
+    def test_annual_invoice_prices_and_term(self):
+        import asyncio
+        from backend.services import billing_service as billing
+        db = _FakeBillingDB()
+        db.tables["users"].append({"id": "u1", "email": "a@b.c", "tier": "free"})
+        user = {"id": "u1", "email": "a@b.c"}
+
+        annual = asyncio.run(billing.create_invoice(db, user, "premium", "manual", annual=True))
+        self.assertNotIn("error", annual, annual)
+        self.assertEqual(float(annual["amount_usd"]), 490.0)
+        self.assertEqual(annual["duration_days"], 365)
+
+        monthly = asyncio.run(billing.create_invoice(db, user, "premium", "manual"))
+        self.assertEqual(float(monthly["amount_usd"]), 49.0)
+        self.assertIsNone(monthly["duration_days"])
+
+    def test_annual_activation_extends_a_full_year(self):
+        import asyncio
+        from datetime import datetime, timezone
+        from backend.services import billing_service as billing
+        db = _FakeBillingDB()
+        db.tables["users"].append({"id": "u1", "email": "a@b.c", "tier": "free"})
+        inv = asyncio.run(billing.create_invoice(
+            db, {"id": "u1", "email": "a@b.c"}, "vip", "manual", annual=True))
+        asyncio.run(billing._activate_subscription(db, inv))
+        sub = db.tables["subscriptions"][0]
+        self.assertEqual(sub["tier"], "vip")
+        expires = datetime.fromisoformat(sub["expires_at"].replace("Z", "+00:00"))
+        self.assertGreaterEqual((expires - datetime.now(timezone.utc)).days, 364)
+        self.assertEqual(db.tables["users"][0]["tier"], "vip")
+
+
+class TestAffiliateTracking(unittest.TestCase):
+    """Phase K: broker/prop-firm links with click + last-touch conversion credit."""
+
+    def test_safe_url_filters_dangerous_schemes(self):
+        from backend.services.affiliate_service import _safe_url
+        self.assertEqual(_safe_url("javascript:alert(1)"), "")
+        self.assertEqual(_safe_url("data:text/html,x"), "")
+        self.assertEqual(_safe_url(""), "")
+        self.assertEqual(_safe_url(None), "")
+        self.assertTrue(_safe_url("https://broker.example/ref?x=1").startswith("https://"))
+
+    def test_create_partner_validates(self):
+        import asyncio
+        from backend.services import affiliate_service as aff
+        db = _FakeBillingDB()
+        self.assertEqual(
+            asyncio.run(aff.create_partner(db, name="X", url="ftp://nope")), {"error": "invalid_partner"})
+        self.assertEqual(
+            asyncio.run(aff.create_partner(db, name="   ", url="https://ok.dev")), {"error": "invalid_partner"})
+        partner = asyncio.run(aff.create_partner(
+            db, name="BrokerCo", url="https://broker.example/ref", category="prop_firm"))
+        self.assertEqual(partner["category"], "prop_firm")
+        self.assertEqual(partner["click_count"], 0)
+        self.assertEqual(partner["conversion_rate"], 0.0)
+        # public listing hides the internal counters
+        public = asyncio.run(aff.list_partners(db))
+        self.assertEqual(len(public), 1)
+        self.assertNotIn("click_count", public[0])
+
+    def test_click_and_last_touch_conversion(self):
+        import asyncio
+        import time
+        from backend.services import affiliate_service as aff
+        db = _FakeBillingDB()
+        p1 = asyncio.run(aff.create_partner(db, name="A", url="https://a.example"))
+        p2 = asyncio.run(aff.create_partner(db, name="B", url="https://b.example"))
+
+        asyncio.run(aff.record_click(db, p1["id"], "u1"))
+        self.assertIsNone(asyncio.run(aff.record_click(db, "missing", "u1")))
+        asyncio.run(aff.set_partner_active(db, p2["id"], False))
+        self.assertIsNone(asyncio.run(aff.record_click(db, p2["id"], "u1")))
+
+        asyncio.run(aff.set_partner_active(db, p2["id"], True))
+        time.sleep(0.01)  # keep created_at ordering unambiguous
+        asyncio.run(aff.record_click(db, p2["id"], "u1"))
+
+        conv = asyncio.run(aff.record_conversion(
+            db, user_id="u1", invoice={"id": "inv1", "amount_usd": 490.0}))
+        self.assertEqual(conv["partner_id"], p2["id"])
+        self.assertEqual(conv["amount_usd"], 490.0)
+
+        row_b = [r for r in db.tables["affiliate_partners"] if r["id"] == p2["id"]][0]
+        self.assertEqual(row_b["conversion_count"], 1)
+        self.assertEqual(float(row_b["revenue_usd"]), 490.0)
+        self.assertEqual(row_b["click_count"], 1)
+
+        self.assertIsNone(asyncio.run(aff.record_conversion(
+            db, user_id="nobody", invoice={"id": "x", "amount_usd": 10.0})))
+        summary = asyncio.run(aff.summary(db))
+        self.assertEqual(summary["conversions"], 1)
+        self.assertEqual(summary["revenue_usd"], 490.0)
+
+
+class TestApiKeys(unittest.TestCase):
+    """Phase K: metered API keys - hashing, quotas, revocation."""
+
+    def test_hash_and_quota_ladder(self):
+        from backend.services import api_key_service as keys
+        self.assertEqual(keys.KEY_PREFIX, "orq_")
+        self.assertEqual(keys.hash_key("abc"), keys.hash_key("abc"))
+        self.assertNotEqual(keys.hash_key("abc"), keys.hash_key("abd"))
+        self.assertEqual(keys.daily_quota("free"), 200)
+        self.assertGreater(keys.daily_quota("vip"), keys.daily_quota("free"))
+        self.assertEqual(keys.daily_quota("unknown"), keys.FREE_DAILY_QUOTA)
+
+    def test_used_today_resets_on_new_day(self):
+        from backend.services import api_key_service as keys
+        self.assertEqual(keys._used_today({"usage_day": keys._today(), "requests_today": 5}), 5)
+        self.assertEqual(keys._used_today({"usage_day": "2000-01-01", "requests_today": 5}), 0)
+
+    def test_create_key_stores_hash_not_raw(self):
+        import asyncio
+        from backend.services import api_key_service as keys
+        db = _FakeBillingDB()
+        created = asyncio.run(keys.create_key(db, "u1", "my bot"))
+        self.assertTrue(created["key"].startswith(keys.KEY_PREFIX))
+        row = db.tables["api_keys"][0]
+        self.assertEqual(row["key_hash"], keys.hash_key(created["key"]))
+        self.assertNotEqual(row["key_hash"], created["key"])
+        self.assertNotIn("key_hash", created)
+        self.assertEqual(created["prefix"], row["key_prefix"])
+
+    def test_authenticate_and_meter(self):
+        import asyncio
+        from backend.services import api_key_service as keys
+        db = _FakeBillingDB()
+        db.tables["users"].append({"id": "u1", "email": "a@b.c", "tier": "premium", "is_active": True})
+        created = asyncio.run(keys.create_key(db, "u1"))
+
+        self.assertIsNone(asyncio.run(keys.authenticate(db, None)))
+        self.assertIsNone(asyncio.run(keys.authenticate(db, "bad-prefix")))
+        self.assertIsNone(asyncio.run(keys.authenticate(db, keys.KEY_PREFIX + "unknown")))
+
+        auth = asyncio.run(keys.authenticate(db, created["key"]))
+        self.assertEqual(auth["user"]["id"], "u1")
+        self.assertEqual(auth["quota"], keys.daily_quota("premium"))
+
+        asyncio.run(keys.record_usage(db, auth["key"]))
+        row = db.tables["api_keys"][0]
+        self.assertEqual(row["requests_today"], 1)
+        self.assertEqual(row["requests_total"], 1)
+
+        self.assertTrue(asyncio.run(keys.revoke_key(db, "u1", row["id"])))
+        self.assertIsNone(asyncio.run(keys.authenticate(db, created["key"])))
+
+    def test_quota_exceeded(self):
+        import asyncio
+        from backend.services import api_key_service as keys
+        db = _FakeBillingDB()
+        db.tables["users"].append({"id": "u1", "email": "a@b.c", "tier": "free", "is_active": True})
+        created = asyncio.run(keys.create_key(db, "u1"))
+        row = db.tables["api_keys"][0]
+        row["usage_day"] = keys._today()
+        row["requests_today"] = keys.daily_quota("free")
+
+        out = asyncio.run(keys.authenticate(db, created["key"]))
+        self.assertEqual(out["error"], "quota_exceeded")
+        self.assertEqual(out["quota"], 200)
+
+    def test_v1_endpoint_requires_key_and_meters(self):
+        import asyncio
+        from fastapi.testclient import TestClient
+        from backend.main import app
+        from backend.db.database import get_db
+        from backend.services import api_key_service as keys
+
+        db = _FakeBillingDB()
+        db.tables["users"].append({"id": "u1", "email": "a@b.c", "tier": "free", "is_active": True})
+        db.tables["signals"] = []
+        created = asyncio.run(keys.create_key(db, "u1"))
+
+        app.dependency_overrides[get_db] = lambda: db
+        try:
+            client = TestClient(app)
+            self.assertEqual(client.get("/v1/signals").status_code, 401)
+            self.assertEqual(
+                client.get("/v1/signals", headers={"X-API-Key": "orq_nope"}).status_code, 401)
+            ok = client.get("/v1/signals", headers={"X-API-Key": created["key"]})
+            self.assertEqual(ok.status_code, 200)
+            body = ok.json()
+            self.assertEqual(body["tier"], "free")
+            self.assertEqual(body["usage"]["used_today"], 1)
+            self.assertEqual(db.tables["api_keys"][0]["requests_today"], 1)
+        finally:
+            app.dependency_overrides.clear()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

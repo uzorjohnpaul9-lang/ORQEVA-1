@@ -25,6 +25,7 @@ export const navItems: NavItem[] = [
 { href: "/help", label: "Help & Guide", icon: "question" }, { href: "/support", label: "Support", icon: "question" },
   { href: "/settings", label: "Settings", icon: "settings" },
   { href: "/vip", label: "VIP", icon: "crown" },
+  { href: "/partners", label: "Partners", icon: "link" },
 ];
 
 export const adminNavItems: NavItem[] = [{ href: "/admin", label: "Admin", icon: "tools" }];

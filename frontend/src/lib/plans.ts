@@ -22,6 +22,10 @@ export function tierBadgeVariant(tier?: string | null): "gray" | "yellow" | "pur
 
 export const PLAN_PRICES: Record<Tier, number> = { free: 0, premium: 49, vip: 199 };
 
+// Yearly prices mirror the backend payment config (2 months free); the billing
+// page reads the authoritative numbers from /api/billing/plans.
+export const PLAN_ANNUAL_PRICES: Record<Tier, number> = { free: 0, premium: 490, vip: 1990 };
+
 export interface TierInfo {
   tier: Tier;
   name: string;

@@ -10,7 +10,15 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type { Invoice, Subscription } from "@/lib/types";
 
-interface Plan { tier: string; name: string; price_usd: number; duration_days: number }
+interface Plan {
+  tier: string;
+  name: string;
+  price_usd: number;
+  duration_days: number;
+  annual_price_usd?: number;
+  annual_days?: number;
+  annual_savings_usd?: number;
+}
 interface BankCard { bank_name: string; account_name: string; account_number: string; branch: string; instructions: string }
 
 const GATEWAY_LABELS: Record<string, string> = {
@@ -45,6 +53,7 @@ export default function BillingPage() {
   // invoice form
   const [tier, setTier] = useState("premium");
   const [method, setMethod] = useState("crypto");
+  const [cycle, setCycle] = useState<"monthly" | "annual">("monthly");
   const [promoCode, setPromoCode] = useState("");
   const [creating, setCreating] = useState(false);
   // tx ref modal-ish state
@@ -84,7 +93,10 @@ export default function BillingPage() {
     try {
       const inv = await api<Invoice>("/api/billing/invoices", {
         method: "POST", token,
-        body: JSON.stringify({ tier, method, promo_code: promoCode.trim() || undefined }),
+        body: JSON.stringify({
+          tier, method, annual: cycle === "annual",
+          promo_code: promoCode.trim() || undefined,
+        }),
       });
       if (inv.checkout_url) {
         setCheckoutUrl(inv.checkout_url);
@@ -221,12 +233,20 @@ export default function BillingPage() {
           <CardHeader><CardTitle>Plans</CardTitle></CardHeader>
           <div className="space-y-3">
             {plans.map((p) => (
-              <div key={p.tier} className="flex items-center justify-between p-3 bg-bg-tertiary rounded-lg">
-                <div>
-                  <span className="font-semibold">{p.name}</span>
-                  <span className="text-xs text-text-muted ml-2">{p.duration_days} days</span>
+              <div key={p.tier} className="p-3 bg-bg-tertiary rounded-lg">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="font-semibold">{p.name}</span>
+                    <span className="text-xs text-text-muted ml-2">{p.duration_days} days</span>
+                  </div>
+                  <span className="font-mono font-bold text-lg">${p.price_usd}<span className="text-xs text-text-muted font-normal">/mo</span></span>
                 </div>
-                <span className="font-mono font-bold text-lg">${p.price_usd}<span className="text-xs text-text-muted font-normal">/mo</span></span>
+                {p.annual_price_usd ? (
+                  <p className="text-xs text-text-muted mt-1">
+                    Yearly <span className="text-green font-mono">${p.annual_price_usd}/yr</span>
+                    {p.annual_savings_usd ? ` - save $${p.annual_savings_usd}` : ""}
+                  </p>
+                ) : null}
               </div>
             ))}
             <p className="text-xs text-text-muted">
@@ -240,11 +260,30 @@ export default function BillingPage() {
         <Card>
           <CardHeader><CardTitle>New Invoice</CardTitle></CardHeader>
           <form onSubmit={createInvoice} className="space-y-4">
+            <div className="flex items-center gap-2">
+              {(["monthly", "annual"] as const).map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setCycle(c)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    cycle === c ? "bg-green text-black" : "bg-bg-tertiary text-text-secondary hover:text-text-primary"
+                  }`}
+                >
+                  {c === "monthly" ? "Monthly" : "Annual (save 2 months)"}
+                </button>
+              ))}
+            </div>
             <Select
               label="Tier"
               value={tier}
               onChange={(e) => setTier(e.target.value)}
-              options={plans.map((p) => ({ value: p.tier, label: `${p.name} - $${p.price_usd}/mo` }))}
+              options={plans.map((p) => ({
+                value: p.tier,
+                label: cycle === "annual" && p.annual_price_usd
+                  ? `${p.name} - $${p.annual_price_usd}/yr`
+                  : `${p.name} - $${p.price_usd}/mo`,
+              }))}
             />
             <Select
               label="Method"

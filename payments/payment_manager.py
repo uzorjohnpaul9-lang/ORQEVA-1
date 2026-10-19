@@ -29,6 +29,8 @@ PAYMENT_CONFIG = {
     "premium": {
         "name": "Premium",
         "price": 49,
+        "annual_price": 490,
+        "annual_days": 365,
         "currency": "USD",
         "duration_days": 30,
         "crypto": {
@@ -39,6 +41,8 @@ PAYMENT_CONFIG = {
     "vip": {
         "name": "VIP",
         "price": 199,
+        "annual_price": 1990,
+        "annual_days": 365,
         "currency": "USD",
         "duration_days": 30,
         "crypto": {

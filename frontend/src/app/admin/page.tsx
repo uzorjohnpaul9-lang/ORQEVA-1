@@ -10,6 +10,7 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useRouter } from "next/navigation";
 import { BillingAdmin } from "@/components/admin/BillingAdmin";
+import { AffiliateAdmin } from "@/components/admin/AffiliateAdmin";
 import { AdminCard, AdminCardHeader, AdminCardTitle, AdminStatCard } from "@/components/admin/AdminCard";
 import { clsx } from "clsx";
 import type { AdminUserContext, BlockedIp, SecurityEvent, SupportTicket } from "@/lib/types";
@@ -61,7 +62,7 @@ interface ForwardTestStats {
   resolved_now?: { tp: number; sl: number; expired: number; skipped: number; budget_exhausted?: boolean };
 }
 
-const TABS = ["Overview", "Users", "Support", "Billing", "Signals", "Security", "System"] as const;
+const TABS = ["Overview", "Users", "Support", "Billing", "Affiliates", "Signals", "Security", "System"] as const;
 type Tab = (typeof TABS)[number];
 
 export default function AdminPage() {
@@ -137,7 +138,8 @@ export default function AdminPage() {
       {tab === "Overview" && <OverviewTab token={token} />}
       {tab === "Users" && <UsersTab token={token} />}
       {tab === "Support" && <SupportTab token={token} />}
-      {tab === "Billing" && <BillingAdmin token={token} />}
+              {tab === "Billing" && <BillingAdmin token={token} />}
+              {tab === "Affiliates" && <AffiliateAdmin token={token} />}
       {tab === "Signals" && <SignalsTab token={token} />}
       {tab === "Security" && <SecurityTab token={token} />}
       {tab === "System" && <SystemTab token={token} />}

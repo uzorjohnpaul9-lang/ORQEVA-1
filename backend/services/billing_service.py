@@ -51,12 +51,19 @@ def plans() -> list[dict]:
     for tier, cfg in PAYMENT_CONFIG.items():
         if tier == "free":
             continue
-        out.append({
+        monthly = float(cfg["price"])
+        annual = float(cfg.get("annual_price") or 0)
+        entry = {
             "tier": tier,
             "name": cfg["name"],
-            "price_usd": cfg["price"],
+            "price_usd": monthly,
             "duration_days": cfg["duration_days"],
-        })
+        }
+        if annual > 0:
+            entry["annual_price_usd"] = annual
+            entry["annual_days"] = int(cfg.get("annual_days") or 365)
+            entry["annual_savings_usd"] = round(monthly * 12 - annual, 2)
+        out.append(entry)
     return out
 
 
@@ -97,20 +104,26 @@ async def _unique_amount(db: SupabaseDB, base: float) -> float:
 
 
 async def create_invoice(db: SupabaseDB, user: dict, tier: str,
-                         method: str = "crypto", promo_code: str | None = None) -> dict:
+                         method: str = "crypto", promo_code: str | None = None,
+                         annual: bool = False) -> dict:
     """Create a payment invoice for a paid tier.
 
     `method` is a legacy rail (crypto/manual) or a configured gateway
     (nowpayments/stripe/paystack/flutterwave) which returns a hosted checkout.
+    `annual=True` prices the invoice at the tier's yearly rate and stamps the
+    365-day term on the invoice so activation extends the subscription by a year.
     """
     cfg = PAYMENT_CONFIG.get(tier)
     if not cfg or tier == "free":
         return {"error": "invalid_tier"}
     if method not in GATEWAY_METHODS and method not in ("crypto", "manual"):
         return {"error": "invalid_method"}
+    annual_price = float(cfg.get("annual_price") or 0)
+    if annual and annual_price <= 0:
+        return {"error": "invalid_term"}
 
     promo, discount_pct = await validate_promo(db, promo_code)
-    amount = float(cfg["price"])
+    amount = annual_price if annual else float(cfg["price"])
     discount = round(amount * discount_pct / 100.0, 2)
     total = round(max(amount - discount, 0.0), 2)
 
@@ -140,6 +153,8 @@ async def create_invoice(db: SupabaseDB, user: dict, tier: str,
         "unique_amount": None,
         "memo": f"ORQ-{invoice_id[:8].upper()}" if method in ("crypto", "manual") else None,
         "currency": "USD",
+        # NULL = the default monthly term; yearly invoices carry 365 here.
+        "duration_days": int(cfg.get("annual_days") or 365) if annual else None,
         "paid_at": None,
         "created_at": now_iso(),
         "expires_at": _iso(_utcnow() + timedelta(
@@ -197,6 +212,7 @@ def invoice_view(inv: dict, email: str | None = None) -> dict:
         "checkout_url": inv.get("checkout_url"),
         "unique_amount": inv.get("unique_amount"),
         "memo": inv.get("memo"),
+        "duration_days": inv.get("duration_days"),
         "paid_at": inv.get("paid_at"),
         "created_at": inv.get("created_at"),
         "expires_at": inv.get("expires_at"),
@@ -234,7 +250,7 @@ async def _activate_subscription(db: SupabaseDB, invoice: dict) -> None:
     Shared by admin approval and gateway (webhook) auto-approval.
     """
     sub = await db.fetch_one(SUBSCRIPTIONS, {"user_id": invoice["user_id"]})
-    days = PAYMENT_CONFIG[invoice["tier"]]["duration_days"]
+    days = int(invoice.get("duration_days") or PAYMENT_CONFIG[invoice["tier"]]["duration_days"])
     base = _utcnow()
     same_tier = sub and sub.get("status") in ("active", "past_due") and sub.get("tier") == invoice["tier"]
     if same_tier and sub.get("expires_at") and _utcnow() < parse_dt(sub["expires_at"]):
@@ -292,6 +308,13 @@ async def _activate_subscription(db: SupabaseDB, invoice: dict) -> None:
 
     # Tier takes effect immediately
     await db.update(USERS, {"tier": invoice["tier"], "updated_at": now_iso()}, where={"id": invoice["user_id"]})
+
+    # Phase K: attribute the payment to the last affiliate link the user followed.
+    try:
+        from backend.services import affiliate_service
+        await affiliate_service.record_conversion(db, user_id=invoice["user_id"], invoice=invoice)
+    except Exception:
+        logger.exception("affiliate conversion recording failed")
 
 
 async def approve_invoice(db: SupabaseDB, invoice: dict, admin: dict) -> dict:

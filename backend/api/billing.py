@@ -18,6 +18,7 @@ class InvoiceCreate(BaseModel):
     method: str = Field(default="crypto",
                        pattern="^(crypto|manual|nowpayments|stripe|paystack|flutterwave)$")
     promo_code: str | None = Field(default=None, max_length=40)
+    annual: bool = False
 
 
 class TxRefSubmit(BaseModel):
@@ -96,7 +97,7 @@ async def create_invoice(
     user: dict = Depends(get_current_user),
 ):
     check_rate_limit(user["id"], user.get("tier", "free"))
-    inv = await billing.create_invoice(db, user, body.tier, body.method, body.promo_code)
+    inv = await billing.create_invoice(db, user, body.tier, body.method, body.promo_code, annual=body.annual)
     if inv.get("error"):
         raise HTTPException(status_code=422, detail=inv["error"])
     return billing.invoice_view(inv)

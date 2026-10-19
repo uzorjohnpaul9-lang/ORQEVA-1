@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/Button";
 import { useAuth } from "@/lib/auth";
 import {
   FEATURE_MATRIX,
+  PLAN_ANNUAL_PRICES,
   PLAN_PRICES,
   TIERS,
   tierBadgeVariant,
@@ -73,6 +74,12 @@ export default function VIPPage() {
                 ${PLAN_PRICES[t.tier]}
                 {t.tier !== "free" && <span className="text-sm text-text-muted font-normal">/30d</span>}
               </p>
+              {t.tier !== "free" && (
+                <p className="text-xs text-text-muted mb-1">
+                  or <span className="text-green font-mono">${PLAN_ANNUAL_PRICES[t.tier]}</span>/year
+                  {" "}(save ${PLAN_PRICES[t.tier] * 12 - PLAN_ANNUAL_PRICES[t.tier]})
+                </p>
+              )}
               <p className="text-xs text-text-muted mb-4">{t.tagline}</p>
               <ul className="space-y-2 mb-5">
                 {t.perks.map((p) => (
@@ -151,6 +158,17 @@ export default function VIPPage() {
           <a href={BINANCE_REFERRAL_URL} target="_blank" rel="noopener noreferrer">
             <Button variant="ghost" size="sm">Open Binance →</Button>
           </a>
+        </div>
+      </Card>
+
+      <Card>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-text-secondary">
+            Looking for a broker or prop firm? Browse our partner desks for bonuses and funded accounts.
+          </p>
+          <Link href="/partners">
+            <Button variant="secondary" size="sm">View partners →</Button>
+          </Link>
         </div>
       </Card>
     </div>
