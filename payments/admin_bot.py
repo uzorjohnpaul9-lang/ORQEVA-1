@@ -8,11 +8,16 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from payments.payment_manager import PaymentManager
 from notifications.channel_notifier import ChannelNotifier
 from security.rate_limiter import rate_limit
 from dotenv import load_dotenv
 load_dotenv()
+
+BILLING_NOTE = (
+    "Billing moved to the database (Phase I). Invoices are created, approved "
+    "and refunded from the ORQEVA admin dashboard (Billing tab) — gateway "
+    "webhooks auto-approve paid invoices."
+)
 
 try:
     import requests
@@ -31,7 +36,6 @@ def _admin_token() -> str:
 ADMIN_TOKEN = _admin_token()
 ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "")
 
-payment_mgr = PaymentManager()
 notifier = ChannelNotifier()
 
 # Input validation patterns
@@ -66,65 +70,13 @@ def handle_command(command: str, args: list):
         send_admin("Invalid command format.")
         return
 
-    if command == "/pending":
-        msg = payment_mgr.format_pending_list()
-        send_admin(msg)
-
-    elif command == "/approve":
-        if not args:
-            send_admin("Usage: /approve [invoice_id]")
-            return
-        invoice_id = args[0]
-        if not VALID_INVOICE_ID.match(invoice_id):
-            send_admin(f"Invalid invoice ID format: {_sanitize(invoice_id)}")
-            return
-        result = payment_mgr.approve_payment(invoice_id, "Approved by admin")
-        if "error" in result:
-            send_admin(f"Error: {_sanitize(result['error'])}")
-        else:
-            tier = _sanitize(result.get("tier", "").upper())
-            user_id = _sanitize(result.get("user_id", ""))
-            send_admin(f"✅ Payment approved!\n\nTier: {tier}\nUser: {user_id}")
-            send_admin(
-                f"🎉 <b>Welcome to {tier}!</b>\n\n"
-                f"Your subscription is now active.\n"
-                f"Check your channel for signals."
-            )
-
-    elif command == "/reject":
-        if not args:
-            send_admin("Usage: /reject [invoice_id] [reason]")
-            return
-        invoice_id = args[0]
-        if not VALID_INVOICE_ID.match(invoice_id):
-            send_admin(f"Invalid invoice ID format: {_sanitize(invoice_id)}")
-            return
-        reason = " ".join(args[1:]) if len(args) > 1 else "Payment rejected"
-        reason = _sanitize(reason)[:200]
-        result = payment_mgr.reject_payment(invoice_id, reason)
-        if "error" in result:
-            send_admin(f"Error: {_sanitize(result['error'])}")
-        else:
-            send_admin(f"❌ Payment rejected: {_sanitize(invoice_id)}")
-
-    elif command == "/stats":
-        stats = payment_mgr.get_stats()
-        msg = (
-            f"📊 <b>PAYMENT STATS</b>\n\n"
-            f"Pending: {stats['pending_payments']}\n"
-            f"Active Subscriptions: {stats['active_subscriptions']}\n"
-            f"Total Revenue: ${stats['total_revenue']}\n"
-            f"Total Payments: {stats['total_payments']}"
-        )
-        send_admin(msg)
+    if command in ("/pending", "/approve", "/reject", "/stats"):
+        send_admin(BILLING_NOTE)
 
     elif command == "/help":
         msg = (
-            "🤖 <b>ADMIN COMMANDS</b>\n\n"
-            "/pending - View pending payments\n"
-            "/approve [id] - Approve payment\n"
-            "/reject [id] [reason] - Reject payment\n"
-            "/stats - View statistics\n"
+            "📊 <b>ADMIN COMMANDS</b>\n\n"
+            "/pending, /approve, /reject, /stats - billing moved to the dashboard\n"
             "/help - Show this menu"
         )
         send_admin(msg)
@@ -136,7 +88,7 @@ def handle_command(command: str, args: list):
 def poll_updates():
     """Poll for admin commands via getUpdates."""
     print("Admin bot started. Waiting for commands...")
-    print("Commands: /pending, /approve, /reject, /stats, /help")
+    print("Billing commands moved to the dashboard. Type /help for commands.")
 
     if not ADMIN_TOKEN:
         print("No admin token configured!")

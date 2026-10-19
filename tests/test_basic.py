@@ -1341,5 +1341,474 @@ class TestSentinelService(unittest.TestCase):
         self.assertIsNone(out)
 
 
+class _FakeBillingDB:
+    """Generic in-memory table store for billing_service tests (Phase I)."""
+
+    def __init__(self):
+        self.tables = {
+            "invoices": [], "subscriptions": [], "users": [],
+            "payment_events": [], "promo_codes": [], "user_preferences": [],
+        }
+
+    @staticmethod
+    def _match(row, where):
+        if not where:
+            return True
+        for k, v in where.items():
+            if isinstance(v, (list, tuple, set)):
+                if row.get(k) not in v:
+                    return False
+            elif row.get(k) != v:
+                return False
+        return True
+
+    async def fetch_one(self, table, where=None, columns="*"):
+        rows = [dict(r) for r in self.tables.get(table, []) if self._match(r, where)]
+        return rows[0] if rows else None
+
+    async def fetch_all(self, table, where=None, order=None, limit=None, columns="*"):
+        rows = [dict(r) for r in self.tables.get(table, []) if self._match(r, where)]
+        if order and "." in str(order):
+            col, _, direction = str(order).partition(".")
+            rows.sort(key=lambda r: r.get(col) or "", reverse=direction.lower() == "desc")
+        if limit:
+            rows = rows[:limit]
+        return rows
+
+    async def insert(self, table, data):
+        self.tables.setdefault(table, []).append(dict(data))
+        return dict(data)
+
+    async def update(self, table, data, where=None):
+        out = []
+        for row in self.tables.get(table, []):
+            if self._match(row, where):
+                row.update(data)
+                out.append(dict(row))
+        return out
+
+    async def count(self, table, where=None):
+        return sum(1 for r in self.tables.get(table, []) if self._match(r, where))
+
+
+class TestBillingScale(unittest.TestCase):
+    """Phase I: unique amounts, gateway checkout, webhooks, grace, dashboard, dunning."""
+
+    PROVIDER_ENV = {
+        "NOWPAYMENTS_API_KEY": "np_test_key",
+        "NOWPAYMENTS_IPN_SECRET": "np_test_secret",
+    }
+
+    def _db(self):
+        db = _FakeBillingDB()
+        db.tables["users"].append({"id": "u1", "email": "alice@test.dev", "tier": "free"})
+        return db
+
+    def _invoice(self, db, tier="premium", method="manual"):
+        import asyncio
+        from backend.services import billing_service as billing
+        inv = asyncio.run(billing.create_invoice(
+            db, {"id": "u1", "email": "alice@test.dev"}, tier, method))
+        self.assertNotIn("error", inv, inv)
+        return inv
+
+    # ---- unique amount / memo ----
+
+    def test_unique_amount_and_memo_on_handpay(self):
+        inv1 = self._invoice(self._db())
+        db2 = self._db()
+        inv2 = self._invoice(db2)
+        self.assertTrue(inv1["memo"].startswith("ORQ-"))
+        self.assertIsNotNone(inv1["unique_amount"])
+        self.assertGreater(float(inv1["unique_amount"]), float(inv1["amount_usd"]))
+        # collision check: two pending invoices never share an amount
+        db = self._db()
+        a = self._invoice(db)
+        b = self._invoice(db)
+        self.assertNotEqual(a["unique_amount"], b["unique_amount"])
+
+    def test_unknown_and_unconfigured_methods(self):
+        import asyncio
+        from backend.services import billing_service as billing
+        db = self._db()
+        bad = asyncio.run(billing.create_invoice(
+            db, {"id": "u1", "email": "a@b.c"}, "premium", "paypal"))
+        self.assertEqual(bad, {"error": "invalid_method"})
+
+        with mock.patch.dict("os.environ", {"STRIPE_SECRET_KEY": ""}, clear=False):
+            out = asyncio.run(billing.create_invoice(
+                db, {"id": "u1", "email": "a@b.c"}, "premium", "stripe"))
+        self.assertEqual(out, {"error": "checkout_unavailable"})
+        self.assertEqual(db.tables["invoices"][0]["status"], "cancelled")
+
+    # ---- webhooks ----
+
+    def test_webhook_unknown_provider(self):
+        import asyncio
+        from backend.services import billing_service as billing
+        out = asyncio.run(billing.handle_gateway_webhook(self._db(), "paypal", {}, b"{}", {}))
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["status"], 404)
+
+    def test_webhook_bad_signature_rejected(self):
+        import asyncio
+        from backend.services import billing_service as billing
+        db = self._db()
+        inv = self._invoice(db)
+        payload = {"payment_id": 1, "order_id": inv["id"], "payment_status": "finished"}
+        with mock.patch.dict("os.environ", self.PROVIDER_ENV):
+            out = asyncio.run(billing.handle_gateway_webhook(
+                db, "nowpayments", {"x-nowpayments-sig": "deadbeef"},
+                b"{}", payload))
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["status"], 400)
+
+    def _signed_nowpayments(self, payload):
+        import hashlib
+        import hmac
+        import json
+        body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+        sig = hmac.new(self.PROVIDER_ENV["NOWPAYMENTS_IPN_SECRET"].encode(),
+                       body, hashlib.sha512).hexdigest()
+        return {"x-nowpayments-sig": sig}, body
+
+    def test_webhook_happy_path_auto_approves(self):
+        import asyncio
+        from backend.db.models import SUBSCRIPTIONS, USERS, PAYMENT_EVENTS
+        from backend.services import billing_service as billing
+        db = self._db()
+        inv = self._invoice(db, tier="vip")
+        payload = {
+            "payment_id": 99001,
+            "order_id": inv["id"],
+            "payment_status": "finished",
+            "price_amount": float(inv["unique_amount"]),
+            "price_currency": "usd",
+        }
+        headers, body = self._signed_nowpayments(payload)
+        with mock.patch.dict("os.environ", self.PROVIDER_ENV):
+            out = asyncio.run(billing.handle_gateway_webhook(
+                db, "nowpayments", headers, body, payload))
+        self.assertTrue(out["ok"], out)
+        self.assertTrue(out.get("approved"))
+
+        stored = db.tables["invoices"][0]
+        self.assertEqual(stored["status"], "approved")
+        self.assertEqual(stored["provider"], "nowpayments")
+        self.assertIsNotNone(stored["paid_at"])
+        self.assertEqual(db.tables[USERS][0]["tier"], "vip")
+        self.assertEqual(db.tables[SUBSCRIPTIONS][0]["tier"], "vip")
+        self.assertEqual(db.tables[SUBSCRIPTIONS][0]["status"], "active")
+        self.assertEqual(len(db.tables[PAYMENT_EVENTS]), 1)
+
+        # replayed delivery is a no-op (idempotent)
+        with mock.patch.dict("os.environ", self.PROVIDER_ENV):
+            again = asyncio.run(billing.handle_gateway_webhook(
+                db, "nowpayments", headers, body, payload))
+        self.assertTrue(again.get("duplicate"))
+        self.assertEqual(db.tables[SUBSCRIPTIONS][0]["status"], "active")
+
+    def test_webhook_not_paid_is_recorded_and_ignored(self):
+        import asyncio
+        from backend.services import billing_service as billing
+        db = self._db()
+        inv = self._invoice(db)
+        payload = {"payment_id": 99002, "order_id": inv["id"], "payment_status": "waiting"}
+        headers, body = self._signed_nowpayments(payload)
+        with mock.patch.dict("os.environ", self.PROVIDER_ENV):
+            out = asyncio.run(billing.handle_gateway_webhook(
+                db, "nowpayments", headers, body, payload))
+        self.assertTrue(out["ok"])
+        self.assertNotIn("approved", out)
+        self.assertEqual(db.tables["invoices"][0]["status"], "pending")
+        self.assertEqual(db.tables["payment_events"][0]["status"], "ignored")
+
+    def test_webhook_orphan_event_has_no_invoice(self):
+        import asyncio
+        from backend.services import billing_service as billing
+        db = self._db()
+        payload = {"payment_id": 99003, "order_id": "nope", "payment_status": "finished"}
+        headers, body = self._signed_nowpayments(payload)
+        with mock.patch.dict("os.environ", self.PROVIDER_ENV):
+            out = asyncio.run(billing.handle_gateway_webhook(
+                db, "nowpayments", headers, body, payload))
+        self.assertTrue(out["ok"])
+        self.assertEqual(out.get("detail"), "no matching invoice")
+
+    # ---- grace / cancel-at-period-end ----
+
+    def _sub(self, db, *, expires_in_days, auto_renew=True, cancel=False, grace=None):
+        from backend.db.models import SUBSCRIPTIONS
+        from datetime import timedelta, timezone
+        now = datetime.now(timezone.utc)
+        db.tables[SUBSCRIPTIONS].append({
+            "id": "s1", "user_id": "u1", "tier": "premium", "status": "active",
+            "auto_renew": auto_renew, "cancel_at_period_end": cancel,
+            "grace_until": grace, "provider": "manual",
+            "started_at": now.isoformat(),
+            "expires_at": (now + timedelta(days=expires_in_days)).isoformat(),
+            "last_invoice_id": None, "reminder_sent_count": 0,
+        })
+        db.tables["users"][0]["tier"] = "premium"
+
+    def test_grace_window_keeps_tier(self):
+        import asyncio
+        from backend.services import billing_service as billing
+        db = self._db()
+        self._sub(db, expires_in_days=-1, auto_renew=True)
+        sub = asyncio.run(billing.get_subscription(db, "u1"))
+        self.assertEqual(sub["status"], "grace")
+        self.assertEqual(db.tables["users"][0]["tier"], "premium")
+        self.assertIsNotNone(db.tables["subscriptions"][0]["grace_until"])
+
+    def test_grace_expired_downgrades(self):
+        import asyncio
+        from backend.services import billing_service as billing
+        from datetime import timedelta, timezone
+        db = self._db()
+        self._sub(db, expires_in_days=-5, auto_renew=True,
+                  grace=(datetime.now(timezone.utc) - timedelta(days=1)).isoformat())
+        sub = asyncio.run(billing.get_subscription(db, "u1"))
+        self.assertEqual(sub["status"], "expired")
+        self.assertEqual(db.tables["users"][0]["tier"], "free")
+
+    def test_cancelled_sub_expires_immediately_after_period(self):
+        import asyncio
+        from backend.services import billing_service as billing
+        db = self._db()
+        self._sub(db, expires_in_days=-1, auto_renew=False, cancel=True)
+        sub = asyncio.run(billing.get_subscription(db, "u1"))
+        self.assertEqual(sub["status"], "expired")
+        self.assertEqual(db.tables["users"][0]["tier"], "free")
+
+    def test_set_auto_renew_sets_cancel_at_period_end(self):
+        import asyncio
+        from backend.services import billing_service as billing
+        db = self._db()
+        self._sub(db, expires_in_days=10, auto_renew=True)
+        self.assertTrue(asyncio.run(billing.set_auto_renew(db, "u1", False)))
+        self.assertTrue(db.tables["subscriptions"][0]["cancel_at_period_end"])
+        self.assertFalse(db.tables["subscriptions"][0]["auto_renew"])
+        self.assertTrue(asyncio.run(billing.set_auto_renew(db, "u1", True)))
+        self.assertFalse(db.tables["subscriptions"][0]["cancel_at_period_end"])
+
+    # ---- revenue dashboard ----
+
+    def test_revenue_dashboard_keys_and_mrr(self):
+        import asyncio
+        from backend.db.models import SUBSCRIPTIONS
+        from backend.services import billing_service as billing
+        from datetime import timedelta, timezone
+        now = datetime.now(timezone.utc)
+        db = self._db()
+        self._sub(db, expires_in_days=7)
+        db.tables["subscriptions"].append({
+            "id": "s2", "user_id": "u2", "tier": "vip", "status": "active",
+            "auto_renew": True, "cancel_at_period_end": False, "grace_until": None,
+            "started_at": now.isoformat(), "expires_at": (now + timedelta(days=20)).isoformat(),
+        })
+        db.tables["invoices"].append({
+            "id": "i1", "user_id": "u1", "tier": "premium", "status": "approved",
+            "amount_usd": 49.0, "provider": "manual", "user_id": "u1",
+            "created_at": now.isoformat(),
+        })
+        db.tables["invoices"].append({
+            "id": "i2", "user_id": "u2", "tier": "vip", "status": "approved",
+            "amount_usd": 199.0, "provider": "stripe", "user_id": "u2",
+            "created_at": now.isoformat(),
+        })
+        db.tables["invoices"].append({
+            "id": "i3", "user_id": "u3", "tier": "premium", "status": "pending",
+            "amount_usd": 49.0, "provider": "manual", "created_at": now.isoformat(),
+        })
+        out = asyncio.run(billing.revenue_dashboard(db))
+        self.assertEqual(out["mrr_usd"], 49.0 + 199.0)
+        self.assertEqual(out["arr_usd"], (49.0 + 199.0) * 12)
+        self.assertEqual(out["pending_invoices"], 1)
+        self.assertEqual(out["active_subscriptions"], 2)
+        self.assertEqual(out["expiring_7d"], 1)
+        self.assertEqual(out["paying_users"], 2)
+        self.assertEqual(out["revenue_by_provider"]["stripe"]["revenue_usd"], 199.0)
+        self.assertEqual(len(out["revenue_by_month"]), 6)
+        self.assertIn("gateway_providers", out)
+
+    # ---- dunning / scheduler sweep ----
+
+    def test_billing_jobs_reminder_and_stale_sweep(self):
+        import asyncio
+        from backend.services import billing_service as billing
+        from datetime import timedelta, timezone
+        now = datetime.now(timezone.utc)
+        db = self._db()
+
+        # stale pending invoice -> expired
+        db.tables["invoices"].append({
+            "id": "old", "user_id": "u1", "tier": "premium", "status": "pending",
+            "amount_usd": 49.0, "provider": "manual",
+            "created_at": (now - timedelta(days=3)).isoformat(),
+            "expires_at": (now - timedelta(days=1)).isoformat(),
+        })
+        # expires in ~7 days -> lands in the 7-day reminder bucket
+        # (ceil-based buckets are boundary-safe either way); window is
+        # >3 days so no renewal invoice yet
+        self._sub(db, expires_in_days=7, auto_renew=True)
+
+        warned = []
+
+        async def _fake_warn(db_, user_id, tier, days_left, reason):
+            warned.append((user_id, days_left))
+
+        with mock.patch.object(billing, "_warn_subscriber", _fake_warn):
+            out = asyncio.run(billing.billing_jobs(db))
+
+        self.assertEqual(db.tables["invoices"][0]["status"], "expired")
+        self.assertEqual(out["reminders_sent"], 1, (out, warned))
+        self.assertEqual(warned, [("u1", 7)])
+        self.assertEqual(db.tables["subscriptions"][0]["reminder_sent_count"], 1)
+        self.assertEqual(out["renewal_invoices"], 0)
+
+        # second sweep: the same reminder is not repeated
+        with mock.patch.object(billing, "_warn_subscriber", _fake_warn):
+            out2 = asyncio.run(billing.billing_jobs(db))
+        self.assertEqual(out2["reminders_sent"], 0)
+
+    def test_billing_jobs_renewal_invoice_for_autorenew(self):
+        import asyncio
+        from backend.services import billing_service as billing
+        from datetime import timedelta, timezone
+        now = datetime.now(timezone.utc)
+        db = self._db()
+        # expiring within 3 days, auto-renew on -> one pending renewal invoice
+        self._sub(db, expires_in_days=3, auto_renew=True)
+
+        async def _fake_warn(db_, user_id, tier, days_left, reason):
+            pass
+
+        with mock.patch.object(billing, "_warn_subscriber", _fake_warn):
+            out = asyncio.run(billing.billing_jobs(db))
+        self.assertEqual(out["renewal_invoices"], 1)
+        renewals = [i for i in db.tables["invoices"] if i["id"] != "old"]
+        self.assertEqual(len(renewals), 1)
+        self.assertEqual(renewals[0]["status"], "pending")
+
+        # a second sweep must not open another one
+        with mock.patch.object(billing, "_warn_subscriber", _fake_warn):
+            out2 = asyncio.run(billing.billing_jobs(db))
+        self.assertEqual(out2["renewal_invoices"], 0)
+
+        # cancelling at period end suppresses renewals entirely
+        db2 = self._db()
+        self._sub(db2, expires_in_days=3, auto_renew=False, cancel=True)
+        with mock.patch.object(billing, "_warn_subscriber", _fake_warn):
+            out3 = asyncio.run(billing.billing_jobs(db2))
+        self.assertEqual(out3["renewal_invoices"], 0)
+        self.assertEqual(db2.tables["invoices"], [])
+
+    def test_billing_jobs_grace_set_and_lapsed(self):
+        import asyncio
+        from backend.services import billing_service as billing
+        from datetime import timedelta, timezone
+        now = datetime.now(timezone.utc)
+        db = self._db()
+
+        async def _fake_warn(*a, **k):
+            pass
+
+        # already-expired auto-renew sub: grace opened, not downgraded
+        self._sub(db, expires_in_days=-1, auto_renew=True)
+        with mock.patch.object(billing, "_warn_subscriber", _fake_warn):
+            out = asyncio.run(billing.billing_jobs(db))
+        self.assertEqual(out["grace_expired"], 0)
+        self.assertIsNotNone(db.tables["subscriptions"][0]["grace_until"])
+        self.assertEqual(db.tables["users"][0]["tier"], "premium")
+
+        # lapsed grace -> expired + downgrade
+        db.tables["subscriptions"][0]["grace_until"] = (
+            now - timedelta(days=1)).isoformat()
+        with mock.patch.object(billing, "_warn_subscriber", _fake_warn):
+            out = asyncio.run(billing.billing_jobs(db))
+        self.assertEqual(out["grace_expired"], 1)
+        self.assertEqual(db.tables["subscriptions"][0]["status"], "expired")
+        self.assertEqual(db.tables["users"][0]["tier"], "free")
+
+
+class TestGatewaySignatures(unittest.TestCase):
+    """Phase I: per-provider webhook signature verification."""
+
+    def test_configured_gateways_reflect_env(self):
+        from backend.payments.registry import configured_gateways
+        empty = {"STRIPE_SECRET_KEY": "", "PAYSTACK_SECRET_KEY": "",
+                 "FLUTTERWAVE_SECRET_KEY": "", "NOWPAYMENTS_API_KEY": ""}
+        with mock.patch.dict("os.environ", empty, clear=False):
+            self.assertEqual(configured_gateways(), [])
+        with mock.patch.dict("os.environ", {"PAYSTACK_SECRET_KEY": "sk_live_x"}, clear=False):
+            names = [g["provider"] for g in configured_gateways()]
+            self.assertIn("paystack", names)
+
+    def test_stripe_signature_roundtrip(self):
+        import hashlib
+        import hmac
+        import json
+        import time
+        from backend.payments.registry import get_provider
+        body = json.dumps({
+            "id": "evt_1", "type": "checkout.session.completed",
+            "data": {"object": {"id": "cs_1", "metadata": {"invoice_id": "inv1"},
+                                "payment_status": "paid", "amount_total": 4900,
+                                "currency": "usd"}},
+        }).encode()
+        ts = str(int(time.time()))
+        sig = hmac.new(b"whsec_test", f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
+        with mock.patch.dict("os.environ", {"STRIPE_SECRET_KEY": "sk_test",
+                                            "STRIPE_WEBHOOK_SECRET": "whsec_test"}):
+            p = get_provider("stripe")
+            out = p.verify_webhook({"stripe-signature": f"t={ts},v1={sig}"}, body, json.loads(body))
+            self.assertTrue(out["ok"], out)
+            ev = out["event"]
+            self.assertTrue(ev.paid)
+            self.assertEqual(ev.invoice_id, "inv1")
+            self.assertEqual(ev.amount_usd, 49.0)
+            bad = p.verify_webhook({"stripe-signature": f"t={ts},v1={'0' * 64}"},
+                                   body, json.loads(body))
+            self.assertFalse(bad["ok"])
+            missing = p.verify_webhook({}, body, json.loads(body))
+            self.assertFalse(missing["ok"])
+
+    def test_paystack_and_flutterwave_signatures(self):
+        import hashlib
+        import hmac
+        import json
+        from backend.payments.registry import get_provider
+
+        body = json.dumps({
+            "event": "charge.success",
+            "data": {"id": 5, "status": "success", "reference": "inv1",
+                     "amount": 4900, "currency": "USD"},
+        }).encode()
+        sig = hmac.new(b"sk_live_x", body, hashlib.sha512).hexdigest()
+        with mock.patch.dict("os.environ", {"PAYSTACK_SECRET_KEY": "sk_live_x"}):
+            out = get_provider("paystack").verify_webhook(
+                {"x-paystack-signature": sig}, body, json.loads(body))
+        self.assertTrue(out["ok"], out)
+        self.assertTrue(out["event"].paid)
+        self.assertEqual(out["event"].amount_usd, 49.0)
+
+        with mock.patch.dict("os.environ", {"FLUTTERWAVE_SECRET_KEY": "flw_x",
+                                            "FLUTTERWAVE_WEBHOOK_HASH": "hash_x"}):
+            good = get_provider("flutterwave").verify_webhook(
+                {"verif-hash": "hash_x"}, b"{}",
+                {"event": "charge.completed",
+                 "data": {"id": 7, "tx_ref": "inv1", "status": "successful",
+                          "amount": 199.0, "currency": "USD"}})
+        self.assertTrue(good["ok"], good)
+        self.assertTrue(good["event"].paid)
+
+        with mock.patch.dict("os.environ", {"FLUTTERWAVE_SECRET_KEY": "flw_x",
+                                            "FLUTTERWAVE_WEBHOOK_HASH": "hash_x"}):
+            bad = get_provider("flutterwave").verify_webhook(
+                {"verif-hash": "nope"}, b"{}", {"event": "charge.completed", "data": {}})
+        self.assertFalse(bad["ok"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

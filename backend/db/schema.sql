@@ -258,35 +258,70 @@ create table if not exists public.idempotency_records (
 alter table public.idempotency_records enable row level security;
 
 create table if not exists public.invoices (
-  id            text primary key,
-  user_id       text not null references public.users (id) on delete cascade,
-  tier          text not null check (tier in ('free','premium','vip')),
-  amount        numeric(18,8) not null,
-  currency      text not null default 'USD',
-  status        text not null default 'pending' check (status in ('pending','paid','approved','rejected','refunded','expired')),
-  provider      text,
-  provider_ref  text,
-  tx_ref        text,
-  promo_code    text,
-  discount_pct  numeric(5,2) not null default 0,
-  sub_id        text,
-  paid_at       timestamptz,
-  created_at    timestamptz not null default timezone('utc', now())
+  id             text primary key,
+  user_id        text not null references public.users (id) on delete cascade,
+  tier           text not null check (tier in ('free','premium','vip')),
+  method         text not null default 'crypto' check (method in ('crypto','manual','gateway')),
+  network        text,
+  wallet_address text,
+  amount_usd     numeric(18,2) not null,
+  discount_usd   numeric(18,2) not null default 0,
+  promo_code     text,
+  status         text not null default 'pending' check (status in ('pending','approved','rejected','cancelled','refunded','expired')),
+  tx_ref         text,
+  note           text,
+  provider       text not null default 'manual',
+  provider_ref   text,
+  checkout_url   text,
+  unique_amount  numeric(18,2),
+  memo           text,
+  currency       text not null default 'USD',
+  paid_at        timestamptz,
+  created_at     timestamptz not null default timezone('utc', now()),
+  expires_at     timestamptz,
+  processed_at   timestamptz,
+  processed_by   text
 );
 
 alter table public.invoices enable row level security;
 
-create index if not exists invoices_user_idx on public.invoices (user_id);
+create index if not exists invoices_user_created_idx on public.invoices (user_id, created_at desc);
+create unique index if not exists invoices_provider_ref_uq
+  on public.invoices (provider, provider_ref) where provider_ref is not null;
+create index if not exists invoices_status_created_idx on public.invoices (status, created_at desc);
+
+create table if not exists public.payment_events (
+  id          text primary key,
+  provider    text not null,
+  event_id    text not null,
+  invoice_id  text,
+  type        text,
+  status      text not null default 'processed' check (status in ('processed','ignored','error','duplicate')),
+  detail      text,
+  payload     jsonb,
+  created_at  timestamptz not null default timezone('utc', now())
+);
+
+alter table public.payment_events enable row level security;
+
+create unique index if not exists payment_events_provider_event_uq
+  on public.payment_events (provider, event_id);
+create index if not exists payment_events_invoice_idx on public.payment_events (invoice_id);
 
 create table if not exists public.subscriptions (
-  id          text primary key,
-  user_id     text not null references public.users (id) on delete cascade,
-  tier        text not null check (tier in ('free','premium','vip')),
-  status      text not null default 'active' check (status in ('active','canceled','past_due','expired')),
-  current_period_end timestamptz,
-  auto_renew  boolean not null default true,
-  created_at  timestamptz not null default timezone('utc', now()),
-  updated_at  timestamptz not null default timezone('utc', now())
+  id                     text primary key,
+  user_id                text not null references public.users (id) on delete cascade,
+  tier                   text not null check (tier in ('free','premium','vip')),
+  status                 text not null default 'active' check (status in ('active','expired','cancelled')),
+  auto_renew             boolean not null default true,
+  cancel_at_period_end   boolean not null default false,
+  grace_until            timestamptz,
+  provider               text,
+  provider_ref           text,
+  reminder_sent_count    int not null default 0,
+  started_at             timestamptz not null default timezone('utc', now()),
+  expires_at             timestamptz,
+  last_invoice_id        text
 );
 
 alter table public.subscriptions enable row level security;

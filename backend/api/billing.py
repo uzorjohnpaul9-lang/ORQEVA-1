@@ -15,7 +15,8 @@ router = APIRouter(prefix="/api/billing", tags=["billing"])
 
 class InvoiceCreate(BaseModel):
     tier: str = Field(pattern="^(premium|vip)$")
-    method: str = Field(default="crypto", pattern="^(crypto|manual)$")
+    method: str = Field(default="crypto",
+                       pattern="^(crypto|manual|nowpayments|stripe|paystack|flutterwave)$")
     promo_code: str | None = Field(default=None, max_length=40)
 
 
@@ -43,7 +44,21 @@ class ProcessReason(BaseModel):
 @router.get("/plans")
 async def get_plans(user: dict = Depends(get_current_user)):
     check_rate_limit(user["id"], user.get("tier", "free"))
-    return {"plans": billing.plans(), "current_tier": user.get("tier"), "bank_card": billing.bank_card_details()}
+    return {"plans": billing.plans(), "current_tier": user.get("tier"),
+            "bank_card": billing.bank_card_details(),
+            "gateways": billing.configured_gateways()}
+
+
+@router.get("/providers")
+async def payment_providers(user: dict = Depends(get_current_user)):
+    """Gateways that have keys configured server-side; hand-pay rails always on."""
+    return {
+        "gateways": billing.configured_gateways(),
+        "manual_methods": [
+            {"provider": "crypto", "display_name": "Crypto (USDT)"},
+            {"provider": "manual", "display_name": "Manual (bank/card)"},
+        ],
+    }
 
 
 @router.get("/subscription")
@@ -138,7 +153,7 @@ async def cancel_my_invoice(
 
 @router.get("/admin/invoices")
 async def admin_invoices(
-    status: str | None = Query(None, pattern="^(pending|approved|rejected|refunded|cancelled)$"),
+    status: str | None = Query(None, pattern="^(pending|approved|rejected|refunded|cancelled|expired)$"),
     limit: int = Query(100, ge=1, le=500),
     db: SupabaseDB = Depends(get_db),
     user: dict = Depends(require_admin),
@@ -256,6 +271,16 @@ async def stats(
     user: dict = Depends(require_admin),
 ):
     return await billing.admin_stats(db)
+
+
+@router.get("/admin/revenue")
+async def revenue(
+    db: SupabaseDB = Depends(get_db),
+    user: dict = Depends(require_admin),
+):
+    """Phase I revenue dashboard: MRR/ARR, tier mix, revenue by month,
+    expiring-soon windows, churn, LTV, provider split."""
+    return await billing.revenue_dashboard(db)
 
 
 class BankCardDetails(BaseModel):

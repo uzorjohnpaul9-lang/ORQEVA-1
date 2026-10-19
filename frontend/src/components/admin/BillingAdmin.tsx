@@ -5,14 +5,9 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { api } from "@/lib/api";
+import type { Invoice, RevenueDashboard } from "@/lib/types";
 import { AdminCard, AdminCardHeader, AdminCardTitle, AdminStatCard } from "@/components/admin/AdminCard";
 
-interface Invoice {
-  id: string; tier: string; method: string; network: string | null;
-  wallet_address: string | null; amount_usd: number; discount_usd: number;
-  promo_code: string | null; status: string; tx_ref: string | null;
-  created_at: string; expires_at: string; user_email?: string;
-}
 interface Promo { code: string; discount_pct: number; max_uses: number; uses_count: number; active: boolean }
 interface BankCard {
   bank_name: string; account_name: string; account_number: string;
@@ -26,11 +21,13 @@ interface Stats {
 }
 
 const STATUS_VARIANT: Record<string, "green" | "red" | "yellow" | "gray" | "blue"> = {
-  approved: "green", pending: "yellow", rejected: "red", refunded: "blue", cancelled: "gray",
+  approved: "green", pending: "yellow", rejected: "red", refunded: "blue",
+  cancelled: "gray", expired: "gray",
 };
 
 export function BillingAdmin({ token }: { token: string }) {
   const [stats, setStats] = useState<Stats | null>(null);
+  const [revenue, setRevenue] = useState<RevenueDashboard | null>(null);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [promos, setPromos] = useState<Promo[]>([]);
   const [newPromo, setNewPromo] = useState({ code: "", discount_pct: "20", max_uses: "100" });
@@ -41,12 +38,13 @@ export function BillingAdmin({ token }: { token: string }) {
   const refresh = useCallback(async () => {
     if (!token) return;
     try {
-      const [st, all, pr] = await Promise.all([
+      const [st, rev, all, pr] = await Promise.all([
         api<Stats>("/api/billing/admin/stats", { token }),
+        api<RevenueDashboard>("/api/billing/admin/revenue", { token }),
         api<Invoice[]>("/api/billing/admin/invoices?limit=50", { token }),
         api<Promo[]>("/api/billing/admin/promos", { token }),
       ]);
-      setStats(st); setInvoices(all); setPromos(pr); setError(null);
+      setStats(st); setRevenue(rev); setInvoices(all); setPromos(pr); setError(null);
     } catch {
       setError("Could not load admin billing data");
     }
@@ -127,6 +125,63 @@ export function BillingAdmin({ token }: { token: string }) {
         </div>
       )}
 
+      {revenue && (
+        <AdminCard>
+          <AdminCardHeader>
+            <AdminCardTitle>Revenue Dashboard</AdminCardTitle>
+          </AdminCardHeader>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+            <AdminStatCard label="MRR" value={`$${revenue.mrr_usd.toLocaleString()}`} />
+            <AdminStatCard label="ARR" value={`$${revenue.arr_usd.toLocaleString()}`} />
+            <AdminStatCard label="Net (30d-refunds)" value={`$${revenue.net_usd.toLocaleString()}`} />
+            <AdminStatCard label="Paying Users" value={`${revenue.paying_users}`} />
+            <AdminStatCard label="Avg LTV" value={`$${revenue.ltv_usd.toLocaleString()}`} />
+            <AdminStatCard label="Churned (30d)" value={`${revenue.churned_30d}`} />
+          </div>
+
+          <div className="flex flex-wrap gap-2 mt-4 text-sm">
+            <span className="px-3 py-2 bg-bg-tertiary rounded-lg">Expiring 7d: <b>{revenue.expiring_7d}</b></span>
+            <span className="px-3 py-2 bg-bg-tertiary rounded-lg">Expiring 3d: <b>{revenue.expiring_3d}</b></span>
+            <span className="px-3 py-2 bg-bg-tertiary rounded-lg">Expiring 1d: <b>{revenue.expiring_1d}</b></span>
+            <span className="px-3 py-2 bg-bg-tertiary rounded-lg">In grace: <b>{revenue.in_grace}</b></span>
+            <span className="px-3 py-2 bg-bg-tertiary rounded-lg">Cancelling: <b>{revenue.cancelling_at_period_end}</b></span>
+          </div>
+
+          {revenue.revenue_by_month.length > 0 && (() => {
+            const peak = Math.max(...revenue.revenue_by_month.map((m) => m.revenue_usd), 1);
+            return (
+              <div className="mt-4 space-y-1.5">
+                <p className="text-xs font-medium text-text-muted uppercase">Revenue by month</p>
+                {revenue.revenue_by_month.map((m) => (
+                  <div key={m.month} className="flex items-center gap-2 text-xs">
+                    <span className="w-16 text-text-muted font-mono">{m.month}</span>
+                    <div className="flex-1 bg-bg-tertiary rounded h-3 overflow-hidden">
+                      <div
+                        className="h-3 bg-green/60 rounded"
+                        style={{ width: `${Math.max((m.revenue_usd / peak) * 100, m.revenue_usd > 0 ? 3 : 0)}%` }}
+                      />
+                    </div>
+                    <span className="w-20 text-right font-mono">${m.revenue_usd.toLocaleString()}</span>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+
+          {Object.keys(revenue.revenue_by_provider).length > 0 && (
+            <div className="flex flex-wrap gap-2 mt-4 text-sm">
+              {Object.entries(revenue.revenue_by_provider).map(([prov, agg]) => (
+                <div key={prov} className="px-3 py-2 bg-bg-tertiary rounded-lg">
+                  <span className="uppercase text-text-muted">{prov}</span>{" "}
+                  <span className="font-semibold">${agg.revenue_usd.toLocaleString()}</span>
+                  <span className="text-xs text-text-muted"> ({agg.count})</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </AdminCard>
+      )}
+
       <AdminCard>
         <AdminCardHeader><AdminCardTitle>Payment Details (shown on invoices)</AdminCardTitle></AdminCardHeader>
         <form onSubmit={saveBank} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -182,6 +237,7 @@ export function BillingAdmin({ token }: { token: string }) {
                   <th className="px-4 py-2 font-medium">User</th>
                   <th className="px-4 py-2 font-medium">Tier</th>
                   <th className="px-4 py-2 font-medium">Amount</th>
+                  <th className="px-4 py-2 font-medium">Provider</th>
                   <th className="px-4 py-2 font-medium">Status</th>
                   <th className="px-4 py-2 font-medium">Proof</th>
                   <th className="px-4 py-2 font-medium">Actions</th>
@@ -189,13 +245,19 @@ export function BillingAdmin({ token }: { token: string }) {
               </thead>
               <tbody>
                 {invoices.length === 0 && (
-                  <tr><td colSpan={6} className="px-4 py-6 text-center text-text-muted">No invoices.</td></tr>
+                  <tr><td colSpan={7} className="px-4 py-6 text-center text-text-muted">No invoices.</td></tr>
                 )}
                 {invoices.map((inv) => (
                   <tr key={inv.id} className="border-b border-border/50 last:border-0">
                     <td className="px-4 py-2.5 text-xs">{inv.user_email ?? "-"}</td>
                     <td className="px-4 py-2.5 capitalize">{inv.tier}</td>
-                    <td className="px-4 py-2.5 font-mono">${inv.amount_usd.toLocaleString()}</td>
+                    <td className="px-4 py-2.5 font-mono">
+                      ${inv.amount_usd.toLocaleString()}
+                      {inv.status === "pending" && inv.unique_amount != null && (
+                        <span className="block text-xs text-yellow font-normal">${inv.unique_amount.toFixed(2)}</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5 text-xs">{inv.provider ?? inv.method}</td>
                     <td className="px-4 py-2.5"><Badge variant={STATUS_VARIANT[inv.status] ?? "gray"}>{inv.status}</Badge></td>
                     <td className="px-4 py-2.5 text-xs font-mono max-w-[120px] truncate" title={inv.tx_ref ?? ""}>{inv.tx_ref ? `${inv.tx_ref.slice(0, 12)}...` : "-"}</td>
                     <td className="px-4 py-2.5">

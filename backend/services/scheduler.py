@@ -138,6 +138,12 @@ async def run_scheduled_scan() -> dict:
             expired_blocks = await sentinel_service.expire_stale_blocks(db)
         except Exception:  # pragma: no cover - defensive
             expired_blocks = 0
+        try:
+            # Phase I: billing reminders, renewal invoices, grace expiry sweep.
+            from backend.services import billing_service
+            billing = await billing_service.billing_jobs(db)
+        except Exception:  # pragma: no cover - defensive
+            billing = {}
         log.info(
             "scheduled scan: %s signals (%s), errors=%s, resolved=%s",
             out["signals_generated"], out["by_market"], out["errors"], resolved,
@@ -149,6 +155,7 @@ async def run_scheduled_scan() -> dict:
         summary["event_alerts"] = alerts
         summary["weekly_digest"] = digest
         summary["blocks_expired"] = expired_blocks
+        summary["billing"] = billing
         summary["at"] = __import__("backend.db.supabase", fromlist=["now_iso"]).now_iso()
         _last_scan = summary
         return summary

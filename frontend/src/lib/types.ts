@@ -307,6 +307,65 @@ export interface BlockedIp {
   cleared_at?: string | null;
 }
 
+export interface Invoice {
+  id: string;
+  tier: string;
+  method: string;
+  network: string | null;
+  wallet_address: string | null;
+  amount_usd: number;
+  discount_usd: number;
+  promo_code: string | null;
+  status: string;
+  tx_ref: string | null;
+  /** Which rail paid this: crypto | manual | nowpayments | stripe | paystack | flutterwave. */
+  provider: string | null;
+  provider_ref: string | null;
+  checkout_url: string | null;
+  /** Exact amount hand-payers must send (base + unique cents). */
+  unique_amount: number | null;
+  memo: string | null;
+  paid_at: string | null;
+  created_at: string;
+  expires_at: string;
+  processed_at?: string | null;
+  user_email?: string;
+}
+
+export interface Subscription {
+  tier?: string;
+  status: string;
+  auto_renew?: boolean;
+  cancel_at_period_end?: boolean;
+  grace_until?: string | null;
+  started_at?: string;
+  expires_at?: string;
+  days_left?: number;
+  lifetime_spend_usd?: number;
+}
+
+export interface RevenueDashboard {
+  revenue_usd: number;
+  refunded_usd: number;
+  net_usd: number;
+  mrr_usd: number;
+  arr_usd: number;
+  pending_invoices: number;
+  active_subscriptions: number;
+  subscriptions_by_tier: Record<string, { count: number; mrr_usd: number }>;
+  in_grace: number;
+  cancelling_at_period_end: number;
+  expiring_7d: number;
+  expiring_3d: number;
+  expiring_1d: number;
+  churned_30d: number;
+  revenue_by_month: Array<{ month: string; revenue_usd: number }>;
+  revenue_by_provider: Record<string, { count: number; revenue_usd: number }>;
+  ltv_usd: number;
+  paying_users: number;
+  gateway_providers: string[];
+}
+
 export interface AdminUserContext {
   profile: {
     id: string;

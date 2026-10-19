@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from backend.config import settings
 from backend.db.database import init_db, readyz
-from backend.api import auth, signals, portfolio, market, risk, dashboard, engine, trading, ai, exchanges, billing, preferences, notifications, admin, auto_trade, learn, calendar, telegram, support
+from backend.api import auth, signals, portfolio, market, risk, dashboard, engine, trading, ai, exchanges, billing, billing_webhooks, preferences, notifications, admin, auto_trade, learn, calendar, telegram, support
 from backend.middleware.security_headers import SecurityHeadersMiddleware
 from backend.middleware.sentinel import SentinelMiddleware
 from backend.monitoring.metrics import MetricsMiddleware, render as render_metrics
@@ -74,6 +74,7 @@ app.include_router(trading.router)
 app.include_router(ai.router)
 app.include_router(exchanges.router)
 app.include_router(billing.router)
+app.include_router(billing_webhooks.router)
 app.include_router(admin.router)
 app.include_router(preferences.router)
 app.include_router(notifications.router)
