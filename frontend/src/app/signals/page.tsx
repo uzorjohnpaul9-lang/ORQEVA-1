@@ -214,6 +214,9 @@ export default function SignalsPage() {
             <p className="text-sm text-text-secondary">
               You&apos;re on the <span className="font-medium text-text-primary">{tierLabel(user?.tier)}</span> plan —
               more signals (stocks, commodities, crypto &amp; memecoins) are locked.
+              {(user?.tier || "free").toLowerCase() === "free"
+                ? " Your feed is 5 minutes behind real time."
+                : " Your feed is 1 minute behind real time."}
             </p>
             <Link href="/vip">
               <Button size="sm">See plans & upgrade</Button>
@@ -275,8 +278,8 @@ export default function SignalsPage() {
           const ctx = eventCtx(s);
           return (
             <StaggerItem key={s.id}>
-            <Card className="hover:border-border-light transition-colors cursor-pointer" >
-              <div onClick={() => openDetail(s)}>
+            <Card className={`hover:border-border-light transition-colors ${s.locked ? "" : "cursor-pointer"}`} >
+              <div onClick={s.locked ? undefined : () => openDetail(s)}>
                 <div className="flex items-start justify-between mb-3">
                   <div>
                     <div className="flex items-center gap-2">
@@ -305,24 +308,39 @@ export default function SignalsPage() {
                       </div>
                     )}
                   </div>
-                  <Badge variant={s.direction === "buy" ? "green" : "red"} dot>
-                    {s.direction.toUpperCase()}
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    {s.locked && <Badge variant="purple">LOCKED</Badge>}
+                    <Badge variant={s.direction === "buy" ? "green" : "red"} dot>
+                      {s.direction.toUpperCase()}
+                    </Badge>
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-3 text-center">
-                  <div>
-                    <p className="text-[10px] text-text-muted uppercase">Entry</p>
-                    <p className="text-sm font-mono font-medium mt-0.5">{fmt(s.entry_price)}</p>
+                <div className="relative">
+                  <div className={`grid grid-cols-3 gap-3 text-center ${s.locked ? "blur-[6px] select-none" : ""}`}>
+                    <div>
+                      <p className="text-[10px] text-text-muted uppercase">Entry</p>
+                      <p className="text-sm font-mono font-medium mt-0.5">{fmt(s.entry_price)}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-text-muted uppercase">Stop Loss</p>
+                      <p className="text-sm font-mono font-medium mt-0.5 text-red-400">{fmt(s.stop_loss)}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-text-muted uppercase">Take Profit</p>
+                      <p className="text-sm font-mono font-medium mt-0.5 text-green">{fmt(s.take_profit)}</p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-[10px] text-text-muted uppercase">Stop Loss</p>
-                    <p className="text-sm font-mono font-medium mt-0.5 text-red-400">{fmt(s.stop_loss)}</p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] text-text-muted uppercase">Take Profit</p>
-                    <p className="text-sm font-mono font-medium mt-0.5 text-green">{fmt(s.take_profit)}</p>
-                  </div>
+                  {s.locked && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5">
+                      <p className="text-[11px] font-semibold text-text-secondary">
+                        Upgrade to unlock entry, SL &amp; TP
+                      </p>
+                      <Link href="/vip" onClick={(e) => e.stopPropagation()}>
+                        <Button size="sm" variant="secondary">See plans</Button>
+                      </Link>
+                    </div>
+                  )}
                 </div>
 
                 {ctx && (

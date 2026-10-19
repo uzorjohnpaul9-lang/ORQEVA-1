@@ -13,6 +13,7 @@ import requests
 from backend.db.models import USERS
 from backend.db.supabase import SupabaseDB
 from backend.services import preferences_service as prefs_service
+from backend.services import signal_service
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +136,7 @@ async def broadcast_signals(db: SupabaseDB, signals: list[dict]) -> int:
     min-confidence filters and their default_market. Returns messages sent.
     """
     fresh = [s for s in signals if s]
-    if not fresh:
+    if not fresh and not _PENDING_ALERTS:
         return 0
     sent = 0
     users = await db.fetch_all(USERS, where={"is_active": True})
@@ -147,17 +148,29 @@ async def broadcast_signals(db: SupabaseDB, signals: list[dict]) -> int:
             continue
         if "signals" not in _TIER_ALLOWED.get(user.get("tier", "free"), {"signals", "system"}):
             continue
+        user_tier = user.get("tier", "free")
         market = prefs.get("default_market", "all")
         matched = [
             s for s in fresh
             if (market == "all" or s.get("market") == market)
             and prefs_service.matches_filters(prefs, s)
         ]
-        if not matched:
+        # Latency ladder: hold signals still inside this user's window, then
+        # deliver anything (including earlier deferrals) that has come due.
+        deferred = [s for s in matched if not signal_service.is_released(s, user_tier)]
+        if deferred:
+            bucket = _PENDING_ALERTS.setdefault(user["id"], [])
+            bucket.extend(deferred)
+            if len(bucket) > _MAX_PENDING:
+                del bucket[: len(bucket) - _MAX_PENDING]
+        deliver = _take_released_alerts(user["id"], user_tier) + [
+            s for s in matched if signal_service.is_released(s, user_tier)
+        ]
+        if not deliver:
             continue
-        text = "<b>Engine scan</b>\n" + "\n\n".join(format_signal_alert(s) for s in matched)
+        text = "<b>Engine scan</b>\n" + "\n\n".join(format_signal_alert(s) for s in deliver)
         ok, detail = await asyncio.to_thread(
-            _post_message, _bot_token(user.get("tier", "free")), user["telegram_chat_id"], text
+            _post_message, _bot_token(user_tier), user["telegram_chat_id"], text
         )
         if ok:
             sent += 1
@@ -260,9 +273,127 @@ _CHANNEL_CHAIN = {
     "vip": ("vip",),
 }
 
+# Phase J latency ladder: fresh signals are held per delivery target and only
+# released once they have aged past that target's tier delay. In-process and
+# best-effort - a restart simply drops undelivered alerts.
+_PENDING_CHANNELS: dict[str, list[dict]] = {}
+_PENDING_ALERTS: dict[str, list[dict]] = {}
+_MAX_PENDING = 50
+
 
 def _channel_id(tier: str) -> str:
     return _clean(os.getenv(f"TELEGRAM_CHANNEL_{tier.upper()}"))
+
+
+async def _post_to_channel(chan_tier: str, text: str) -> tuple[bool, str]:
+    channel_id = _channel_id(chan_tier)
+    if not channel_id:
+        return False, "no_channel_id"
+    return await asyncio.to_thread(_post_message, _bot_token(chan_tier), channel_id, text)
+
+
+def _channel_block(market: str, signals: list[dict]) -> str:
+    lines = [format_signal_alert(s) for s in signals if s]
+    if not lines:
+        return ""
+    title = (market or "scan").replace("_", " ").title()
+    return "<b>Engine scan - " + title + "</b>\n" + "\n".join(lines)
+
+
+async def queue_channel_signals(signals_by_tier: dict[str, list[dict]]) -> None:
+    """Hold fresh signals per target channel so each channel can apply its own
+    latency window (free 5m / premium 1m / vip real-time)."""
+    for src_tier, signals in signals_by_tier.items():
+        fresh = [s for s in signals if s]
+        if not fresh:
+            continue
+        for chan_tier in _CHANNEL_CHAIN.get(src_tier, (src_tier,)):
+            bucket = _PENDING_CHANNELS.setdefault(chan_tier, [])
+            bucket.extend(fresh)
+            if len(bucket) > _MAX_PENDING:
+                del bucket[: len(bucket) - _MAX_PENDING]
+
+
+async def flush_channel_signals() -> int:
+    """Post queued signals whose latency window has elapsed, per channel."""
+    global _LAST_CHANNEL_FANOUT
+    from datetime import datetime, timezone
+
+    sent = 0
+    results: dict[str, dict] = {}
+    attempted = False
+    for chan_tier in list(_PENDING_CHANNELS.keys()):
+        pending = _PENDING_CHANNELS.get(chan_tier) or []
+        released = [s for s in pending if signal_service.is_released(s, chan_tier)]
+        remaining = [s for s in pending if not signal_service.is_released(s, chan_tier)]
+        if remaining:
+            _PENDING_CHANNELS[chan_tier] = remaining
+        else:
+            _PENDING_CHANNELS.pop(chan_tier, None)
+        if not released:
+            continue
+        if not _channel_id(chan_tier):
+            results[chan_tier] = {"ok": False, "detail": "no_channel_id"}
+            continue
+        by_market: dict[str, list[dict]] = {}
+        for s in released:
+            by_market.setdefault(s.get("market") or "", []).append(s)
+        text = "\n\n".join(_channel_block(m, sigs) for m, sigs in by_market.items())
+        if not text:
+            continue
+        attempted = True
+        ok, detail = await _post_to_channel(chan_tier, text)
+        results[chan_tier] = {"ok": ok, "detail": detail}
+        if ok:
+            sent += 1
+        elif detail != "no_bot_token":
+            logger.warning(f"Telegram channel post failed ({chan_tier}): {detail}")
+    if attempted:
+        _LAST_CHANNEL_FANOUT = {
+            "at": datetime.now(timezone.utc).isoformat(),
+            "sent": sent,
+            "results": results,
+        }
+    return sent
+
+
+def _take_released_alerts(user_id: str, tier: str) -> list[dict]:
+    pending = _PENDING_ALERTS.get(user_id)
+    if not pending:
+        return []
+    released = [s for s in pending if signal_service.is_released(s, tier)]
+    remaining = [s for s in pending if not signal_service.is_released(s, tier)]
+    if remaining:
+        _PENDING_ALERTS[user_id] = remaining
+    else:
+        _PENDING_ALERTS.pop(user_id, None)
+    return released
+
+
+def deferred_count() -> int:
+    """Signals still waiting on a tier latency window (channels + per-user)."""
+    return sum(len(v) for v in _PENDING_CHANNELS.values()) + sum(
+        len(v) for v in _PENDING_ALERTS.values()
+    )
+
+
+async def flush_deferred(db: SupabaseDB) -> int:
+    """Release queued deliveries whose tier window has elapsed.
+
+    Called every scheduler cycle so latency-deferred alerts do not have to wait
+    for the next scan that happens to emit signals. Never raises.
+    """
+    sent = 0
+    try:
+        sent += await flush_channel_signals()
+    except Exception:
+        logger.exception("deferred channel flush failed")
+    try:
+        if _PENDING_ALERTS:
+            sent += await broadcast_signals(db, [])
+    except Exception:
+        logger.exception("deferred alert flush failed")
+    return sent
 
 
 def channels_configured() -> bool:
@@ -289,14 +420,11 @@ async def broadcast_channels(texts_by_tier: dict[str, str]) -> int:
         if not text:
             continue
         for chan_tier in _CHANNEL_CHAIN.get(src_tier, (src_tier,)):
-            channel_id = _channel_id(chan_tier)
-            if not channel_id:
+            if not _channel_id(chan_tier):
                 results[chan_tier] = {"ok": False, "detail": "no_channel_id"}
                 continue
             attempted = True
-            ok, detail = await asyncio.to_thread(
-                _post_message, _bot_token(chan_tier), channel_id, text
-            )
+            ok, detail = await _post_to_channel(chan_tier, text)
             results[chan_tier] = {"ok": ok, "detail": detail}
             if ok:
                 sent += 1

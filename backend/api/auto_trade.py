@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.db.database import get_db
 from backend.db.models import AUTO_TRADE_LOG
@@ -28,6 +28,13 @@ async def put_settings(
     user: dict = Depends(get_current_user),
 ):
     check_rate_limit(user["id"], user.get("tier", "free"))
+    if (body.route == "live"
+            and auto_trade_service._TIER_RANK.get(user.get("tier") or "free", 0)
+            < auto_trade_service._LIVE_MIN_TIER_RANK):
+        raise HTTPException(
+            status_code=403,
+            detail="Live routing requires a paid plan - upgrade to unlock real-money auto-trade",
+        )
     updated = await auto_trade_service.update_settings(db, user["id"], body)
     return auto_trade_service._view_settings(updated)
 

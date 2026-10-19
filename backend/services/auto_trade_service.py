@@ -28,6 +28,9 @@ from backend.api.risk import central
 _MARKET_MIN_TIER = {"stock": "premium", "forex": "free", "crypto": "vip", "commodity": "premium"}
 _TIER_RANK = {"free": 0, "premium": 1, "vip": 2}
 
+# Live routing is a paid entitlement; free users auto-trade the paper ledger only.
+_LIVE_MIN_TIER_RANK = 1
+
 MARKETS = ["stock", "forex", "crypto", "commodity"]
 
 
@@ -164,6 +167,12 @@ async def execute_for_signal(db: SupabaseDB, signal: dict, settings_rows: list[d
             if not _tier_allows(user.get("tier"), market):
                 continue
 
+            # Confidence-split signals are promoted behind a paid tier; a lower
+            # tier must not reach them through the auto-trade side door.
+            if (_TIER_RANK.get(signal.get("tier_required") or "free", 0)
+                    > _TIER_RANK.get(user.get("tier") or "free", 0)):
+                continue
+
             # Market enabled + confidence gate.
             if market not in s.get("markets", MARKETS):
                 continue
@@ -179,6 +188,10 @@ async def execute_for_signal(db: SupabaseDB, signal: dict, settings_rows: list[d
                 continue
 
             route = s.get("route") or "paper"
+            if route == "live" and _TIER_RANK.get(user.get("tier") or "free", 0) < _LIVE_MIN_TIER_RANK:
+                await _log(db, user_id=s["user_id"], signal=signal, status="skipped",
+                           route=route, reason="live routing requires a paid plan")
+                continue
             conn = None
             if route == "live":
                 conn = await active_connection(db, s["user_id"], market)

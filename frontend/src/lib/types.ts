@@ -32,6 +32,8 @@ export interface Signal {
   /** Provenance of the data behind the signal. */
   data_source?: "live" | "simulated" | null;
   indicators?: Record<string, unknown> | null;
+  /** True for a higher-tier signal shown as an upgrade teaser (levels hidden). */
+  locked?: boolean;
   created_at: string;
 }
 

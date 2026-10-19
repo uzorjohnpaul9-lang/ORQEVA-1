@@ -3,6 +3,43 @@ from datetime import datetime, timedelta, timezone
 from backend.db.models import SIGNALS, TRADES, gen_uuid
 from backend.db.supabase import SupabaseDB, now_iso, parse_dt
 
+# Delivery latency ladder (the "Signal latency" promise in the pricing matrix):
+# a free user sees a signal five minutes after it is generated, premium after
+# one minute, vip in real time.
+RELEASE_DELAY_SECONDS = {"free": 300, "premium": 60, "vip": 0}
+
+# Confidence split: a free-tier signal this strong is promoted to premium, so
+# free users see the everyday subset while paying users see the best calls.
+FREE_CONFIDENCE_CEILING = 0.75
+
+_TIER_RANK = {"free": 0, "premium": 1, "vip": 2}
+_SEE_TIERS = {
+    "free": ["free"],
+    "premium": ["free", "premium"],
+    "vip": ["free", "premium", "vip"],
+}
+
+
+def release_delay(tier: str | None) -> int:
+    """Seconds a tier waits before a freshly generated signal becomes visible."""
+    return RELEASE_DELAY_SECONDS.get((tier or "free").lower(), RELEASE_DELAY_SECONDS["free"])
+
+
+def released_at_iso(tier: str | None, now: datetime | None = None) -> str:
+    """Newest ``created_at`` a signal may have and still be visible to this tier."""
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(seconds=release_delay(tier))
+    return cutoff.isoformat().replace("+00:00", "Z")
+
+
+def is_released(signal: dict, tier: str | None, now: datetime | None = None) -> bool:
+    """True when the signal has aged past this tier's latency window."""
+    created = parse_dt(signal.get("created_at"))
+    if created is None:
+        return True
+    now = now or datetime.now(timezone.utc)
+    return (now - created).total_seconds() >= release_delay(tier)
+
 
 def _signal_row(s: dict) -> dict:
     row = dict(s)
@@ -60,12 +97,10 @@ async def save_signals_batch(db: SupabaseDB, signals: list[dict]) -> list[dict]:
 
 async def list_signals(db: SupabaseDB, market: str | None = None,
                        status: str | None = None, tier: str = "free",
-                       limit: int = 50) -> list[dict]:
+                       limit: int = 50, released_only: bool = True) -> list[dict]:
     # Default-deny: an unrecognised tier must not see anything, otherwise a
     # corrupt/typo'd tier value silently unlocks every gated signal.
-    allowed = {"free": ["free"],
-               "premium": ["free", "premium"],
-               "vip": ["free", "premium", "vip"]}.get((tier or "").lower())
+    allowed = _SEE_TIERS.get((tier or "").lower())
     if allowed is None:
         return []
 
@@ -74,7 +109,67 @@ async def list_signals(db: SupabaseDB, market: str | None = None,
         where["market"] = market
     if status:
         where["status"] = status
+    if released_only:
+        # Latency ladder: a tier only sees signals older than its own delay.
+        where["created_at"] = {"op": "lte", "value": released_at_iso(tier)}
     return await db.fetch_all(SIGNALS, where=where, order="created_at.desc", limit=limit)
+
+
+def _teaser(signal: dict) -> dict:
+    """Strip a locked signal down to a conversion teaser.
+
+    Levels and indicators are removed so the teaser cannot be traded; the
+    symbol, market, direction and confidence remain as the upgrade hook.
+    """
+    row = dict(signal)
+    row["entry_price"] = None
+    row["stop_loss"] = None
+    row["take_profit"] = None
+    row["indicators"] = None
+    row["locked"] = True
+    return row
+
+
+async def locked_teasers(db: SupabaseDB, market: str | None = None,
+                         status: str | None = None, tier: str = "free",
+                         limit: int = 3) -> list[dict]:
+    """Higher-tier signals the user cannot open yet, shown as locked teasers.
+
+    The user's own latency window still applies so upcoming paid calls are not
+    leaked ahead of schedule. Admins are handled by the caller.
+    """
+    user_tier = (tier or "").lower()
+    if user_tier not in _SEE_TIERS:
+        return []
+    hidden = [t for t in ("free", "premium", "vip") if _TIER_RANK[t] > _TIER_RANK[user_tier]]
+    if not hidden:
+        return []
+
+    where: dict = {
+        "tier_required": hidden,
+        "created_at": {"op": "lte", "value": released_at_iso(tier)},
+    }
+    if market:
+        where["market"] = market
+    if status:
+        where["status"] = status
+    rows = await db.fetch_all(SIGNALS, where=where, order="created_at.desc", limit=limit)
+    return [_teaser(r) for r in rows]
+
+
+def split_free_signals(signals: list[dict],
+                       ceiling: float = FREE_CONFIDENCE_CEILING) -> int:
+    """Promote strong free-tier signals to premium, mutating them in place.
+
+    Returns how many were promoted. Used by the engine scan so the free plan
+    sees the everyday subset and the confident calls sit behind an upgrade.
+    """
+    promoted = 0
+    for s in signals:
+        if s.get("tier") == "free" and float(s.get("confidence") or 0) >= ceiling:
+            s["tier"] = "premium"
+            promoted += 1
+    return promoted
 
 
 async def expire_old_signals(db: SupabaseDB, max_age_hours: int = 24):

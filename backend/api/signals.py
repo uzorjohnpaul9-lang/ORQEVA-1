@@ -41,6 +41,7 @@ def _category(market: str | None, symbol: str | None) -> str:
 def _serialize(signal: dict, with_decay: bool = True) -> dict:
     data = SignalResponse.model_validate(signal).model_dump(mode="json")
     data["category"] = _category(signal.get("market"), signal.get("symbol"))
+    data["locked"] = bool(signal.get("locked"))
     if with_decay:
         eff, age = signal_service.apply_decay(signal.get("confidence"), signal.get("created_at"))
         data["effective_confidence"] = eff
@@ -74,8 +75,16 @@ async def list_signals(
     if cached is not None:
         return cached
 
-    signals = await signal_service.list_signals(db, market=market, status=status, tier=user.get("tier", "free"), limit=limit)
+    tier = user.get("tier", "free")
+    signals = await signal_service.list_signals(db, market=market, status=status, tier=tier, limit=limit)
     result = [_serialize(s) for s in signals]
+
+    # Locked teasers: higher-tier signals shown blurred to drive the upgrade.
+    if not user.get("is_admin"):
+        teasers = await signal_service.locked_teasers(db, market=market, status=status, tier=tier, limit=3)
+        result.extend(_serialize(t) for t in teasers)
+        result.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+
     cache.set(cache_key, result, ttl=30)
     return result
 
@@ -131,6 +140,11 @@ async def signal_feed(
                 )
 
                 for s in new_signals:
+                    # Latency ladder: signals are ordered oldest-first, so the
+                    # first still-in-window signal means the rest are too. Stop
+                    # without advancing last_created so the next poll re-reads it.
+                    if not signal_service.is_released(s, user.get("tier", "free")):
+                        break
                     created = parse_dt(s.get("created_at"))
                     last_created_dt = parse_dt(last_created)
                     if created and last_created_dt and created > last_created_dt:
@@ -175,5 +189,11 @@ async def get_signal_detail(
 
     if not _tier_allowed(user, signal.get("tier_required")):
         raise HTTPException(status_code=403, detail=f"This signal requires {signal.get('tier_required')} tier")
+
+    if not user.get("is_admin") and not signal_service.is_released(signal, user.get("tier", "free")):
+        raise HTTPException(
+            status_code=403,
+            detail="This signal is still in your plan's latency window - upgrade for real-time signals",
+        )
 
     return _serialize(signal)

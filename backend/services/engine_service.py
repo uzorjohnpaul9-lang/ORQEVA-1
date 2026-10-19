@@ -87,6 +87,12 @@ async def run_scan(db: SupabaseDB, *, cooldown_hours: int = 0) -> dict:
                 s for s in sigs if (s["symbol"], s["market"], s["direction"]) not in seen
             ]
 
+    # Confidence split: strong free-tier calls become premium so the free plan
+    # keeps the everyday subset and the best calls sit behind an upgrade.
+    promoted = 0
+    for sigs in results.values():
+        promoted += signal_service.split_free_signals(sigs)
+
     all_signals = [s for sigs in results.values() for s in sigs]
     saved: list[dict] = []
     if all_signals:
@@ -100,6 +106,7 @@ async def run_scan(db: SupabaseDB, *, cooldown_hours: int = 0) -> dict:
     return {
         "signals_generated": len(saved),
         "by_market": {k: len(v) for k, v in results.items()},
+        "promoted_to_premium": promoted,
         "errors": errors,
         "saved": saved,
     }
@@ -120,20 +127,16 @@ async def _fan_out(db: SupabaseDB, results: dict, saved: list[dict], errors: lis
     from backend.services import notification_service as notif_service
 
     try:
-        channel_texts: dict[str, str] = {}
-        for mkt, sigs in results.items():
-            if not sigs:
-                continue
-            lines = [telegram_service.format_signal_alert(s) for s in saved if s.get("market") == mkt]
-            if not lines:
-                continue
-            block = "<b>Engine scan - " + mkt.replace("_", " ").title() + "</b>\n" + "\n".join(lines)
-            tier = sigs[0].get("tier", "free")
-            channel_texts[tier] = (channel_texts[tier] + "\n\n" + block) if channel_texts.get(tier) else block
+        by_tier: dict[str, list[dict]] = {}
+        for s in saved:
+            by_tier.setdefault(s.get("tier_required") or "free", []).append(s)
+        if by_tier:
+            await telegram_service.queue_channel_signals(by_tier)
+            # Channel fan-out is latency-aware: each channel releases a signal
+            # once it has aged past that channel tier's own delay.
+            await telegram_service.flush_channel_signals()
         if saved:
             await telegram_service.broadcast_signals(db, saved)
-        if any(channel_texts.values()):
-            await telegram_service.broadcast_channels(channel_texts)
     except Exception as e:
         errors.append(f"Telegram broadcast: {str(e)[:150]}")
 

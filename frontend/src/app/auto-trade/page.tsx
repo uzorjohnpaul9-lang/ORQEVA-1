@@ -27,6 +27,7 @@ const STATUS_VARIANT: Record<string, "green" | "red" | "blue" | "yellow" | "gray
 
 export default function AutoTradePage() {
   const { token, user } = useAuth();
+  const canGoLive = ["premium", "vip"].includes((user?.tier || "free").toLowerCase());
   const [settings, setSettings] = useState<AutoTradeSettings | null>(null);
   const [log, setLog] = useState<AutoTradeLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -128,10 +129,17 @@ export default function AutoTradePage() {
                   value={settings.route}
                   options={[
                     { value: "paper", label: "Paper (simulated)" },
-                    { value: "live", label: "Live (broker)" },
+                    ...(canGoLive ? [{ value: "live", label: "Live (broker)" }] : []),
                   ]}
                   onChange={(e) => save({ ...settings, route: e.target.value as "paper" | "live" })}
                 />
+                {!canGoLive && (
+                  <p className="text-xs text-text-muted">
+                    Live routing needs a paid plan —{" "}
+                    <Link href="/vip" className="text-green underline">upgrade</Link> to trade real money.
+                    For now your orders stay on the paper ledger.
+                  </p>
+                )}
                 {settings.route === "live" && (
                   <p className="text-xs text-text-muted">
                     The AI will only trade live when you have a validated broker connection for that market on the{" "}

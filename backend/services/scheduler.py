@@ -120,6 +120,12 @@ async def run_scheduled_scan() -> dict:
         alerts = await check_event_alerts(db)
         out = await engine_service.run_scan(db, cooldown_hours=_cooldown_hours())
         try:
+            # Phase J: release latency-deferred channel posts / per-user alerts.
+            from backend.services import telegram_service
+            deferred = await telegram_service.flush_deferred(db)
+        except Exception:  # pragma: no cover - defensive
+            deferred = 0
+        try:
             # Hard ceiling so a stalled provider can never wedge the tick loop.
             budget = int(os.getenv("OUTCOME_RESOLVE_BUDGET_SECONDS", "240"))
             resolved = await asyncio.wait_for(
@@ -139,6 +145,13 @@ async def run_scheduled_scan() -> dict:
         except Exception:  # pragma: no cover - defensive
             expired_blocks = 0
         try:
+            # Phase J: release latency-deferred Telegram deliveries (free 5m /
+            # premium 1m) even when this tick produced no new signals.
+            from backend.services import telegram_service
+            deferred = await telegram_service.flush_deferred(db)
+        except Exception:  # pragma: no cover - defensive
+            deferred = 0
+        try:
             # Phase I: billing reminders, renewal invoices, grace expiry sweep.
             from backend.services import billing_service
             billing = await billing_service.billing_jobs(db)
@@ -151,10 +164,13 @@ async def run_scheduled_scan() -> dict:
         from backend.monitoring.metrics import record_scan
         record_scan(out["signals_generated"], bool(out["errors"]))
         summary = {k: out[k] for k in ("signals_generated", "by_market", "errors")}
+        summary["promoted_to_premium"] = out.get("promoted_to_premium", 0)
         summary["resolved"] = resolved
         summary["event_alerts"] = alerts
+        summary["deferred_alerts"] = deferred
         summary["weekly_digest"] = digest
         summary["blocks_expired"] = expired_blocks
+        summary["deferred_alerts"] = deferred
         summary["billing"] = billing
         summary["at"] = __import__("backend.db.supabase", fromlist=["now_iso"]).now_iso()
         _last_scan = summary

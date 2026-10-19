@@ -1810,5 +1810,264 @@ class TestGatewaySignatures(unittest.TestCase):
         self.assertFalse(bad["ok"])
 
 
+class _FakeSignalsDB:
+    """Captures the where clause so the Phase J gating can be asserted."""
+
+    def __init__(self, rows=None):
+        self.rows = [dict(r) for r in (rows or [])]
+        self.last_where = None
+        self.last_limit = None
+        self.calls = 0
+
+    async def fetch_all(self, table, where=None, order=None, limit=None, columns="*"):
+        self.calls += 1
+        self.last_where = where
+        self.last_limit = limit
+        return [dict(r) for r in self.rows]
+
+
+def _ago_iso(seconds: int) -> str:
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat().replace("+00:00", "Z")
+
+
+class TestSignalLatency(unittest.TestCase):
+    """Phase J: the advertised ladder - free 5 min / premium 1 min / vip real-time."""
+
+    def test_release_delay_ladder(self):
+        from backend.services.signal_service import release_delay
+        self.assertEqual(release_delay("free"), 300)
+        self.assertEqual(release_delay("premium"), 60)
+        self.assertEqual(release_delay("vip"), 0)
+        self.assertEqual(release_delay("FREE"), 300)
+        self.assertEqual(release_delay(None), 300)
+        self.assertEqual(release_delay("banana"), 300)
+
+    def test_is_released_windows(self):
+        from backend.services.signal_service import is_released
+        fresh = {"created_at": _ago_iso(0)}
+        four_min = {"created_at": _ago_iso(240)}
+        six_min = {"created_at": _ago_iso(360)}
+        self.assertFalse(is_released(fresh, "free"))
+        self.assertFalse(is_released(fresh, "premium"))
+        self.assertTrue(is_released(fresh, "vip"))
+        self.assertFalse(is_released(four_min, "free"))
+        self.assertTrue(is_released(four_min, "premium"))
+        self.assertTrue(is_released(four_min, "vip"))
+        self.assertTrue(is_released(six_min, "free"))
+        self.assertTrue(is_released({}, "free"))
+
+    def test_list_signals_hides_signals_inside_the_window(self):
+        import asyncio
+        from backend.services.signal_service import list_signals
+
+        db = _FakeSignalsDB()
+        asyncio.run(list_signals(db, tier="free", limit=10))
+        where = db.last_where
+        self.assertIn("created_at", where)
+        self.assertEqual(where["created_at"]["op"], "lte")
+        self.assertEqual(where["tier_required"], ["free"])
+
+        db2 = _FakeSignalsDB()
+        asyncio.run(list_signals(db2, tier="vip", limit=10))
+        self.assertEqual(db2.last_where["tier_required"], ["free", "premium", "vip"])
+        self.assertIn("created_at", db2.last_where)
+
+    def test_unknown_tier_still_denied(self):
+        import asyncio
+        from backend.services.signal_service import list_signals
+
+        db = _FakeSignalsDB()
+        self.assertEqual(asyncio.run(list_signals(db, tier="hacked")), [])
+        self.assertEqual(db.calls, 0)
+
+
+class TestConfidenceSplit(unittest.TestCase):
+    """Phase J: free keeps the everyday subset, paying users get the best calls."""
+
+    def test_strong_free_signal_promoted_to_premium(self):
+        from backend.services.signal_service import split_free_signals
+        signals = [
+            {"tier": "free", "confidence": 0.92},
+            {"tier": "free", "confidence": 0.75},
+            {"tier": "free", "confidence": 0.74},
+            {"tier": "free", "confidence": 0.2},
+            {"tier": "premium", "confidence": 0.99},
+            {"tier": "vip", "confidence": 0.99},
+            {"tier": "free"},
+        ]
+        promoted = split_free_signals(signals)
+        self.assertEqual(promoted, 2)
+        self.assertEqual(signals[0]["tier"], "premium")
+        self.assertEqual(signals[1]["tier"], "premium")
+        self.assertEqual(signals[2]["tier"], "free")
+        self.assertEqual(signals[3]["tier"], "free")
+        self.assertEqual(signals[4]["tier"], "premium")
+        self.assertEqual(signals[5]["tier"], "vip")
+        self.assertEqual(signals[6]["tier"], "free")
+
+    def test_custom_ceiling(self):
+        from backend.services.signal_service import split_free_signals
+        signals = [{"tier": "free", "confidence": 0.6}]
+        self.assertEqual(split_free_signals(signals, ceiling=0.5), 1)
+        self.assertEqual(signals[0]["tier"], "premium")
+
+
+class TestLockedTeasers(unittest.TestCase):
+    """Phase J: locked upgrades show symbol/market but no tradeable levels."""
+
+    def test_teaser_strips_levels(self):
+        from backend.services.signal_service import _teaser
+        sig = {
+            "id": "s1", "symbol": "EURUSD", "market": "forex", "direction": "buy",
+            "confidence": 0.9, "entry_price": 1.1, "stop_loss": 1.05,
+            "take_profit": 1.2, "indicators": {"rsi": 71}, "tier_required": "premium",
+        }
+        out = _teaser(sig)
+        self.assertTrue(out["locked"])
+        self.assertIsNone(out["entry_price"])
+        self.assertIsNone(out["stop_loss"])
+        self.assertIsNone(out["take_profit"])
+        self.assertIsNone(out["indicators"])
+        self.assertEqual(out["symbol"], "EURUSD")
+        self.assertEqual(out["market"], "forex")
+        self.assertEqual(out["confidence"], 0.9)
+        self.assertEqual(sig["entry_price"], 1.1)
+
+    def test_tiers_requested(self):
+        import asyncio
+        from backend.services.signal_service import locked_teasers
+
+        free_db = _FakeSignalsDB()
+        asyncio.run(locked_teasers(free_db, tier="free"))
+        self.assertEqual(free_db.last_where["tier_required"], ["premium", "vip"])
+
+        pre_db = _FakeSignalsDB()
+        asyncio.run(locked_teasers(pre_db, tier="premium"))
+        self.assertEqual(pre_db.last_where["tier_required"], ["vip"])
+
+        vip_db = _FakeSignalsDB()
+        self.assertEqual(asyncio.run(locked_teasers(vip_db, tier="vip")), [])
+        self.assertEqual(vip_db.calls, 0)
+
+        odd_db = _FakeSignalsDB()
+        self.assertEqual(asyncio.run(locked_teasers(odd_db, tier="nope")), [])
+        self.assertEqual(odd_db.calls, 0)
+
+    def test_teasers_respect_the_latency_window(self):
+        import asyncio
+        from backend.services.signal_service import locked_teasers
+        db = _FakeSignalsDB()
+        asyncio.run(locked_teasers(db, tier="free"))
+        self.assertIn("created_at", db.last_where)
+        self.assertEqual(db.last_where["created_at"]["op"], "lte")
+
+    def test_serialize_marks_locked(self):
+        from backend.api.signals import _serialize
+        sig = {
+            "id": "s1", "symbol": "BTCUSD", "market": "crypto", "direction": "buy",
+            "confidence": 0.9, "entry_price": None, "stop_loss": None,
+            "take_profit": None, "strategy": "Crypto Momentum", "status": "active",
+            "tier_required": "vip", "indicators": None, "locked": True,
+            "created_at": _ago_iso(60),
+        }
+        self.assertTrue(_serialize(sig)["locked"])
+
+        unlocked = dict(sig, locked=False, tier_required="free")
+        self.assertFalse(_serialize(unlocked)["locked"])
+
+
+class TestAutoTradeTierGates(unittest.TestCase):
+    """Phase J: live routing + promoted signals stay behind a paid plan."""
+
+    def test_live_route_requires_paid_plan(self):
+        from backend.services.auto_trade_service import _LIVE_MIN_TIER_RANK, _TIER_RANK
+        self.assertGreaterEqual(_LIVE_MIN_TIER_RANK, 1)
+        self.assertLess(_TIER_RANK["free"], _LIVE_MIN_TIER_RANK)
+        self.assertGreaterEqual(_TIER_RANK["premium"], _LIVE_MIN_TIER_RANK)
+        self.assertGreaterEqual(_TIER_RANK["vip"], _LIVE_MIN_TIER_RANK)
+
+    def test_market_tier_ladder_unchanged(self):
+        from backend.services.auto_trade_service import _tier_allows
+        self.assertTrue(_tier_allows("free", "forex"))
+        self.assertFalse(_tier_allows("free", "stock"))
+        self.assertFalse(_tier_allows("premium", "crypto"))
+        self.assertTrue(_tier_allows("vip", "crypto"))
+        self.assertFalse(_tier_allows("free", "unknown-market"))
+
+
+class TestTelegramLatencyQueue(unittest.TestCase):
+    """Phase J: channel/user alerts hold signals until the target's window elapses."""
+
+    def _queue(self, tg, signal):
+        import asyncio
+        asyncio.run(tg.queue_channel_signals({"free": [signal]}))
+
+    def test_fresh_signal_only_reaches_the_vip_channel(self):
+        import asyncio
+        from unittest import mock
+        from backend.services import telegram_service as tg
+
+        posted = []
+
+        async def fake_post(chan_tier, text):
+            posted.append(chan_tier)
+            return True, "ok"
+
+        fresh = {"id": "s1", "symbol": "EURUSD", "market": "forex",
+                 "direction": "buy", "confidence": 0.8, "entry_price": 1.1,
+                 "stop_loss": 1.0, "take_profit": 1.2, "tier_required": "free",
+                 "created_at": _ago_iso(0)}
+        tg._PENDING_CHANNELS.clear()
+        with mock.patch.object(tg, "_channel_id", lambda t: "chan123"), \
+                mock.patch.object(tg, "_post_to_channel", fake_post):
+            self._queue(tg, fresh)
+            asyncio.run(tg.flush_channel_signals())
+        self.assertEqual(posted, ["vip"])
+        self.assertIn("free", tg._PENDING_CHANNELS)
+        self.assertIn("premium", tg._PENDING_CHANNELS)
+
+        # Once aged past every window it leaves the queue and fans out.
+        posted.clear()
+        aged = dict(fresh, created_at=_ago_iso(600))
+        tg._PENDING_CHANNELS.clear()
+        with mock.patch.object(tg, "_channel_id", lambda t: "chan123"), \
+                mock.patch.object(tg, "_post_to_channel", fake_post):
+            self._queue(tg, aged)
+            asyncio.run(tg.flush_channel_signals())
+        self.assertEqual(posted, ["free", "premium", "vip"])
+        self.assertFalse(tg._PENDING_CHANNELS)
+
+    def test_unconfigured_channel_drains_silently(self):
+        import asyncio
+        from unittest import mock
+        from backend.services import telegram_service as tg
+
+        aged = {"id": "s2", "symbol": "EURUSD", "market": "forex", "tier_required": "free",
+                "created_at": _ago_iso(600)}
+        tg._PENDING_CHANNELS.clear()
+        with mock.patch.object(tg, "_channel_id", lambda t: None):
+            self._queue(tg, aged)
+            asyncio.run(tg.flush_channel_signals())
+        self.assertFalse(tg._PENDING_CHANNELS)
+
+    def test_per_user_alerts_deferred_until_released(self):
+        from backend.services import telegram_service as tg
+
+        fresh = {"id": "s3", "created_at": _ago_iso(0)}
+        tg._PENDING_ALERTS.clear()
+        self.assertEqual(tg._take_released_alerts("u1", "free"), [])
+        self.assertEqual(tg._take_released_alerts("u1", "vip"), [])
+
+        tg._PENDING_ALERTS["u1"] = [fresh]
+        self.assertEqual(tg._take_released_alerts("u1", "vip"), [fresh])
+        self.assertFalse(tg._PENDING_ALERTS)
+
+        tg._PENDING_ALERTS["u1"] = [fresh]
+        self.assertEqual(tg._take_released_alerts("u1", "free"), [])
+        self.assertEqual(tg._PENDING_ALERTS["u1"], [fresh])
+        tg._PENDING_ALERTS.clear()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
