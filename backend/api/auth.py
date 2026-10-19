@@ -4,7 +4,7 @@ from urllib.parse import urljoin
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
-from backend.config import settings
+from backend.config import frontend_base
 from backend.db.supabase import (
     SupabaseDB,
     get_db,
@@ -27,15 +27,15 @@ RESET_TTL_MINUTES = 30
 
 
 def _absolute_link(path: str) -> str:
-    """Join APP_BASE_URL + a root-relative path without doubling slashes.
+    """Join the public frontend URL + a root-relative path without doubling slashes.
 
-    A trailing slash on APP_BASE_URL previously produced ``https://host//reset``
+    A trailing slash on the base URL previously produced ``https://host//reset``
     which some mail clients normalise away and others 404 on.
     """
-    base = (settings.APP_BASE_URL or "").strip()
+    base = frontend_base().strip()
     if not base:
         return path
-    return urljoin(base.rstrip("/") + "/", path.lstrip("/"))
+    return urljoin(base + "/", path.lstrip("/"))
 
 
 class ForgotRequest(BaseModel):
@@ -168,10 +168,11 @@ async def forgot_password(data: ForgotRequest, db: SupabaseDB = Depends(get_db))
             from backend.services import email_service
 
             if email_service.is_configured():
-                if "localhost" in settings.APP_BASE_URL or "127.0.0.1" in settings.APP_BASE_URL:
+                origin = frontend_base()
+                if "localhost" in origin or "127.0.0.1" in origin:
                     log.warning(
-                        "SMTP is configured but APP_BASE_URL=%r - reset links will not "
-                        "resolve outside this host", settings.APP_BASE_URL,
+                        "SMTP is configured but frontend URL=%r - reset links will not "
+                        "resolve outside this host", origin,
                     )
                 subject, html = email_service.reset_email(user["email"], link)
                 delivered_via_email = await email_service.send_email(user["email"], subject, html)

@@ -16,13 +16,13 @@ class PaystackProvider(PaymentProvider):
     def api_key(self) -> str:
         return os.getenv("PAYSTACK_SECRET_KEY", "")
 
-    def _create_checkout(self, invoice: dict, base_url: str) -> dict:
+    def _create_checkout(self, invoice: dict, base_url: str, frontend_base: str) -> dict:
         body = {
             "email": invoice.get("_user_email") or "customer@orqeva.com",
             "amount": int(float(invoice["amount_usd"]) * 100),  # kobo
             "currency": os.getenv("PAYSTACK_CURRENCY", "USD"),
             "reference": invoice["id"],
-            "callback_url": f"{base_url}/billing?status=paid",
+            "callback_url": f"{frontend_base}/billing?status=paid",
         }
         data = self._post_json(
             f"{API_BASE}/transaction/initialize",

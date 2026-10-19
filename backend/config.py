@@ -72,6 +72,10 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: str = ""
     SMTP_FROM: str = "ORQEVA <no-reply@orqeva.com>"
     APP_BASE_URL: str = "http://localhost:3000"
+    # Public frontend origin for post-payment redirects and user-facing links
+    # (reset emails, billing return). Webhooks must keep targeting APP_BASE_URL.
+    # Empty = fall back to APP_BASE_URL (single-origin deployments).
+    FRONTEND_BASE_URL: str = ""
     # Where support tickets are announced (optional). Empty = no email notify.
     SUPPORT_EMAIL: str = os.getenv("SUPPORT_EMAIL", "")
 
@@ -102,3 +106,13 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def frontend_base() -> str:
+    """Public origin for user-facing links (billing redirects, reset emails).
+
+    Falls back to APP_BASE_URL so single-origin deployments keep working.
+    Always call this for anything a *browser* is sent to; keep APP_BASE_URL
+    for webhook/callback URLs that a *gateway* must call back on.
+    """
+    return (settings.FRONTEND_BASE_URL or settings.APP_BASE_URL or "").rstrip("/")

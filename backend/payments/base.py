@@ -35,12 +35,18 @@ class PaymentProvider(ABC):
     def api_key(self) -> str:
         return ""
 
-    def create_checkout(self, invoice: dict, base_url: str) -> dict:
-        """Hosted checkout. Returns {ok, checkout_url?, detail?}; never raises."""
+    def create_checkout(self, invoice: dict, base_url: str, frontend_base: str | None = None) -> dict:
+        """Hosted checkout. Returns {ok, checkout_url?, detail?}; never raises.
+
+        ``base_url`` is the backend origin a gateway calls back on (webhooks);
+        ``frontend_base`` is the public app origin the user's browser is sent
+        to after payment. They fall back to the same value when only one is
+        configured (see config.frontend_base).
+        """
         if not self.is_configured():
             return {"ok": False, "detail": "gateway not configured"}
         try:
-            return self._create_checkout(invoice, base_url)
+            return self._create_checkout(invoice, base_url, frontend_base or base_url)
         except httpx.HTTPError as e:
             return {"ok": False, "detail": f"network: {str(e)[:120]}"}
         except Exception as e:
@@ -69,7 +75,7 @@ class PaymentProvider(ABC):
             return {"ok": False, "detail": str(e)[:200]}
 
     @abstractmethod
-    def _create_checkout(self, invoice: dict, base_url: str) -> dict: ...
+    def _create_checkout(self, invoice: dict, base_url: str, frontend_base: str) -> dict: ...
 
     @abstractmethod
     def _verify_webhook(self, headers: dict, body: bytes, payload: dict) -> dict: ...

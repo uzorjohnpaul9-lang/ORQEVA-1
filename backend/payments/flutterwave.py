@@ -18,12 +18,12 @@ class FlutterwaveProvider(PaymentProvider):
     def _webhook_hash(self) -> str:
         return os.getenv("FLUTTERWAVE_WEBHOOK_HASH", "")
 
-    def _create_checkout(self, invoice: dict, base_url: str) -> dict:
+    def _create_checkout(self, invoice: dict, base_url: str, frontend_base: str) -> dict:
         body = {
             "tx_ref": invoice["id"],
             "amount": float(invoice["amount_usd"]),
             "currency": os.getenv("FLUTTERWAVE_CURRENCY", "USD"),
-            "redirect_url": f"{base_url}/billing?status=paid",
+            "redirect_url": f"{frontend_base}/billing?status=paid",
             "customer": {"email": invoice.get("_user_email") or "customer@orqeva.com"},
             "customizations": {"title": f"ORQEVA {invoice.get('tier', '').upper()}"},
         }

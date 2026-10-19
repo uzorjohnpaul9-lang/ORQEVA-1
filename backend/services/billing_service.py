@@ -9,7 +9,7 @@ import math
 import random
 from datetime import datetime, timedelta, timezone
 
-from backend.config import settings
+from backend.config import frontend_base, settings
 from backend.db.models import (
     INVOICES,
     PAYMENT_EVENTS,
@@ -175,7 +175,9 @@ async def create_invoice(db: SupabaseDB, user: dict, tier: str,
             return {"error": "invalid_method"}
         checkout_input = dict(created)
         checkout_input["_user_email"] = user.get("email")
-        result = await asyncio.to_thread(provider.create_checkout, checkout_input, settings.APP_BASE_URL)
+        result = await asyncio.to_thread(
+            provider.create_checkout, checkout_input, settings.APP_BASE_URL, frontend_base()
+        )
         if not result.get("ok"):
             await db.update(
                 INVOICES,
@@ -479,7 +481,7 @@ async def _notify_paid(db: SupabaseDB, invoice: dict) -> None:
         await notif_service.create(db, owner["id"], "system", "Subscription activated",
                                    f"Your {tier} plan was confirmed and is now live.",
                                    respect_prefs=True)
-        base = settings.APP_BASE_URL.rstrip("/")
+        base = frontend_base()
         subject, html = email_service.subscription_paid_email(tier, f"{base}/billing")
         await email_service.send_email(owner.get("email") or "", subject, html)
     except Exception:  # pragma: no cover - notify must never fail the webhook

@@ -20,7 +20,7 @@ class StripeProvider(PaymentProvider):
     def _webhook_secret(self) -> str:
         return os.getenv("STRIPE_WEBHOOK_SECRET", "")
 
-    def _create_checkout(self, invoice: dict, base_url: str) -> dict:
+    def _create_checkout(self, invoice: dict, base_url: str, frontend_base: str) -> dict:
         body = [
             ("mode", "payment"),
             ("client_reference_id", invoice["id"]),
@@ -30,8 +30,8 @@ class StripeProvider(PaymentProvider):
             ("line_items[0][price_data][currency]", "usd"),
             ("line_items[0][price_data][unit_amount]", str(int(float(invoice["amount_usd"]) * 100))),
             ("line_items[0][price_data][product_data][name]", f"ORQEVA {invoice.get('tier', '').upper()}"),
-            ("success_url", f"{base_url}/billing?status=paid"),
-            ("cancel_url", f"{base_url}/billing"),
+            ("success_url", f"{frontend_base}/billing?status=paid"),
+            ("cancel_url", f"{frontend_base}/billing"),
         ]
         resp = self._post_form(f"{API_BASE}/checkout/sessions", body)
         if not resp.get("url"):

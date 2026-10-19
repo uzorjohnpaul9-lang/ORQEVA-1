@@ -1810,6 +1810,83 @@ class TestGatewaySignatures(unittest.TestCase):
         self.assertFalse(bad["ok"])
 
 
+class TestGatewayRedirectSplit(unittest.TestCase):
+    """Gateway checkouts split webhook (backend) vs redirect (frontend) origins."""
+
+    ENV = {
+        "NOWPAYMENTS_API_KEY": "np_key",
+        "NOWPAYMENTS_IPN_SECRET": "np_secret",
+        "STRIPE_SECRET_KEY": "sk_test",
+        "PAYSTACK_CURRENCY": "USD",
+    }
+
+    def test_frontend_base_fallback(self):
+        from backend.config import frontend_base, settings
+        orig_f, orig_a = settings.FRONTEND_BASE_URL, settings.APP_BASE_URL
+        try:
+            settings.APP_BASE_URL = "https://api.orqeva.test"
+            settings.FRONTEND_BASE_URL = ""
+            self.assertEqual(frontend_base(), "https://api.orqeva.test")
+            settings.FRONTEND_BASE_URL = "https://app.orqeva.test/"
+            self.assertEqual(frontend_base(), "https://app.orqeva.test")
+        finally:
+            settings.FRONTEND_BASE_URL, settings.APP_BASE_URL = orig_f, orig_a
+
+    def test_nowpayments_ipn_is_backend_redirect_is_frontend(self):
+        from backend.payments.nowpayments import NowPaymentsProvider
+        import json as _json
+        captured = {}
+
+        def fake_post(url, *, headers, json_body, timeout=20.0):
+            captured["body"] = json_body
+            return {"id": "123", "invoice_url": "https://nowpayments.io/pay/123"}
+
+        with mock.patch.dict("os.environ", self.ENV):
+            with mock.patch.object(NowPaymentsProvider, "_post_json", staticmethod(fake_post)):
+                out = NowPaymentsProvider()._create_checkout(
+                    {"id": "inv1", "amount_usd": 49.0, "tier": "premium"},
+                    "https://api.orqeva.test", "https://app.orqeva.test")
+        self.assertTrue(out["ok"], out)
+        b = captured["body"]
+        self.assertEqual(b["ipn_callback_url"], "https://api.orqeva.test/api/billing/webhooks/nowpayments")
+        self.assertEqual(b["success_url"], "https://app.orqeva.test/billing?status=paid")
+        self.assertEqual(b["cancel_url"], "https://app.orqeva.test/billing")
+
+    def test_stripe_paystack_flutterwave_redirect_to_frontend(self):
+        from backend.payments.paystack import PaystackProvider
+        from backend.payments.flutterwave import FlutterwaveProvider
+        inv = {"id": "inv1", "amount_usd": 49.0, "tier": "premium"}
+
+        with mock.patch.dict("os.environ", {"STRIPE_SECRET_KEY": "sk_test"}):
+            from backend.payments.stripe import StripeProvider
+            captured = {}
+            def fake_post_form(url, form):
+                captured["form"] = dict(form)
+                return {"url": "https://stripe.com/checkout/xyz", "id": "cs_1"}
+            with mock.patch.object(StripeProvider, "_post_form", staticmethod(fake_post_form)):
+                StripeProvider()._create_checkout(inv, "https://api.orqeva.test", "https://app.orqeva.test")
+            self.assertEqual(captured["form"]["success_url"], "https://app.orqeva.test/billing?status=paid")
+            self.assertEqual(captured["form"]["cancel_url"], "https://app.orqeva.test/billing")
+
+        with mock.patch.dict("os.environ", {"PAYSTACK_SECRET_KEY": "sk_live_x"}):
+            captured = {}
+            def fake_post(url, *, headers, json_body, timeout=20.0):
+                captured["body"] = json_body
+                return {"data": {"authorization_url": "https://paystack.com/pay/xyz"}}
+            with mock.patch.object(PaystackProvider, "_post_json", staticmethod(fake_post)):
+                PaystackProvider()._create_checkout(inv, "https://api.orqeva.test", "https://app.orqeva.test")
+            self.assertEqual(captured["body"]["callback_url"], "https://app.orqeva.test/billing?status=paid")
+
+        with mock.patch.dict("os.environ", {"FLUTTERWAVE_SECRET_KEY": "flw_x"}):
+            captured = {}
+            def fake_post(url, *, headers, json_body, timeout=20.0):
+                captured["body"] = json_body
+                return {"data": {"link": "https://flutterwave.com/pay/xyz"}}
+            with mock.patch.object(FlutterwaveProvider, "_post_json", staticmethod(fake_post)):
+                FlutterwaveProvider()._create_checkout(inv, "https://api.orqeva.test", "https://app.orqeva.test")
+            self.assertEqual(captured["body"]["redirect_url"], "https://app.orqeva.test/billing?status=paid")
+
+
 class _FakeSignalsDB:
     """Captures the where clause so the Phase J gating can be asserted."""
 

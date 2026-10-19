@@ -29,16 +29,17 @@ class NowPaymentsProvider(PaymentProvider):
     def _pay_currency(self) -> str:
         return os.getenv("NOWPAYMENTS_PAY_CURRENCY", "usdttrc20")
 
-    def _create_checkout(self, invoice: dict, base_url: str) -> dict:
+    def _create_checkout(self, invoice: dict, base_url: str, frontend_base: str) -> dict:
         body = {
             "price_amount": float(invoice["amount_usd"]),
             "price_currency": "usd",
             "pay_currency": self._pay_currency,
             "order_id": invoice["id"],
             "order_description": f"ORQEVA {invoice.get('tier', '').upper()}",
+            # gateway callbacks hit the backend; the browser lands on the frontend
             "ipn_callback_url": f"{base_url}/api/billing/webhooks/nowpayments",
-            "success_url": f"{base_url}/billing?status=paid",
-            "cancel_url": f"{base_url}/billing",
+            "success_url": f"{frontend_base}/billing?status=paid",
+            "cancel_url": f"{frontend_base}/billing",
         }
         if self._wallet:
             body["payout_address"] = self._wallet

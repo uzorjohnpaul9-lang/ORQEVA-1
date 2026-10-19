@@ -4,7 +4,7 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-from backend.config import settings
+from backend.config import frontend_base, settings
 
 log = logging.getLogger("email")
 
@@ -57,7 +57,7 @@ def reset_email(to: str, link: str) -> tuple[str, str]:
 
 
 def subscription_expiring_email(tier: str, days_left: int, reason: str) -> tuple[str, str]:
-    base = (settings.APP_BASE_URL or "").rstrip("/")
+    base = frontend_base()
     subject = f"Your ORQEVA {tier.upper()} plan expires in {days_left} day{'s' if days_left != 1 else ''}"
     html = f"""
     <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:24px">
