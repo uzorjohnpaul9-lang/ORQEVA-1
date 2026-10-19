@@ -2350,5 +2350,86 @@ class TestApiKeys(unittest.TestCase):
             app.dependency_overrides.clear()
 
 
+class TestDeploymentHardening(unittest.TestCase):
+    """Phase L: request ids, JSON 500s, enriched health, SMTP env aliases."""
+
+    def _client(self):
+        from fastapi.testclient import TestClient
+        from backend.main import app
+        return app, TestClient(app, raise_server_exceptions=False)
+
+    def test_request_id_header_generated_and_echoed(self):
+        from backend.middleware import sentinel
+        sentinel._blocked.clear()
+        _, client = self._client()
+        r = client.get("/api/health")
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.headers.get("x-request-id"))
+        r2 = client.get("/api/health", headers={"X-Request-ID": "abc123"})
+        self.assertEqual(r2.headers.get("x-request-id"), "abc123")
+
+    def test_health_reports_scanner_and_gateways(self):
+        from backend.middleware import sentinel
+        sentinel._blocked.clear()
+        _, client = self._client()
+        body = client.get("/api/health").json()
+        self.assertEqual(body["status"], "ok")
+        self.assertIn("version", body)
+        self.assertGreaterEqual(body["uptime_s"], 0)
+        self.assertIn("scanner", body)
+        self.assertIsInstance(body["gateways"], list)
+
+    def test_unhandled_error_is_json_with_request_id(self):
+        from backend.middleware import sentinel
+        sentinel._blocked.clear()
+        app, client = self._client()
+
+        async def boom():
+            raise RuntimeError("kaboom")
+
+        app.add_api_route("/api/_test_boom", boom, methods=["GET"])
+        try:
+            r = client.get("/api/_test_boom", headers={"X-Request-ID": "rid-500"})
+            self.assertEqual(r.status_code, 500)
+            body = r.json()
+            self.assertEqual(body["error"], "internal")
+            self.assertEqual(body["request_id"], "rid-500")
+            self.assertEqual(r.headers.get("x-request-id"), "rid-500")
+        finally:
+            app.router.routes[:] = [
+                rt for rt in app.router.routes
+                if getattr(rt, "path", None) != "/api/_test_boom"
+            ]
+
+    def test_smtp_legacy_env_names_are_aliased(self):
+        from backend.config import Settings
+        env = {
+            "SMTP_HOST": "", "SMTP_USER": "", "SMTP_PASSWORD": "", "SMTP_FROM": "",
+            "SMTP_SERVER": "smtp.legacy.test",
+            "SENDER_EMAIL": "bot@legacy.test",
+            "SENDER_PASSWORD": "hunter2",
+            "SENDER_FROM": "ORQEVA <bot@legacy.test>",
+        }
+        with mock.patch.dict("os.environ", env, clear=False):
+            s = Settings(_env_file=None)
+        self.assertEqual(s.SMTP_HOST, "smtp.legacy.test")
+        self.assertEqual(s.SMTP_USER, "bot@legacy.test")
+        self.assertEqual(s.SMTP_PASSWORD, "hunter2")
+        self.assertEqual(s.SMTP_FROM, "ORQEVA <bot@legacy.test>")
+
+    def test_canonical_smtp_names_win_over_aliases(self):
+        from backend.config import Settings
+        env = {
+            "SMTP_HOST": "smtp.canonical.test", "SMTP_USER": "new@canonical.test",
+            "SMTP_PASSWORD": "pw-new", "SMTP_SERVER": "smtp.legacy.test",
+            "SENDER_EMAIL": "old@legacy.test", "SENDER_PASSWORD": "pw-old",
+        }
+        with mock.patch.dict("os.environ", env, clear=False):
+            s = Settings(_env_file=None)
+        self.assertEqual(s.SMTP_HOST, "smtp.canonical.test")
+        self.assertEqual(s.SMTP_USER, "new@canonical.test")
+        self.assertEqual(s.SMTP_PASSWORD, "pw-new")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

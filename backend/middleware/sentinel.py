@@ -286,10 +286,7 @@ class SentinelMiddleware(BaseHTTPMiddleware):
 
             return response
         except Exception:
-            # sentinel must never take the API down
+            # Sentinel logic is best-effort, but a downstream app error must
+            # propagate so the global handler can log it and return a request id.
             logger.debug("sentinel dispatch error", exc_info=True)
-            try:
-                return await call_next(request)
-            except Exception:
-                return Response(content='{"detail":"Internal Server Error"}',
-                                status_code=500, media_type="application/json")
+            raise

@@ -6,6 +6,15 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
+# Legacy / tutorial SMTP names seen in the wild. Without these an operator can
+# have a fully configured mailbox that the app silently ignores.
+_SMTP_ALIASES = {
+    "SMTP_HOST": ("SMTP_SERVER", "MAIL_HOST"),
+    "SMTP_USER": ("SENDER_EMAIL", "EMAIL_USER", "MAIL_USER"),
+    "SMTP_PASSWORD": ("SENDER_PASSWORD", "EMAIL_PASSWORD", "MAIL_PASSWORD"),
+    "SMTP_FROM": ("SENDER_FROM", "EMAIL_FROM"),
+}
+
 
 class Settings(BaseSettings):
     APP_NAME: str = "ORQEVA"
@@ -40,6 +49,20 @@ class Settings(BaseSettings):
     CORS_ORIGIN_REGEX: str | None = os.getenv(
         "CORS_ORIGIN_REGEX", r"https://[a-z0-9-]+\.orqeva\.pages\.dev"
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _smtp_aliases(cls, values):
+        """Map common non-standard SMTP env names onto the canonical fields."""
+        for canonical, aliases in _SMTP_ALIASES.items():
+            if values.get(canonical):
+                continue
+            for alias in aliases:
+                value = values.get(alias) or os.getenv(alias)
+                if value:
+                    values[canonical] = value
+                    break
+        return values
 
     @model_validator(mode="before")
     @classmethod
