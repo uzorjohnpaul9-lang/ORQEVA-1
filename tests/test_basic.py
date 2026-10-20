@@ -2431,5 +2431,95 @@ class TestDeploymentHardening(unittest.TestCase):
         self.assertEqual(s.SMTP_PASSWORD, "pw-new")
 
 
+class _FakeFanoutDB:
+    """Minimal stand-in for SupabaseDB used by engine_service._fan_out."""
+
+    def __init__(self, users):
+        self._users = users
+        self.inserted = []
+
+    async def fetch_all(self, table, where=None, order=None, limit=None, columns="*"):
+        return [dict(u) for u in self._users]
+
+    async def insert(self, table, data):
+        self.inserted.append(dict(data))
+        return dict(data)
+
+
+class TestFanOutConcurrency(unittest.TestCase):
+    """engine_service._fan_out fans notifications out with bounded concurrency."""
+
+    def _run(self, db, saved):
+        import asyncio
+        from backend.services import engine_service
+        return asyncio.run(engine_service._fan_out(db, {}, saved, []))
+
+    def test_notifies_every_user_for_each_top_signal(self):
+        from unittest import mock
+        from backend.services import notification_service
+
+        users = [{"id": f"u{i}"} for i in range(7)]
+        db = _FakeFanoutDB(users)
+        saved = [
+            {"symbol": "BTC/USD", "direction": "BUY", "confidence": 0.9, "market": "crypto", "strategy": "M"},
+            {"symbol": "AAPL", "direction": "SELL", "confidence": 0.7, "market": "stock", "strategy": "A"},
+            {"symbol": "EUR/USD", "direction": "BUY", "confidence": 0.5, "market": "forex", "strategy": "F"},
+        ]
+        calls = []
+
+        async def _fake_create(db_, user_id, ntype, title, message, respect_prefs=True):
+            calls.append((user_id, title))
+            return {"id": title}
+
+        with mock.patch.object(notification_service, "create", _fake_create):
+            self._run(db, saved)
+
+        # Only the two signals with confidence >= 0.6 reach notifications.
+        self.assertEqual(len(calls), len(users) * 2)
+        for u in users:
+            self.assertEqual(sum(1 for c in calls if c[0] == u["id"]), 2)
+
+    def test_no_top_signals_skips_fanout(self):
+        from unittest import mock
+        from backend.services import notification_service
+
+        db = _FakeFanoutDB([{"id": "u1"}])
+        saved = [{"symbol": "X", "direction": "BUY", "confidence": 0.2}]
+        calls = []
+
+        async def _fake_create(*a, **k):
+            calls.append(a)
+            return None
+
+        with mock.patch.object(notification_service, "create", _fake_create):
+            self._run(db, saved)
+
+        self.assertEqual(calls, [])
+
+    def test_concurrency_is_bounded(self):
+        import asyncio
+        from unittest import mock
+        from backend.services import notification_service
+
+        users = [{"id": f"u{i}"} for i in range(40)]
+        db = _FakeFanoutDB(users)
+        saved = [{"symbol": "BTC/USD", "direction": "BUY", "confidence": 0.9, "market": "crypto"}]
+        state = {"active": 0, "peak": 0}
+
+        async def _fake_create(*a, **k):
+            state["active"] += 1
+            state["peak"] = max(state["peak"], state["active"])
+            await asyncio.sleep(0.01)
+            state["active"] -= 1
+            return None
+
+        with mock.patch.dict("os.environ", {"NOTIFY_FANOUT_CONCURRENCY": "5"}, clear=False), \
+                mock.patch.object(notification_service, "create", _fake_create):
+            self._run(db, saved)
+
+        self.assertGreaterEqual(state["peak"], 2)
+        self.assertLessEqual(state["peak"], 5)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

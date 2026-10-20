@@ -1,5 +1,6 @@
 """Engine scan orchestration shared by the admin endpoint and the background scheduler."""
 import asyncio
+import os
 
 from backend.db.models import SIGNALS, USERS
 from backend.db.supabase import SupabaseDB, now_iso
@@ -143,9 +144,15 @@ async def _fan_out(db: SupabaseDB, results: dict, saved: list[dict], errors: lis
     try:
         users = await db.fetch_all(USERS, where={"is_active": True})
         top = [s for s in saved if s.get("confidence") and float(s["confidence"]) >= 0.6][:5]
-        if not top:
+        if not top or not users:
             return
-        for u in users:
+        # Fan-out is I/O bound (2 HTTP calls per notification), so run it with a
+        # bounded worker pool instead of serially: one sequential pass per user,
+        # users processed concurrently. Keeps a large user base from wedging the
+        # scan tick.
+        concurrency = max(1, int(os.getenv("NOTIFY_FANOUT_CONCURRENCY", "20")))
+
+        async def _notify_user(u: dict) -> None:
             for s in top:
                 await notif_service.create(
                     db, u["id"], "signal",
@@ -153,5 +160,13 @@ async def _fan_out(db: SupabaseDB, results: dict, saved: list[dict], errors: lis
                     f"{s.get('market', '').title()} · confidence {float(s.get('confidence', 0)) * 100:.0f}% · {s.get('strategy')}",
                     respect_prefs=True,
                 )
+
+        sem = asyncio.Semaphore(concurrency)
+
+        async def _guarded(u: dict) -> None:
+            async with sem:
+                await _notify_user(u)
+
+        await asyncio.gather(*(_guarded(u) for u in users))
     except Exception:
         pass
