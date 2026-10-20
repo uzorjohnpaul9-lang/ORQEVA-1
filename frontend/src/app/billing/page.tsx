@@ -65,7 +65,7 @@ export default function BillingPage() {
   const refresh = useCallback(async () => {
     if (!token) return;
     try {
-      const [p, s, inv] = await Promise.allSettled([
+      const [plansRes, subRes, invRes] = await Promise.allSettled([
         api<{ plans: Plan[]; bank_card?: BankCard; gateways?: string[] }>("/api/billing/plans", { token }),
         api<Subscription>("/api/billing/subscription", { token }),
         api<Invoice[]>("/api/billing/invoices", { token }),
