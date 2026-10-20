@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 from pydantic import model_validator
 from pydantic_settings import BaseSettings
@@ -104,6 +105,23 @@ class Settings(BaseSettings):
 
     # Error tracking (optional). Empty = Sentry disabled.
     SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")
+    # Force Sentry on even under pytest (1/true/yes/on).
+    SENTRY_FORCE: str = os.getenv("SENTRY_FORCE", "")
+
+    @property
+    def sentry_active(self) -> bool:
+        """True when Sentry should be initialised.
+
+        Disabled automatically under pytest so the suite's intentional error
+        tests don't spam a live Sentry project. SENTRY_FORCE=1 overrides.
+        """
+        if not self.SENTRY_DSN:
+            return False
+        if self.SENTRY_FORCE.lower() in ("1", "true", "yes", "on"):
+            return True
+        if os.getenv("PYTEST_CURRENT_TEST"):
+            return False
+        return "pytest" not in sys.modules
 
     @model_validator(mode="after")
     def _validate_supabase(self):

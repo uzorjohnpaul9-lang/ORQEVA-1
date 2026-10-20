@@ -32,7 +32,7 @@ if settings.SECRET_KEY.startswith("dev-secret"):
 
     warnings.warn("SECRET_KEY is the development default - set a strong value before deploying")
 
-if settings.SENTRY_DSN:
+if settings.sentry_active:
     try:
         import sentry_sdk
 

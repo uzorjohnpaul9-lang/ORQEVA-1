@@ -2431,6 +2431,39 @@ class TestDeploymentHardening(unittest.TestCase):
         self.assertEqual(s.SMTP_PASSWORD, "pw-new")
 
 
+class TestSentryGuard(unittest.TestCase):
+    """Sentry stays off during the test suite so the intentional error tests
+    don't spam a live project; SENTRY_FORCE re-enables it."""
+
+    def _settings(self, env):
+        from unittest import mock
+        from backend.config import Settings
+        with mock.patch.dict("os.environ", env, clear=False):
+            return Settings(_env_file=None)
+
+    def test_disabled_without_dsn(self):
+        s = self._settings({"SENTRY_DSN": "", "SENTRY_FORCE": "", "PYTEST_CURRENT_TEST": ""})
+        self.assertFalse(s.sentry_active)
+
+    def test_disabled_under_pytest_even_with_dsn(self):
+        import sys
+        self.assertIn("pytest", sys.modules)
+        s = self._settings({"SENTRY_DSN": "https://x@sentry.io/1", "SENTRY_FORCE": "", "PYTEST_CURRENT_TEST": ""})
+        self.assertFalse(s.sentry_active)
+
+    def test_disabled_when_pytest_current_test_set(self):
+        s = self._settings({
+            "SENTRY_DSN": "https://x@sentry.io/1",
+            "SENTRY_FORCE": "",
+            "PYTEST_CURRENT_TEST": "tests/test_basic.py::x (call)",
+        })
+        self.assertFalse(s.sentry_active)
+
+    def test_force_overrides_pytest(self):
+        s = self._settings({"SENTRY_DSN": "https://x@sentry.io/1", "SENTRY_FORCE": "1"})
+        self.assertTrue(s.sentry_active)
+
+
 class _FakeFanoutDB:
     """Minimal stand-in for SupabaseDB used by engine_service._fan_out."""
 
