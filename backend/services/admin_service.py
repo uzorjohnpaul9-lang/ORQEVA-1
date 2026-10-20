@@ -103,7 +103,7 @@ async def list_users(
     where = {"tier": tier} if tier else None
     # Small platform scale: pull recent users and filter/paginate in Python
     # so we can search across email OR username with one call.
-    rows = await db.fetch_all(USERS, where=where, order="created_at.desc", limit=1000)
+    rows = await db.fetch_all(USERS, where=where, order="created_at.desc", limit=min(limit + offset, 2000))
     if search:
         s = search.strip().lower()
         rows = [
