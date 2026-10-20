@@ -94,7 +94,14 @@ async def run_scan(db: SupabaseDB, *, cooldown_hours: int = 0) -> dict:
     for sigs in results.values():
         promoted += signal_service.split_free_signals(sigs)
 
+    # Only live-data signals are published. Engines fall back to simulated
+    # prices when no real source is reachable; those are dropped here so users
+    # never see a signal that wasn't derived from real market data.
     all_signals = [s for sigs in results.values() for s in sigs]
+    dropped_simulated = sum(1 for s in all_signals if s.get("data_source") != "live")
+    all_signals = [s for s in all_signals if s.get("data_source") == "live"]
+    for bucket, sigs in results.items():
+        results[bucket] = [s for s in sigs if s.get("data_source") == "live"]
     saved: list[dict] = []
     if all_signals:
         saved = await signal_service.save_signals_batch(db, all_signals)
@@ -108,6 +115,7 @@ async def run_scan(db: SupabaseDB, *, cooldown_hours: int = 0) -> dict:
         "signals_generated": len(saved),
         "by_market": {k: len(v) for k, v in results.items()},
         "promoted_to_premium": promoted,
+        "dropped_simulated": dropped_simulated,
         "errors": errors,
         "saved": saved,
     }

@@ -158,13 +158,15 @@ async def run_scheduled_scan() -> dict:
         except Exception:  # pragma: no cover - defensive
             billing = {}
         log.info(
-            "scheduled scan: %s signals (%s), errors=%s, resolved=%s",
+            "scheduled scan: %s signals (%s), errors=%s, resolved=%s, dropped_sim=%s",
             out["signals_generated"], out["by_market"], out["errors"], resolved,
+            out.get("dropped_simulated", 0),
         )
         from backend.monitoring.metrics import record_scan
         record_scan(out["signals_generated"], bool(out["errors"]))
         summary = {k: out[k] for k in ("signals_generated", "by_market", "errors")}
         summary["promoted_to_premium"] = out.get("promoted_to_premium", 0)
+        summary["dropped_simulated"] = out.get("dropped_simulated", 0)
         summary["resolved"] = resolved
         summary["event_alerts"] = alerts
         summary["deferred_alerts"] = deferred
@@ -180,7 +182,7 @@ async def run_scheduled_scan() -> dict:
         from backend.monitoring.metrics import record_scan
         record_scan(0, True)
         _last_scan = {"signals_generated": 0, "by_market": {}, "errors": [str(e)[:150]],
-                      "at": __import__("backend.db.supabase", fromlist=["now_iso"]).now_iso()}
+                      "dropped_simulated": 0, "at": __import__("backend.db.supabase", fromlist=["now_iso"]).now_iso()}
         return _last_scan
 
 
