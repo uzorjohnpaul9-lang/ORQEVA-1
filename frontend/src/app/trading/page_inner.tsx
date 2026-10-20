@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Card, CardHeader, CardTitle, StatCard } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -19,6 +20,7 @@ const MARKETS = [
 
 export default function TradingPage() {
   const { token } = useAuth();
+  const params = useSearchParams();
   const [positions, setPositions] = useState<Position[]>([]);
   const [mode, setMode] = useState<"demo" | "live">("demo");
   const [resetting, setResetting] = useState(false);
@@ -36,6 +38,22 @@ export default function TradingPage() {
   const [takeProfit, setTakeProfit] = useState("");
   const route = mode === "live" ? "live" : "paper";
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    const qMode = params.get("mode");
+    const qSymbol = params.get("symbol")?.trim();
+    const qSide = params.get("side");
+    const qEntry = params.get("entry");
+    const qSl = params.get("sl");
+    const qTp = params.get("tp");
+    const qMarket = params.get("market");
+    if (qMode === "demo" || qMode === "live") setMode(qMode);
+    if (qSymbol) setSymbol(qSymbol);
+    if (qSide === "buy" || qSide === "sell") setSide(qSide);
+    if (qMarket === "forex" || qMarket === "crypto" || qMarket === "stock" || qMarket === "commodity") setMarket(qMarket);
+    if (qSl) setStopLoss(qSl);
+    if (qTp) setTakeProfit(qTp);
+  }, [params]);
 
   const refresh = useCallback(async () => {
     if (!token) return;
@@ -208,6 +226,13 @@ export default function TradingPage() {
 
       {error && <p className="text-sm text-red">{error}</p>}
       {notice && <p className="text-sm text-green">{notice}</p>}
+      {(params.get("mode") === "demo" || params.get("symbol")) && (
+        <Card className="border-blue/40 bg-blue/5">
+          <p className="text-sm text-blue">
+            Testing signal in Demo — values pre-filled from signal
+          </p>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <StatCard label="Open Positions" value={positions.length.toString()} />
