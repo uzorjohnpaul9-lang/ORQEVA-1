@@ -232,7 +232,7 @@ export default function BillingPage() {
         <Card>
           <CardHeader><CardTitle>Plans</CardTitle></CardHeader>
           <div className="space-y-3">
-            {plans.map((p) => (
+            {(plans||[]).map((p) => (
               <div key={p.tier} className="p-3 bg-bg-tertiary rounded-lg">
                 <div className="flex items-center justify-between">
                   <div>
@@ -327,7 +327,7 @@ export default function BillingPage() {
               {invoices.length === 0 && (
                 <tr><td colSpan={6} className="px-4 py-6 text-center text-text-muted">No invoices yet.</td></tr>
               )}
-              {invoices.map((inv) => (
+              {(invoices||[]).map((inv) => (
                 <tr key={inv.id} className="border-b border-border/50 last:border-0">
                   <td className="px-4 py-2.5 capitalize">{inv.tier}{inv.promo_code && <span className="text-xs text-purple ml-1">({inv.promo_code})</span>}</td>
                   <td className="px-4 py-2.5 font-mono">
