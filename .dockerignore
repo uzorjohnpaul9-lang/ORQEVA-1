@@ -9,7 +9,6 @@ frontend
 tests
 temp
 logs
-data
 *.db
 *.sqlite3
 *.pyc
