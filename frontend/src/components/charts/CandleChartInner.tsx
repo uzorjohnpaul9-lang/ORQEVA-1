@@ -191,30 +191,37 @@ export function CandleChartInner({
         const xs = scales.x as unknown as { getPixelForValue: (v: number) => number; width: number };
         const ys = scales.y as unknown as { getPixelForValue: (v: number) => number };
         const slot = xs.width / Math.max(viewBars.length, 1);
-        const bodyW = Math.max(1, Math.min(11, slot * 0.6));
+        const bodyW = Math.max(2, Math.min(14, slot * 0.7));
 
         ctx.save();
         viewBars.forEach((b, i) => {
           const x = xs.getPixelForValue(i);
           const up = b.close >= b.open;
           const color = up ? UP : DOWN;
-          ctx.strokeStyle = color;
-          ctx.fillStyle = color;
-          ctx.lineWidth = 1;
+          const wickColor = up ? "#00D68F" : "#FF4757";
 
           const yHigh = ys.getPixelForValue(b.high);
           const yLow = ys.getPixelForValue(b.low);
           const yOpen = ys.getPixelForValue(b.open);
           const yClose = ys.getPixelForValue(b.close);
 
+          // Wick
+          ctx.strokeStyle = wickColor;
+          ctx.lineWidth = 1;
           ctx.beginPath();
           ctx.moveTo(x, yHigh);
           ctx.lineTo(x, yLow);
           ctx.stroke();
 
+          // Body
           const top = Math.min(yOpen, yClose);
-          const h = Math.max(1, Math.abs(yClose - yOpen));
+          const h = Math.max(2, Math.abs(yClose - yOpen));
+          ctx.fillStyle = up ? "rgba(0, 214, 143, 0.9)" : "rgba(255, 71, 87, 0.9)";
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
           ctx.fillRect(x - bodyW / 2, top, bodyW, h);
+          ctx.strokeRect(x - bodyW / 2, top, bodyW, h);
         });
         ctx.restore();
       },
@@ -264,10 +271,37 @@ export function CandleChartInner({
     if (prices.length > 0) {
       const lo = Math.min(...prices);
       const hi = Math.max(...prices);
-      const pad = (hi - lo) * 0.06 || Math.abs(hi) * 0.01 || 1;
+      const pad = (hi - lo) * 0.08 || Math.abs(hi) * 0.015 || 1;
       yMin = lo - pad;
       yMax = hi + pad;
     }
+
+    const crosshairPlugin = {
+      id: "crosshair",
+      afterDraw(chart: Chart, args: unknown, options: any) {
+        const { ctx, chartArea, scales, tooltip } = chart;
+        if (!chartArea) return;
+        const active = (tooltip as any)?.getActiveElements?.();
+        if (!active || active.length === 0) return;
+        const el = active[0];
+        const x = (scales.x as any).getPixelForValue(el.index);
+        const y = el.element?.y ?? (scales.y as any).getPixelForValue(el.element?.yValue ?? 0);
+        ctx.save();
+        ctx.strokeStyle = "rgba(139, 143, 163, 0.5)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(x, chartArea.top);
+        ctx.lineTo(x, chartArea.bottom);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(chartArea.left, y);
+        ctx.lineTo(chartArea.right, y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+      },
+    };
 
     const chart = new Chart(canvasRef.current, {
       type: "bar",
@@ -296,16 +330,48 @@ export function CandleChartInner({
         plugins: {
           legend: { labels: { color: "#8B8FA3", font: { size: 12 }, usePointStyle: true } },
           tooltip: {
-            filter: (item) => item.dataset.type === "line",
-            callbacks: { label: (c) => `${c.dataset.label}: ${Number(c.parsed.y).toFixed(4)}` },
+            mode: "index",
+            intersect: false,
+            backgroundColor: "rgba(11, 13, 23, 0.95)",
+            titleColor: "#E4E6EB",
+            bodyColor: "#E4E6EB",
+            borderColor: "#2D3142",
+            borderWidth: 1,
+            callbacks: {
+              title: (items) => {
+                const idx = items[0]?.dataIndex;
+                if (idx == null) return "";
+                const b = viewBars[idx];
+                return b ? b.time : "";
+              },
+              label: (c) => {
+                if (c.dataset.type === "line") {
+                  return `${c.dataset.label}: ${Number(c.parsed.y).toFixed(4)}`;
+                }
+                if (c.dataset.label === "range") {
+                  const idx = c.dataIndex;
+                  const b = viewBars[idx];
+                  if (b) {
+                    const up = b.close >= b.open;
+                    return [
+                      `O: ${b.open.toFixed(4)}`,
+                      `H: ${b.high.toFixed(4)}`,
+                      `L: ${b.low.toFixed(4)}`,
+                      `C: ${b.close.toFixed(4)} ${up ? "(+)" : "(-)"}`,
+                    ];
+                  }
+                }
+                return "";
+              },
+            },
           },
         },
         scales: {
-          x: { ticks: { color: "#5A5E72", maxTicksLimit: 10, autoSkip: true }, grid: { color: "#2D3142" } },
-          y: { min: yMin, max: yMax, ticks: { color: "#5A5E72" }, grid: { color: "#2D3142" } },
+          x: { ticks: { color: "#5A5E72", maxTicksLimit: 8, autoSkip: true, maxRotation: 0, minRotation: 0 }, grid: { color: "#1F2233", drawTicks: false } },
+          y: { min: yMin, max: yMax, position: "right", ticks: { color: "#5A5E72", padding: 8 }, grid: { color: "#1F2233", drawTicks: false }, border: { display: false } },
         },
       },
-      plugins: [candlePlugin, linePlugin],
+      plugins: [candlePlugin, linePlugin, crosshairPlugin],
     });
 
     return () => chart.destroy();

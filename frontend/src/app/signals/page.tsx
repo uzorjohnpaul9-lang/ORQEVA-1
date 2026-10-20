@@ -369,6 +369,17 @@ export default function SignalsPage() {
                     {s.tier_required}
                   </Badge>
                 </div>
+                {!s.locked && (
+                  <div className="mt-3 flex gap-2">
+                    <Link
+                      href={`/trading?mode=demo&symbol=${encodeURIComponent(s.symbol)}&side=${s.direction}&entry=${s.entry_price}&sl=${s.stop_loss ?? ""}&tp=${s.take_profit ?? ""}&market=${s.market}`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="inline-flex items-center justify-center rounded-lg border border-blue/60 px-3 py-1.5 text-xs font-medium text-blue hover:bg-blue/10 transition-colors"
+                    >
+                      Test in Demo
+                    </Link>
+                  </div>
+                )}
               </div>
             </Card>
             </StaggerItem>
@@ -528,6 +539,14 @@ export default function SignalsPage() {
             >
               View chart with entry / stop / target
             </Link>
+            {!selected.locked && (
+              <Link
+                href={`/trading?mode=demo&symbol=${encodeURIComponent(selected.symbol)}&side=${selected.direction}&entry=${selected.entry_price}&sl=${selected.stop_loss ?? ""}&tp=${selected.take_profit ?? ""}&market=${selected.market}`}
+                className="inline-flex w-full items-center justify-center rounded-lg border border-blue/60 bg-blue/10 px-4 py-2 text-sm font-medium text-blue hover:bg-blue/20 transition-colors"
+              >
+                Test in Demo
+              </Link>
+            )}
 
             {eventCtx(selected) && (
               <div className="bg-yellow-dim text-yellow text-xs rounded-lg p-3">
