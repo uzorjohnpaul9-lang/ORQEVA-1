@@ -61,9 +61,5 @@
 - `requirements.txt` mplfinance pin; `TRADING_ENABLED=false`; pytest `asyncio_mode = auto`
 - Logs cleaned (9 stale files)
 
-## Pending
-1. **User manual:** run `python setup_telegram.py` with real tokens; @BotFather revoke/delete
-   the 3 old bots; add the 4 new tier bots to their channels as posting admins
-2. Final full-suite verification run (114 tests in batches — live Supabase, ~25 min)
-3. TensorFlow install workaround (`C:\venv\trading` + `fix-tensorflow.bat` when network stable)
-4. External API key rotation: Alpaca, Twelve Data, Gmail app password (Telegram tokens are new)
+## Status (updated)
+Phases A–L complete. Backend live on Railway (`orqeva-1-production.up.railway.app`), frontend on Cloudflare Pages (`orqeva.pages.dev`), all migrations applied, 163 tests passing. NOWPayments (crypto) wired with IPN. Sentry disabled under pytest. Simulated/fallback signals dropped — only live market data published. No open blockers.
