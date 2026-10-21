@@ -64,21 +64,40 @@ export default function BillingPage() {
 
   const refresh = useCallback(async () => {
     if (!token) return;
-    try {
-      const [plansRes, subRes, invRes] = await Promise.allSettled([
-        api<{ plans: Plan[]; bank_card?: BankCard; gateways?: string[] }>("/api/billing/plans", { token }),
-        api<Subscription>("/api/billing/subscription", { token }),
-        api<Invoice[]>("/api/billing/invoices", { token }),
-      ]);
-      setPlans(p.plans);
-      setBankCard(p.bank_card ?? null);
-      setGateways(p.gateways ?? []);
-      setSub(s);
-      setInvoices(inv);
-      setError(null);
-    } catch {
-      setError("Could not load billing data");
+    const [plansRes, subRes, invRes] = await Promise.allSettled([
+      api<{ plans: Plan[]; bank_card?: BankCard; gateways?: string[] }>("/api/billing/plans", { token }),
+      api<Subscription>("/api/billing/subscription", { token }),
+      api<Invoice[]>("/api/billing/invoices", { token }),
+    ]);
+
+    // Each panel is independent: one failing endpoint must not blank the page.
+    const failed: string[] = [];
+
+    if (plansRes.status === "fulfilled") {
+      setPlans(plansRes.value?.plans ?? []);
+      setBankCard(plansRes.value?.bank_card ?? null);
+      setGateways(plansRes.value?.gateways ?? []);
+    } else {
+      failed.push("plans");
     }
+
+    if (subRes.status === "fulfilled") {
+      setSub(subRes.value ?? null);
+    } else {
+      failed.push("subscription");
+    }
+
+    if (invRes.status === "fulfilled") {
+      setInvoices(Array.isArray(invRes.value) ? invRes.value : []);
+    } else {
+      failed.push("invoices");
+    }
+
+    setError(
+      failed.length
+        ? `Could not load ${failed.join(", ")} - the rest of billing data is still available.`
+        : null
+    );
   }, [token]);
 
   useEffect(() => {
