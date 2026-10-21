@@ -1395,8 +1395,8 @@ class TestBillingScale(unittest.TestCase):
     """Phase I: unique amounts, gateway checkout, webhooks, grace, dashboard, dunning."""
 
     PROVIDER_ENV = {
-        "NOWPAYMENTS_API_KEY": "np_test_key",
-        "NOWPAYMENTS_IPN_SECRET": "np_test_secret",
+        "BACHS_API_KEY": "sk_sandbox_test",
+        "BACHS_WEBHOOK_SECRET": "whsec_bachs_test",
     }
 
     def _db(self):
@@ -1409,6 +1409,24 @@ class TestBillingScale(unittest.TestCase):
         from backend.services import billing_service as billing
         inv = asyncio.run(billing.create_invoice(
             db, {"id": "u1", "email": "alice@test.dev"}, tier, method))
+        self.assertNotIn("error", inv, inv)
+        return inv
+
+    def _gateway_invoice(self, db, tier="premium"):
+        """A Bachs invoice, with the hosted checkout stubbed out."""
+        import asyncio
+        from backend.payments.bachs import BachsProvider
+        from backend.services import billing_service as billing
+
+        def fake_checkout(invoice, base_url, frontend_base):
+            return {"ok": True,
+                    "checkout_url": "https://sandbox.bachs.io/pay/chk_test_1",
+                    "provider_ref": "chk_test_1"}
+
+        with mock.patch.dict("os.environ", self.PROVIDER_ENV):
+            with mock.patch.object(BachsProvider, "_create_checkout", staticmethod(fake_checkout)):
+                inv = asyncio.run(billing.create_invoice(
+                    db, {"id": "u1", "email": "alice@test.dev"}, tier, "bachs"))
         self.assertNotIn("error", inv, inv)
         return inv
 
@@ -1435,11 +1453,42 @@ class TestBillingScale(unittest.TestCase):
             db, {"id": "u1", "email": "a@b.c"}, "premium", "paypal"))
         self.assertEqual(bad, {"error": "invalid_method"})
 
-        with mock.patch.dict("os.environ", {"STRIPE_SECRET_KEY": ""}, clear=False):
+        with mock.patch.dict("os.environ", {"BACHS_API_KEY": ""}, clear=False):
             out = asyncio.run(billing.create_invoice(
-                db, {"id": "u1", "email": "a@b.c"}, "premium", "stripe"))
+                db, {"id": "u1", "email": "a@b.c"}, "premium", "bachs"))
         self.assertEqual(out, {"error": "checkout_unavailable"})
         self.assertEqual(db.tables["invoices"][0]["status"], "cancelled")
+
+    def test_corridor_is_recorded_and_validated(self):
+        import asyncio
+        from backend.payments.bachs import BachsProvider
+        from backend.services import billing_service as billing
+        db = self._db()
+
+        bad = asyncio.run(billing.create_invoice(
+            db, {"id": "u1", "email": "a@b.c"}, "premium", "bachs",
+            payment_method="NOT_A_CORRIDOR"))
+        self.assertEqual(bad, {"error": "invalid_payment_method"})
+
+        # A corridor is only valid for a gateway, never for a hand-pay rail.
+        handpay = asyncio.run(billing.create_invoice(
+            db, {"id": "u1", "email": "a@b.c"}, "premium", "crypto",
+            payment_method="USD_CARD"))
+        self.assertEqual(handpay, {"error": "invalid_payment_method"})
+
+        def fake_checkout(invoice, base_url, frontend_base):
+            return {"ok": True, "checkout_url": "https://sandbox.bachs.io/pay/x",
+                    "provider_ref": "chk_x"}
+
+        with mock.patch.dict("os.environ", self.PROVIDER_ENV):
+            with mock.patch.object(BachsProvider, "_create_checkout", staticmethod(fake_checkout)):
+                inv = asyncio.run(billing.create_invoice(
+                    db, {"id": "u1", "email": "a@b.c"}, "premium", "bachs",
+                    payment_method="MOMO_GHS"))
+        self.assertNotIn("error", inv, inv)
+        self.assertEqual(inv["method"], "gateway")
+        self.assertEqual(inv["provider"], "bachs")
+        self.assertEqual(inv["payment_method"], "MOMO_GHS")
 
     # ---- webhooks ----
 
@@ -1454,47 +1503,71 @@ class TestBillingScale(unittest.TestCase):
         import asyncio
         from backend.services import billing_service as billing
         db = self._db()
-        inv = self._invoice(db)
-        payload = {"payment_id": 1, "order_id": inv["id"], "payment_status": "finished"}
+        inv = self._gateway_invoice(db)
+        payload = {"id": "evt_bad", "type": "checkout.completed",
+                   "data": {"payment_status": "paid", "amount": 49.0,
+                            "metadata": {"invoice_id": inv["id"]}}}
         with mock.patch.dict("os.environ", self.PROVIDER_ENV):
             out = asyncio.run(billing.handle_gateway_webhook(
-                db, "nowpayments", {"x-nowpayments-sig": "deadbeef"},
+                db, "bachs", {"X-Bachs-Signature": "deadbeef"},
                 b"{}", payload))
         self.assertFalse(out["ok"])
         self.assertEqual(out["status"], 400)
 
-    def _signed_nowpayments(self, payload):
+    def test_webhook_stale_timestamp_rejected(self):
+        import asyncio
+        from backend.services import billing_service as billing
+        db = self._db()
+        inv = self._gateway_invoice(db)
+        payload = {"id": "evt_stale", "type": "checkout.completed",
+                   "data": {"payment_status": "paid", "amount": 49.0,
+                            "metadata": {"invoice_id": inv["id"]}}}
+        headers, body = self._signed_bachs(payload, ts="1000000000")
+        with mock.patch.dict("os.environ", self.PROVIDER_ENV):
+            out = asyncio.run(billing.handle_gateway_webhook(
+                db, "bachs", headers, body, payload))
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["status"], 400)
+
+    def _signed_bachs(self, payload, ts=None):
         import hashlib
         import hmac
         import json
+        import time
         body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
-        sig = hmac.new(self.PROVIDER_ENV["NOWPAYMENTS_IPN_SECRET"].encode(),
-                       body, hashlib.sha512).hexdigest()
-        return {"x-nowpayments-sig": sig}, body
+        ts = ts or str(int(time.time()))
+        sig = hmac.new(self.PROVIDER_ENV["BACHS_WEBHOOK_SECRET"].encode(),
+                       ts.encode() + b"." + body, hashlib.sha256).hexdigest()
+        return ({"X-Bachs-Signature-V2": f"t={ts},v1={sig}",
+                 "X-Bachs-Timestamp": ts}, body)
 
     def test_webhook_happy_path_auto_approves(self):
         import asyncio
         from backend.db.models import SUBSCRIPTIONS, USERS, PAYMENT_EVENTS
         from backend.services import billing_service as billing
         db = self._db()
-        inv = self._invoice(db, tier="vip")
+        inv = self._gateway_invoice(db, tier="vip")
         payload = {
-            "payment_id": 99001,
-            "order_id": inv["id"],
-            "payment_status": "finished",
-            "price_amount": float(inv["unique_amount"]),
-            "price_currency": "usd",
+            "id": "evt_bachs_1",
+            "type": "checkout.completed",
+            "data": {
+                "checkout_id": "chk_test_1",
+                "payment_status": "paid",
+                "amount": float(inv["amount_usd"]),
+                "currency": "USD",
+                "metadata": {"invoice_id": inv["id"]},
+            },
         }
-        headers, body = self._signed_nowpayments(payload)
+        headers, body = self._signed_bachs(payload)
         with mock.patch.dict("os.environ", self.PROVIDER_ENV):
             out = asyncio.run(billing.handle_gateway_webhook(
-                db, "nowpayments", headers, body, payload))
+                db, "bachs", headers, body, payload))
         self.assertTrue(out["ok"], out)
         self.assertTrue(out.get("approved"))
 
         stored = db.tables["invoices"][0]
         self.assertEqual(stored["status"], "approved")
-        self.assertEqual(stored["provider"], "nowpayments")
+        self.assertEqual(stored["provider"], "bachs")
         self.assertIsNotNone(stored["paid_at"])
         self.assertEqual(db.tables[USERS][0]["tier"], "vip")
         self.assertEqual(db.tables[SUBSCRIPTIONS][0]["tier"], "vip")
@@ -1504,7 +1577,7 @@ class TestBillingScale(unittest.TestCase):
         # replayed delivery is a no-op (idempotent)
         with mock.patch.dict("os.environ", self.PROVIDER_ENV):
             again = asyncio.run(billing.handle_gateway_webhook(
-                db, "nowpayments", headers, body, payload))
+                db, "bachs", headers, body, payload))
         self.assertTrue(again.get("duplicate"))
         self.assertEqual(db.tables[SUBSCRIPTIONS][0]["status"], "active")
 
@@ -1512,12 +1585,14 @@ class TestBillingScale(unittest.TestCase):
         import asyncio
         from backend.services import billing_service as billing
         db = self._db()
-        inv = self._invoice(db)
-        payload = {"payment_id": 99002, "order_id": inv["id"], "payment_status": "waiting"}
-        headers, body = self._signed_nowpayments(payload)
+        inv = self._gateway_invoice(db)
+        payload = {"id": "evt_bachs_2", "type": "checkout.completed",
+                   "data": {"payment_status": "pending", "amount": 49.0,
+                            "metadata": {"invoice_id": inv["id"]}}}
+        headers, body = self._signed_bachs(payload)
         with mock.patch.dict("os.environ", self.PROVIDER_ENV):
             out = asyncio.run(billing.handle_gateway_webhook(
-                db, "nowpayments", headers, body, payload))
+                db, "bachs", headers, body, payload))
         self.assertTrue(out["ok"])
         self.assertNotIn("approved", out)
         self.assertEqual(db.tables["invoices"][0]["status"], "pending")
@@ -1527,13 +1602,58 @@ class TestBillingScale(unittest.TestCase):
         import asyncio
         from backend.services import billing_service as billing
         db = self._db()
-        payload = {"payment_id": 99003, "order_id": "nope", "payment_status": "finished"}
-        headers, body = self._signed_nowpayments(payload)
+        payload = {"id": "evt_bachs_3", "type": "checkout.completed",
+                   "data": {"payment_status": "paid", "amount": 49.0,
+                            "metadata": {"invoice_id": "nope"}}}
+        headers, body = self._signed_bachs(payload)
         with mock.patch.dict("os.environ", self.PROVIDER_ENV):
             out = asyncio.run(billing.handle_gateway_webhook(
-                db, "nowpayments", headers, body, payload))
+                db, "bachs", headers, body, payload))
         self.assertTrue(out["ok"])
         self.assertEqual(out.get("detail"), "no matching invoice")
+
+    def test_webhook_collection_succeeded_approves_with_resolved_amount(self):
+        """collection.succeeded is the real collection event, so it fulfils
+        the order - but the amount it carries is the local-currency charge,
+        so the invoice-currency total is looked up separately."""
+        import asyncio
+        from backend.payments.bachs import BachsProvider
+        from backend.services import billing_service as billing
+        db = self._db()
+        inv = self._gateway_invoice(db)
+        payload = {"id": "evt_bachs_4", "type": "collection.succeeded",
+                   "data": {"status": "SUCCEEDED", "amount": 75000.0,
+                            "currency": "NGN", "reference": inv["id"],
+                            "checkout_id": "chk_test_1"}}
+        headers, body = self._signed_bachs(payload)
+
+        async def fake_resolve(self, event):
+            return float(inv["amount_usd"])
+
+        with mock.patch.dict("os.environ", self.PROVIDER_ENV):
+            with mock.patch.object(BachsProvider, "resolve_amount", fake_resolve):
+                out = asyncio.run(billing.handle_gateway_webhook(
+                    db, "bachs", headers, body, payload))
+        self.assertTrue(out["ok"], out)
+        self.assertTrue(out.get("approved"))
+        self.assertEqual(db.tables["invoices"][0]["status"], "approved")
+
+    def test_webhook_collection_failed_is_never_paid(self):
+        import asyncio
+        from backend.services import billing_service as billing
+        db = self._db()
+        inv = self._gateway_invoice(db)
+        payload = {"id": "evt_bachs_5", "type": "collection.failed",
+                   "data": {"status": "FAILED", "amount": 75000.0,
+                            "currency": "NGN", "reference": inv["id"]}}
+        headers, body = self._signed_bachs(payload)
+        with mock.patch.dict("os.environ", self.PROVIDER_ENV):
+            out = asyncio.run(billing.handle_gateway_webhook(
+                db, "bachs", headers, body, payload))
+        self.assertTrue(out["ok"])
+        self.assertNotIn("approved", out)
+        self.assertEqual(db.tables["invoices"][0]["status"], "pending")
+        self.assertEqual(db.tables["payment_events"][0]["status"], "ignored")
 
     # ---- grace / cancel-at-period-end ----
 
@@ -1614,7 +1734,7 @@ class TestBillingScale(unittest.TestCase):
         })
         db.tables["invoices"].append({
             "id": "i2", "user_id": "u2", "tier": "vip", "status": "approved",
-            "amount_usd": 199.0, "provider": "stripe", "user_id": "u2",
+            "amount_usd": 199.0, "provider": "bachs", "user_id": "u2",
             "created_at": now.isoformat(),
         })
         db.tables["invoices"].append({
@@ -1628,7 +1748,7 @@ class TestBillingScale(unittest.TestCase):
         self.assertEqual(out["active_subscriptions"], 2)
         self.assertEqual(out["expiring_7d"], 1)
         self.assertEqual(out["paying_users"], 2)
-        self.assertEqual(out["revenue_by_provider"]["stripe"]["revenue_usd"], 199.0)
+        self.assertEqual(out["revenue_by_provider"]["bachs"]["revenue_usd"], 199.0)
         self.assertEqual(len(out["revenue_by_month"]), 6)
         self.assertIn("gateway_providers", out)
 
@@ -1733,91 +1853,95 @@ class TestBillingScale(unittest.TestCase):
 
 
 class TestGatewaySignatures(unittest.TestCase):
-    """Phase I: per-provider webhook signature verification."""
+    """Bachs webhook signature verification."""
+
+    ENV = {"BACHS_API_KEY": "sk_sandbox_test",
+           "BACHS_WEBHOOK_SECRET": "whsec_bachs_test"}
 
     def test_configured_gateways_reflect_env(self):
         from backend.payments.registry import configured_gateways
-        empty = {"STRIPE_SECRET_KEY": "", "PAYSTACK_SECRET_KEY": "",
-                 "FLUTTERWAVE_SECRET_KEY": "", "NOWPAYMENTS_API_KEY": ""}
-        with mock.patch.dict("os.environ", empty, clear=False):
+        with mock.patch.dict("os.environ", {"BACHS_API_KEY": ""}, clear=False):
             self.assertEqual(configured_gateways(), [])
-        with mock.patch.dict("os.environ", {"PAYSTACK_SECRET_KEY": "sk_live_x"}, clear=False):
+        with mock.patch.dict("os.environ", {"BACHS_API_KEY": "sk_sandbox_x"}, clear=False):
             names = [g["provider"] for g in configured_gateways()]
-            self.assertIn("paystack", names)
+            self.assertIn("bachs", names)
 
-    def test_stripe_signature_roundtrip(self):
+    def test_bachs_signature_roundtrip(self):
         import hashlib
         import hmac
         import json
         import time
         from backend.payments.registry import get_provider
-        body = json.dumps({
-            "id": "evt_1", "type": "checkout.session.completed",
-            "data": {"object": {"id": "cs_1", "metadata": {"invoice_id": "inv1"},
-                                "payment_status": "paid", "amount_total": 4900,
-                                "currency": "usd"}},
-        }).encode()
+        payload = {
+            "id": "evt_1",
+            "type": "checkout.completed",
+            "data": {"checkout_id": "chk_1",
+                     "metadata": {"invoice_id": "inv1"},
+                     "payment_status": "paid", "amount": 49.0,
+                     "currency": "USD"},
+        }
+        body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
         ts = str(int(time.time()))
-        sig = hmac.new(b"whsec_test", f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
-        with mock.patch.dict("os.environ", {"STRIPE_SECRET_KEY": "sk_test",
-                                            "STRIPE_WEBHOOK_SECRET": "whsec_test"}):
-            p = get_provider("stripe")
-            out = p.verify_webhook({"stripe-signature": f"t={ts},v1={sig}"}, body, json.loads(body))
+        sig = hmac.new(self.ENV["BACHS_WEBHOOK_SECRET"].encode(),
+                       ts.encode() + b"." + body, hashlib.sha256).hexdigest()
+        with mock.patch.dict("os.environ", self.ENV):
+            p = get_provider("bachs")
+            out = p.verify_webhook(
+                {"x-bachs-signature-v2": f"t={ts},v1={sig}"}, body, payload)
             self.assertTrue(out["ok"], out)
             ev = out["event"]
             self.assertTrue(ev.paid)
             self.assertEqual(ev.invoice_id, "inv1")
             self.assertEqual(ev.amount_usd, 49.0)
-            bad = p.verify_webhook({"stripe-signature": f"t={ts},v1={'0' * 64}"},
-                                   body, json.loads(body))
+
+            # The plain v1 header works on its own too.
+            v1 = p.verify_webhook(
+                {"x-bachs-signature": sig, "x-bachs-timestamp": ts}, body, payload)
+            self.assertTrue(v1["ok"], v1)
+
+            bad = p.verify_webhook(
+                {"x-bachs-signature-v2": f"t={ts},v1={'0' * 64}"}, body, payload)
             self.assertFalse(bad["ok"])
-            missing = p.verify_webhook({}, body, json.loads(body))
+            missing = p.verify_webhook({}, body, payload)
             self.assertFalse(missing["ok"])
 
-    def test_paystack_and_flutterwave_signatures(self):
-        import hashlib
-        import hmac
+    def test_bachs_collection_succeeded_is_not_paid(self):
         import json
         from backend.payments.registry import get_provider
+        payload = {
+            "id": "evt_2",
+            "type": "collection.succeeded",
+            "data": {"status": "SUCCEEDED", "amount": 75000.0,
+                     "currency": "NGN", "reference": "inv1"},
+        }
+        body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+        with mock.patch.dict("os.environ", self.ENV):
+            out = get_provider("bachs").verify_webhook(
+                {"x-bachs-signature": "x", "x-bachs-timestamp": "1"}, body, payload)
+        self.assertFalse(out["ok"])  # the signature is wrong, so it never gets here
 
-        body = json.dumps({
-            "event": "charge.success",
-            "data": {"id": 5, "status": "success", "reference": "inv1",
-                     "amount": 4900, "currency": "USD"},
-        }).encode()
-        sig = hmac.new(b"sk_live_x", body, hashlib.sha512).hexdigest()
-        with mock.patch.dict("os.environ", {"PAYSTACK_SECRET_KEY": "sk_live_x"}):
-            out = get_provider("paystack").verify_webhook(
-                {"x-paystack-signature": sig}, body, json.loads(body))
+        import hashlib
+        import hmac
+        import time
+        ts = str(int(time.time()))
+        sig = hmac.new(self.ENV["BACHS_WEBHOOK_SECRET"].encode(),
+                       ts.encode() + b"." + body, hashlib.sha256).hexdigest()
+        with mock.patch.dict("os.environ", self.ENV):
+            out = get_provider("bachs").verify_webhook(
+                {"x-bachs-signature-v2": f"t={ts},v1={sig}"}, body, payload)
         self.assertTrue(out["ok"], out)
         self.assertTrue(out["event"].paid)
-        self.assertEqual(out["event"].amount_usd, 49.0)
-
-        with mock.patch.dict("os.environ", {"FLUTTERWAVE_SECRET_KEY": "flw_x",
-                                            "FLUTTERWAVE_WEBHOOK_HASH": "hash_x"}):
-            good = get_provider("flutterwave").verify_webhook(
-                {"verif-hash": "hash_x"}, b"{}",
-                {"event": "charge.completed",
-                 "data": {"id": 7, "tx_ref": "inv1", "status": "successful",
-                          "amount": 199.0, "currency": "USD"}})
-        self.assertTrue(good["ok"], good)
-        self.assertTrue(good["event"].paid)
-
-        with mock.patch.dict("os.environ", {"FLUTTERWAVE_SECRET_KEY": "flw_x",
-                                            "FLUTTERWAVE_WEBHOOK_HASH": "hash_x"}):
-            bad = get_provider("flutterwave").verify_webhook(
-                {"verif-hash": "nope"}, b"{}", {"event": "charge.completed", "data": {}})
-        self.assertFalse(bad["ok"])
+        # The charge is in the customer's currency, so no invoice amount.
+        self.assertIsNone(out["event"].amount_usd)
+        self.assertEqual(out["event"].invoice_id, "inv1")
 
 
 class TestGatewayRedirectSplit(unittest.TestCase):
     """Gateway checkouts split webhook (backend) vs redirect (frontend) origins."""
 
     ENV = {
-        "NOWPAYMENTS_API_KEY": "np_key",
-        "NOWPAYMENTS_IPN_SECRET": "np_secret",
-        "STRIPE_SECRET_KEY": "sk_test",
-        "PAYSTACK_CURRENCY": "USD",
+        "BACHS_API_KEY": "sk_sandbox_test",
+        "BACHS_WEBHOOK_SECRET": "whsec_bachs_test",
     }
 
     def test_frontend_base_fallback(self):
@@ -1832,59 +1956,56 @@ class TestGatewayRedirectSplit(unittest.TestCase):
         finally:
             settings.FRONTEND_BASE_URL, settings.APP_BASE_URL = orig_f, orig_a
 
-    def test_nowpayments_ipn_is_backend_redirect_is_frontend(self):
-        from backend.payments.nowpayments import NowPaymentsProvider
-        import json as _json
+    def test_bachs_redirects_to_frontend_and_prices_once(self):
+        from backend.payments.bachs import BachsProvider
         captured = {}
 
-        def fake_post(url, *, headers, json_body, timeout=20.0):
+        def fake_request(self, method, path, json_body=None):
+            captured["method"] = method
+            captured["path"] = path
             captured["body"] = json_body
-            return {"id": "123", "invoice_url": "https://nowpayments.io/pay/123"}
+            return 200, {"checkout_id": "chk_1",
+                         "checkout_url": "https://sandbox.bachs.io/pay/chk_1",
+                         "status": "open"}
 
         with mock.patch.dict("os.environ", self.ENV):
-            with mock.patch.object(NowPaymentsProvider, "_post_json", staticmethod(fake_post)):
-                out = NowPaymentsProvider()._create_checkout(
-                    {"id": "inv1", "amount_usd": 49.0, "tier": "premium"},
+            with mock.patch.object(BachsProvider, "_request", fake_request):
+                out = BachsProvider()._create_checkout(
+                    {"id": "inv1", "amount_usd": 49.0, "tier": "premium",
+                     "currency": "USD", "payment_method": "NGN_CARD",
+                     "_user_email": "a@b.c"},
                     "https://api.orqeva.test", "https://app.orqeva.test")
         self.assertTrue(out["ok"], out)
-        b = captured["body"]
-        self.assertEqual(b["ipn_callback_url"], "https://api.orqeva.test/api/billing/webhooks/nowpayments")
-        self.assertEqual(b["success_url"], "https://app.orqeva.test/billing?status=paid")
-        self.assertEqual(b["cancel_url"], "https://app.orqeva.test/billing")
+        self.assertEqual(out["checkout_url"], "https://sandbox.bachs.io/pay/chk_1")
+        self.assertEqual(out["provider_ref"], "chk_1")
 
-    def test_stripe_paystack_flutterwave_redirect_to_frontend(self):
-        from backend.payments.paystack import PaystackProvider
-        from backend.payments.flutterwave import FlutterwaveProvider
-        inv = {"id": "inv1", "amount_usd": 49.0, "tier": "premium"}
+        body = captured["body"]
+        self.assertEqual(captured["path"], "/v1/checkout-sessions")
+        # Exactly one pricing source, as a decimal string.
+        self.assertEqual(body["pricing"], {"currency": "USD", "amount": "49.00"})
+        self.assertNotIn("product", body)
+        # The customer comes back to the app, never to the API.
+        self.assertEqual(body["success_url"], "https://app.orqeva.test/billing?status=paid")
+        self.assertEqual(body["cancel_url"], "https://app.orqeva.test/billing?status=cancelled")
+        # The corridor the customer picked is passed through.
+        self.assertEqual(body["payment_method_types"], ["NGN_CARD"])
+        self.assertEqual(body["customer"], {"email": "a@b.c"})
+        self.assertEqual(body["reference"], "inv1")
+        self.assertEqual(body["metadata"]["invoice_id"], "inv1")
+        # No callback URL is posted to the gateway: webhooks are configured
+        # in the Bachs dashboard and always hit the backend.
+        self.assertNotIn("callback_url", body)
+        self.assertNotIn("ipn_callback_url", body)
+        self.assertNotIn("api.orqeva.test", str(body))
 
-        with mock.patch.dict("os.environ", {"STRIPE_SECRET_KEY": "sk_test"}):
-            from backend.payments.stripe import StripeProvider
-            captured = {}
-            def fake_post_form(url, form):
-                captured["form"] = dict(form)
-                return {"url": "https://stripe.com/checkout/xyz", "id": "cs_1"}
-            with mock.patch.object(StripeProvider, "_post_form", staticmethod(fake_post_form)):
-                StripeProvider()._create_checkout(inv, "https://api.orqeva.test", "https://app.orqeva.test")
-            self.assertEqual(captured["form"]["success_url"], "https://app.orqeva.test/billing?status=paid")
-            self.assertEqual(captured["form"]["cancel_url"], "https://app.orqeva.test/billing")
-
-        with mock.patch.dict("os.environ", {"PAYSTACK_SECRET_KEY": "sk_live_x"}):
-            captured = {}
-            def fake_post(url, *, headers, json_body, timeout=20.0):
-                captured["body"] = json_body
-                return {"data": {"authorization_url": "https://paystack.com/pay/xyz"}}
-            with mock.patch.object(PaystackProvider, "_post_json", staticmethod(fake_post)):
-                PaystackProvider()._create_checkout(inv, "https://api.orqeva.test", "https://app.orqeva.test")
-            self.assertEqual(captured["body"]["callback_url"], "https://app.orqeva.test/billing?status=paid")
-
-        with mock.patch.dict("os.environ", {"FLUTTERWAVE_SECRET_KEY": "flw_x"}):
-            captured = {}
-            def fake_post(url, *, headers, json_body, timeout=20.0):
-                captured["body"] = json_body
-                return {"data": {"link": "https://flutterwave.com/pay/xyz"}}
-            with mock.patch.object(FlutterwaveProvider, "_post_json", staticmethod(fake_post)):
-                FlutterwaveProvider()._create_checkout(inv, "https://api.orqeva.test", "https://app.orqeva.test")
-            self.assertEqual(captured["body"]["redirect_url"], "https://app.orqeva.test/billing?status=paid")
+    def test_bachs_rejects_unknown_corridor(self):
+        from backend.payments.bachs import BachsProvider
+        with mock.patch.dict("os.environ", self.ENV):
+            out = BachsProvider()._create_checkout(
+                {"id": "inv1", "amount_usd": 49.0, "tier": "premium",
+                 "payment_method": "NOT_A_CORRIDOR"},
+                "https://api.orqeva.test", "https://app.orqeva.test")
+        self.assertFalse(out["ok"])
 
 
 class _FakeSignalsDB:
