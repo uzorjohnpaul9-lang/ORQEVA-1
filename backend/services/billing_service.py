@@ -46,6 +46,41 @@ def _iso(dt: datetime) -> str:
     return dt.isoformat().replace("+00:00", "Z")
 
 
+def _valid_corridor(method: str, corridor: str) -> bool:
+    """Is `corridor` a payment rail this gateway knows about?
+
+    Checked against the provider's static catalogue rather than the live
+    account settings, so creating an invoice never depends on a third-party
+    round trip. Bachs silently omits a corridor the account cannot accept
+    and the customer picks another one on the hosted page.
+    """
+    provider = get_provider(method)
+    known = getattr(provider, "corridor_ids", None)
+    if callable(known):
+        try:
+            return corridor in known()
+        except Exception:
+            return False
+    return True
+
+
+def payment_methods() -> list[dict]:
+    """Payment corridors the billing page can offer.
+
+    Each entry is {id, label, currency, kind}. The list is limited to the
+    corridors the Bachs account actually has enabled, so the customer is
+    never offered a rail that would fail at checkout.
+    """
+    provider = get_provider("bachs")
+    catalogue = getattr(provider, "corridor_catalogue", None)
+    if callable(catalogue):
+        try:
+            return catalogue()
+        except Exception:
+            logger.warning("payment corridor catalogue unavailable")
+    return []
+
+
 def plans() -> list[dict]:
     out = []
     for tier, cfg in PAYMENT_CONFIG.items():
@@ -105,11 +140,13 @@ async def _unique_amount(db: SupabaseDB, base: float) -> float:
 
 async def create_invoice(db: SupabaseDB, user: dict, tier: str,
                          method: str = "crypto", promo_code: str | None = None,
-                         annual: bool = False) -> dict:
+                         annual: bool = False,
+                         payment_method: str | None = None) -> dict:
     """Create a payment invoice for a paid tier.
 
     `method` is a legacy rail (crypto/manual) or a configured gateway
-    (nowpayments/stripe/paystack/flutterwave) which returns a hosted checkout.
+    (bachs) which returns a hosted checkout. `payment_method` is the
+    gateway corridor the customer picked (e.g. USD_CARD, MOMO_GHS, CRYPTO).
     `annual=True` prices the invoice at the tier's yearly rate and stamps the
     365-day term on the invoice so activation extends the subscription by a year.
     """
@@ -118,6 +155,11 @@ async def create_invoice(db: SupabaseDB, user: dict, tier: str,
         return {"error": "invalid_tier"}
     if method not in GATEWAY_METHODS and method not in ("crypto", "manual"):
         return {"error": "invalid_method"}
+    corridor = (payment_method or "").strip() or None
+    if corridor and not is_gateway(method):
+        return {"error": "invalid_payment_method"}
+    if corridor and not _valid_corridor(method, corridor):
+        return {"error": "invalid_payment_method"}
     annual_price = float(cfg.get("annual_price") or 0)
     if annual and annual_price <= 0:
         return {"error": "invalid_term"}
@@ -153,6 +195,8 @@ async def create_invoice(db: SupabaseDB, user: dict, tier: str,
         "unique_amount": None,
         "memo": f"ORQ-{invoice_id[:8].upper()}" if method in ("crypto", "manual") else None,
         "currency": "USD",
+        # Which gateway corridor the customer picked (card / bank / momo / crypto).
+        "payment_method": corridor,
         # NULL = the default monthly term; yearly invoices carry 365 here.
         "duration_days": int(cfg.get("annual_days") or 365) if annual else None,
         "paid_at": None,
@@ -175,6 +219,7 @@ async def create_invoice(db: SupabaseDB, user: dict, tier: str,
             return {"error": "invalid_method"}
         checkout_input = dict(created)
         checkout_input["_user_email"] = user.get("email")
+        checkout_input["payment_method"] = corridor
         result = await asyncio.to_thread(
             provider.create_checkout, checkout_input, settings.APP_BASE_URL, frontend_base()
         )
@@ -212,6 +257,7 @@ def invoice_view(inv: dict, email: str | None = None) -> dict:
         "provider": inv.get("provider"),
         "provider_ref": inv.get("provider_ref"),
         "checkout_url": inv.get("checkout_url"),
+        "payment_method": inv.get("payment_method"),
         "unique_amount": inv.get("unique_amount"),
         "memo": inv.get("memo"),
         "duration_days": inv.get("duration_days"),
@@ -431,6 +477,13 @@ async def handle_gateway_webhook(db: SupabaseDB, provider_name: str,
         return {"ok": False, "status": 400, "detail": verified.get("detail") or "verification failed"}
 
     event = verified["event"]
+    if event.paid and event.amount_usd is None:
+        # The gateway reported the amount in the customer's own currency;
+        # ask the provider for the invoice-currency total.
+        try:
+            event.amount_usd = await provider.resolve_amount(event)
+        except Exception:
+            logger.warning("could not resolve amount for %s event", provider_name)
     rec = await record_payment_event(
         db, provider_name, event.event_id,
         invoice_id=event.invoice_id, type=event.type,

@@ -61,6 +61,16 @@ class PaymentProvider(ABC):
         except Exception as e:
             return {"ok": False, "detail": str(e)[:200]}
 
+    async def resolve_amount(self, event: GatewayEvent) -> float | None:
+        """Optional: the invoice-currency amount for a paid event.
+
+        Most gateways put the invoice amount in the payload. Some report the
+        amount the customer was charged in their own currency instead, which
+        cannot be compared against a USD invoice, so the provider is asked
+        to look the real amount up. Returns None when there is nothing to add.
+        """
+        return None
+
     async def refund(self, invoice: dict) -> dict:
         """Best-effort refund call. Returns {ok, detail}; never raises.
 

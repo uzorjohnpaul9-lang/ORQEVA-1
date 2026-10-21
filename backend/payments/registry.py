@@ -1,17 +1,9 @@
 """Gateway lookup + selection."""
+from backend.payments.bachs import BachsProvider
 from backend.payments.base import PaymentProvider
-from backend.payments.flutterwave import FlutterwaveProvider
-from backend.payments.nowpayments import NowPaymentsProvider
-from backend.payments.paystack import PaystackProvider
-from backend.payments.stripe import StripeProvider
 
 _PROVIDERS: dict[str, PaymentProvider] = {
-    p.name: p for p in (
-        NowPaymentsProvider(),
-        StripeProvider(),
-        PaystackProvider(),
-        FlutterwaveProvider(),
-    )
+    p.name: p for p in (BachsProvider(),)
 }
 
 # Methods accepted on POST /api/billing/invoices besides the legacy pair.

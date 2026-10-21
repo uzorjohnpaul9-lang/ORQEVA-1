@@ -16,9 +16,11 @@ router = APIRouter(prefix="/api/billing", tags=["billing"])
 class InvoiceCreate(BaseModel):
     tier: str = Field(pattern="^(premium|vip)$")
     method: str = Field(default="crypto",
-                       pattern="^(crypto|manual|nowpayments|stripe|paystack|flutterwave)$")
+                        pattern="^(crypto|manual|bachs)$")
     promo_code: str | None = Field(default=None, max_length=40)
     annual: bool = False
+    # Gateway corridor the customer picked (USD_CARD, MOMO_GHS, CRYPTO...).
+    payment_method: str | None = Field(default=None, max_length=40)
 
 
 class TxRefSubmit(BaseModel):
@@ -47,7 +49,15 @@ async def get_plans(user: dict = Depends(get_current_user)):
     check_rate_limit(user["id"], user.get("tier", "free"))
     return {"plans": billing.plans(), "current_tier": user.get("tier"),
             "bank_card": billing.bank_card_details(),
-            "gateways": billing.configured_gateways()}
+            "gateways": billing.configured_gateways(),
+            "payment_methods": billing.payment_methods()}
+
+
+@router.get("/payment-methods")
+async def payment_methods(user: dict = Depends(get_current_user)):
+    """Payment corridors the customer can pick on the billing page."""
+    check_rate_limit(user["id"], user.get("tier", "free"))
+    return {"payment_methods": billing.payment_methods()}
 
 
 @router.get("/providers")
@@ -97,7 +107,9 @@ async def create_invoice(
     user: dict = Depends(get_current_user),
 ):
     check_rate_limit(user["id"], user.get("tier", "free"))
-    inv = await billing.create_invoice(db, user, body.tier, body.method, body.promo_code, annual=body.annual)
+    inv = await billing.create_invoice(db, user, body.tier, body.method, body.promo_code,
+                                       annual=body.annual,
+                                       payment_method=body.payment_method)
     if inv.get("error"):
         raise HTTPException(status_code=422, detail=inv["error"])
     return billing.invoice_view(inv)

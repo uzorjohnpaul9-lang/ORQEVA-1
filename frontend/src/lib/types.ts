@@ -320,10 +320,12 @@ export interface Invoice {
   promo_code: string | null;
   status: string;
   tx_ref: string | null;
-  /** Which rail paid this: crypto | manual | nowpayments | stripe | paystack | flutterwave. */
+  /** Which rail paid this: crypto | manual | bachs. */
   provider: string | null;
   provider_ref: string | null;
   checkout_url: string | null;
+  /** Bachs corridor chosen at checkout: USD_CARD | NGN_CARD | NGN_BANK_TRANSFER | MOMO_XX | CRYPTO. */
+  payment_method: string | null;
   /** Exact amount hand-payers must send (base + unique cents). */
   unique_amount: number | null;
   memo: string | null;

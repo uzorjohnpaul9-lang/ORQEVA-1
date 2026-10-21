@@ -115,7 +115,14 @@ export async function api<T = unknown>(path: string, opts: ApiOptions = {}): Pro
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }));
-      throw new Error(typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail));
+      const detail = err?.detail ?? err?.error ?? err?.message;
+      throw new Error(
+        typeof detail === "string"
+          ? detail
+          : detail != null
+            ? JSON.stringify(detail)
+            : res.statusText || `HTTP ${res.status}`,
+      );
     }
 
     const value = (await res.json()) as T;
