@@ -20,9 +20,37 @@ Press `Ctrl+C` (or close the window) to stop both and re-enable sleep.
 - Python 3.11.9 + all deps in `requirements.backend.txt`
 - `cloudflared` at `C:\Program Files (x86)\cloudflared\cloudflared.exe`
 - `.env` in repo root with real keys
-- `frontend/.env.local` with `NEXT_PUBLIC_API_URL=<last tunnel URL>`
+- `frontend/.env.production` with the public build-time values (Supabase
+  publishable key + the Railway API URL). `frontend/.env.local` overrides it
+  locally.
+
+## Deploying the frontend
+
+The dashboard is served by Cloudflare Pages. `wrangler` is pinned in
+`frontend/package.json` and the project is described by `frontend/wrangler.toml`,
+so the deploy is just:
+
+```bat
+cd frontend
+set CLOUDFLARE_API_TOKEN=<token with "Cloudflare Pages - Edit">
+set CLOUDFLARE_ACCOUNT_ID=75afd35520b239e8dbafaf9c85a2c837
+npm run deploy
+```
+
+That builds the static export and publishes it. `npm run deploy:pages` skips
+the build and publishes the existing `out/`.
+
+`.github/workflows/deploy-frontend.yml` does the same on every push to `main`
+that touches `frontend/`, and on demand via **Run workflow**. It needs one
+repo secret, `CLOUDFLARE_API_TOKEN`.
+
+Note: Pages configs reject `account_id` in `wrangler.toml`, so the account
+comes from `CLOUDFLARE_ACCOUNT_ID` instead.
 
 ## IMPORTANT — the tunnel URL can change
+
+Only relevant to the legacy local-backend setup below, where the backend runs
+on this PC behind a Cloudflare quick tunnel instead of Railway.
 
 Quick tunnels hand out a NEW random URL every time `cloudflared` starts.
 That URL is baked into the frontend at build time. If the URL changes:
@@ -31,7 +59,7 @@ That URL is baked into the frontend at build time. If the URL changes:
 cd frontend
 set NEXT_PUBLIC_API_URL=https://<new-tunnel-url>
 npm run build
-npx wrangler pages deploy out --project-name orqeva
+npm run deploy:pages
 ```
 
 Then the live site works again.

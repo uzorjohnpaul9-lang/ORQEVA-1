@@ -1,0 +1,46 @@
+name: Deploy frontend
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/deploy-frontend.yml"
+
+# Never let two deploys race for the production alias.
+concurrency:
+  group: pages-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      # Repo secret: token with "Cloudflare Pages - Edit" permission.
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      # Pages configs reject "account_id" in wrangler.toml, so it goes here.
+      # Not a secret - a public account identifier.
+      CLOUDFLARE_ACCOUNT_ID: 75afd35520b239e8dbafaf9c85a2c837
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build static export
+        # NEXT_PUBLIC_* come from frontend/.env.production (public values only -
+        # they are already embedded in the client bundle).
+        run: npm run build
+
+      - name: Deploy to Cloudflare Pages
+        run: npm run deploy:pages

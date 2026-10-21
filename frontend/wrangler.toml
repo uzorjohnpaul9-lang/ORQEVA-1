@@ -1,0 +1,15 @@
+# Cloudflare Pages project for the ORQEVA dashboard.
+#
+# The backend is NOT on Cloudflare - it runs on Railway (see ../railway.json).
+# This file only describes the static dashboard that Pages serves.
+#
+# Deploy:  cd frontend && npm run deploy
+# Requires CLOUDFLARE_API_TOKEN in the environment (CI secret or local shell).
+# Pages configs reject "account_id", so the account comes from the
+# CLOUDFLARE_ACCOUNT_ID env var instead.
+
+name = "orqeva"
+compatibility_date = "2026-10-21"
+
+# next.config.ts sets output: "export", so the build lands in ./out
+pages_build_output_dir = "out"

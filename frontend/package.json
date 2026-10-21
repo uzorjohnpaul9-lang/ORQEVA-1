@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "deploy": "npm run build && wrangler pages deploy",
+    "deploy:pages": "wrangler pages deploy"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.1",
@@ -28,6 +30,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.3.1",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "wrangler": "4.132.0"
   }
 }
