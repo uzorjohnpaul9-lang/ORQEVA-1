@@ -10,24 +10,37 @@ security = HTTPBearer()
 optional_security = HTTPBearer(auto_error=False)
 
 
+def _auth_error_status(exc: Exception) -> int | None:
+    """HTTP status carried by an auth-provider error, if any."""
+    status = getattr(exc, "status", None) or getattr(exc, "status_code", None)
+    try:
+        return int(status)
+    except (TypeError, ValueError):
+        return None
+
+
 async def resolve_user_from_token(token: str) -> str | None:
     """Validate a Supabase access token against the auth provider.
 
     Returns the user id on success, or None if the token is invalid/expired.
     SSE endpoints can't send Authorization headers, so they share this path.
-    One retry absorbs transient auth-provider hiccups (throttling/network)
-    that would otherwise surface as spurious 401s mid-session.
+    Transient provider hiccups (throttling/network/5xx) are retried with
+    backoff: a real credential rejection answers immediately, but a transport
+    failure must not surface as a spurious 401 mid-session.
     """
     client = await get_service_client()
-    for attempt in range(2):
+    for attempt in range(3):
         try:
             resp = await client.auth.get_user(token)
             return resp.user.id
-        except Exception:
-            if attempt == 0:
-                await asyncio.sleep(0.5)
-                continue
-            return None
+        except Exception as e:
+            status = _auth_error_status(e)
+            if status is not None and status < 500 and status != 429:
+                # 400/401/403 - the provider rejected the token itself.
+                return None
+            if attempt == 2:
+                return None
+            await asyncio.sleep(0.5 * (2 ** attempt))
     return None
 
 

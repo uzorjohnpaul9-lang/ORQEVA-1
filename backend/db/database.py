@@ -73,7 +73,10 @@ async def _unique_username(
 
 async def seed_admin() -> bool:
     """Ensure the env-configured admin exists in Supabase Auth + public.users."""
+    import asyncio
     import os
+
+    import httpx
 
     try:
         client = await get_service_client()
@@ -91,11 +94,22 @@ async def seed_admin() -> bool:
 
     facade = SupabaseDB(client)
 
-    try:
-        resp = await client.auth.admin.list_users()
-        users = resp if isinstance(resp, list) else (getattr(resp, "data", None) or [])
-    except Exception as e:
-        log.error("seed_admin: Supabase unreachable: %s", e)
+    users = None
+    last_err = None
+    for attempt in range(3):
+        try:
+            resp = await client.auth.admin.list_users()
+            users = resp if isinstance(resp, list) else (getattr(resp, "data", None) or [])
+            break
+        except Exception as e:
+            last_err = e
+            # Transport failures are worth retrying: a DNS blip at boot must not
+            # leave the admin unseeded. Auth/permission errors are not.
+            if not isinstance(e, (httpx.ConnectError, httpx.TransportError)) or attempt == 2:
+                break
+            await asyncio.sleep(0.5 * (attempt + 1))
+    if users is None:
+        log.error("seed_admin: Supabase unreachable: %s", last_err)
         return False
 
     auth_id = None

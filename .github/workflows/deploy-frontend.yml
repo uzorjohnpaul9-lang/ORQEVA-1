@@ -13,6 +13,9 @@ concurrency:
   group: pages-deploy
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest

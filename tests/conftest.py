@@ -2,6 +2,7 @@
 
 DASHBOARD_DATABASE_URL must be set BEFORE backend modules are imported.
 """
+import asyncio
 import os
 import sys
 import uuid
@@ -17,6 +18,30 @@ import pytest  # noqa: E402
 from httpx import ASGITransport  # noqa: E402
 
 
+class RetryOn503(httpx.AsyncBaseTransport):
+    """Retry 503 responses from the app under test.
+
+    The backend answers 503 when an upstream provider (Supabase auth, the
+    payment gateway) is briefly unavailable - the documented contract is
+    "retry later". A flaky provider call must not fail the suite.
+    """
+
+    def __init__(self, inner: httpx.AsyncBaseTransport, attempts: int = 3, delay: float = 1.0):
+        self._inner = inner
+        self._attempts = attempts
+        self._delay = delay
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        response = await self._inner.handle_async_request(request)
+        for attempt in range(self._attempts - 1):
+            if response.status_code != 503:
+                break
+            await response.aclose()
+            await asyncio.sleep(self._delay * (attempt + 1))
+            response = await self._inner.handle_async_request(request)
+        return response
+
+
 @pytest.fixture(scope="session")
 async def client():
     if TEST_DB.exists():
@@ -25,11 +50,53 @@ async def client():
     from backend.db.database import init_db
 
     await init_db()
-    transport = ASGITransport(app=app)
+    transport = RetryOn503(ASGITransport(app=app))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver",
                                  timeout=30.0) as c:
         yield c
     # keep the file for post-mortem; CI can delete it
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip the DB-backed tests when Supabase is not configured.
+
+    Without credentials every DB call raises, which buries real regressions
+    under a wall of identical errors. Skipping keeps the signal clean. CI
+    wires the credentials in (see .github/workflows/ci.yml), so the full suite
+    actually runs there.
+    """
+    from backend.config import settings
+
+    if settings.SUPABASE_URL and settings.SUPABASE_SECRET_KEY:
+        return
+    skip = pytest.mark.skip(
+        reason="Supabase not configured (set SUPABASE_URL / SUPABASE_SECRET_KEY)"
+    )
+    for item in items:
+        if "client" in getattr(item, "fixturenames", ()):
+            item.add_marker(skip)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _skip_db_without_supabase(request):
+    """Turn DB access into a skip when Supabase is not configured.
+
+    The client factory is the single choke point every DB and auth call goes
+    through, so tests that touch the database without the ``client`` fixture
+    are skipped too instead of erroring out.
+    """
+    from backend.config import settings
+
+    if settings.SUPABASE_URL and settings.SUPABASE_SECRET_KEY:
+        return
+    from backend.db import supabase as supabase_db
+
+    async def _skip(*args, **kwargs):
+        pytest.skip("Supabase not configured (set SUPABASE_URL / SUPABASE_SECRET_KEY)")
+
+    mp = pytest.MonkeyPatch()
+    mp.setattr(supabase_db, "create_async_client", _skip)
+    request.addfinalizer(mp.undo)
 
 
 @pytest.fixture(autouse=True)

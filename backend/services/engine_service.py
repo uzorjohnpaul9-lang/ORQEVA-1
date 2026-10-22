@@ -1,6 +1,7 @@
 """Engine scan orchestration shared by the admin endpoint and the background scheduler."""
 import asyncio
 import os
+from typing import Any
 
 from backend.db.models import SIGNALS, USERS
 from backend.db.supabase import SupabaseDB, now_iso
@@ -30,7 +31,10 @@ def _engine_signal_to_db(signal, market: str, strategy: str, tier: str = "free",
     return {
         "symbol": signal.symbol,
         "market": market,
-        "direction": signal.direction,
+        # Engines emit "BUY"/"SELL"; rows are stored lowercased, so normalise
+        # here too - otherwise the cooldown lookup never matches the stored
+        # signal and the same call gets published over and over.
+        "direction": str(signal.direction or "").lower(),
         "confidence": round(signal.confidence, 4),
         "entry_price": round(signal.price, 4),
         "stop_loss": round(signal.stop_loss, 4),
@@ -42,16 +46,41 @@ def _engine_signal_to_db(signal, market: str, strategy: str, tier: str = "free",
     }
 
 
-async def recent_signal_keys(db: SupabaseDB, hours: int) -> set[tuple[str, str, str]]:
-    """(symbol, market, direction) tuples emitted within the cooldown window."""
+async def recent_signal_keys(
+    db: SupabaseDB, hours: int, symbols: list[str] | None = None
+) -> set[tuple[str, str, str]]:
+    """(symbol, market, direction) tuples emitted within the cooldown window.
+
+    ``symbols`` narrows the query server-side. Without it PostgREST's
+    1000-row cap silently truncates the window - a busy table has thousands of
+    rows in 24h - so the cooldown misses signals and duplicates get published.
+    The rows are paged through for the same reason.
+    """
     from datetime import datetime, timedelta, timezone
 
+    if symbols is not None and not symbols:
+        return set()
+
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat().replace("+00:00", "Z")
-    rows = await db.fetch_all(
-        SIGNALS,
-        where={"created_at": {"op": "gte", "value": cutoff}},
-        columns="symbol,market,direction",
-    )
+    where: dict[str, Any] = {"created_at": {"op": "gte", "value": cutoff}}
+    if symbols is not None:
+        where["symbol"] = sorted(set(symbols))
+
+    rows: list[dict] = []
+    page_size = 1000
+    offset = 0
+    while True:
+        chunk = await db.fetch_all(
+            SIGNALS,
+            where=where,
+            columns="symbol,market,direction",
+            limit=page_size,
+            offset=offset,
+        )
+        rows.extend(chunk)
+        if len(chunk) < page_size:
+            break
+        offset += page_size
     return {(r.get("symbol"), r.get("market"), r.get("direction")) for r in rows}
 
 
@@ -82,7 +111,8 @@ async def run_scan(db: SupabaseDB, *, cooldown_hours: int = 0) -> dict:
             errors.append(f"{bucket} engine: {str(e)[:150]}")
 
     if cooldown_hours > 0:
-        seen = await recent_signal_keys(db, cooldown_hours)
+        candidate_symbols = {s["symbol"] for sigs in results.values() for s in sigs}
+        seen = await recent_signal_keys(db, cooldown_hours, symbols=sorted(candidate_symbols))
         for bucket, sigs in results.items():
             results[bucket] = [
                 s for s in sigs if (s["symbol"], s["market"], s["direction"]) not in seen
