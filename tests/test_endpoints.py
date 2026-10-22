@@ -223,10 +223,25 @@ async def test_admin_user_management_and_status(client: httpx.AsyncClient):
 
     r = await client.get("/api/admin/users", headers=Ha)
     assert r.status_code == 200
-    users = r.json()
-    assert isinstance(users, list)
+    body = r.json()
+    assert isinstance(body, dict)
+    assert body["total"] >= 1
+    assert body["limit"] == 50 and body["offset"] == 0
+    users = body["items"]
     me = next(u for u in users if u["email"] == email)
     assert me["is_admin"] is True
+    assert me["is_online"] is True
+    assert me["last_seen_at"]
+
+    # Totals are exposed separately from the page (and online != is_active).
+    r = await client.get("/api/admin/users/stats", headers=Ha)
+    assert r.status_code == 200
+    stats = r.json()
+    assert stats["total"] >= 1
+    assert stats["online"] >= 1
+    assert stats["active"] >= 1
+    assert set(stats["by_tier"]) == {"free", "premium", "vip"}
+    assert stats["online_window_seconds"] >= 60
 
     # tier change on self (allowed; only admin/active revocation is guarded)
     r = await client.patch(f"/api/admin/users/{me['id']}", headers=Ha,

@@ -63,6 +63,16 @@ async def users(
     return await admin_service.list_users(db, search=search, tier=tier, limit=limit, offset=offset)
 
 
+@router.get("/users/stats")
+async def user_stats(
+    db: SupabaseDB = Depends(get_db),
+    admin: dict = Depends(require_admin),
+):
+    """Platform user totals: total, online now, account states, tier split."""
+    check_rate_limit(admin["id"], "admin")
+    return await admin_service.user_stats(db)
+
+
 @router.patch("/users/{user_id}")
 async def update_user(
     user_id: str,

@@ -380,6 +380,8 @@ export interface AdminUserContext {
     is_active: boolean;
     telegram_chat_id: string | null;
     created_at: string;
+    last_seen_at: string | null;
+    is_online: boolean;
   };
   preferences: Record<string, unknown> | null;
   risk: Record<string, unknown> | null;

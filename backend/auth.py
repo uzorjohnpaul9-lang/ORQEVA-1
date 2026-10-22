@@ -5,6 +5,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from backend.db.supabase import SupabaseDB, get_db, get_service_client
 from backend.db.models import USERS
+from backend.services import presence_service
 
 security = HTTPBearer()
 optional_security = HTTPBearer(auto_error=False)
@@ -61,6 +62,7 @@ async def get_current_user(
     user = await db.fetch_one(USERS, {"id": user_id})
     if not user or not user.get("is_active"):
         raise credentials_exception
+    await presence_service.touch(db, user_id)
     return user
 
 
@@ -87,4 +89,5 @@ async def get_optional_user(
     user = await db.fetch_one(USERS, {"id": user_id})
     if not user or not user.get("is_active"):
         return None
+    await presence_service.touch(db, user_id)
     return user

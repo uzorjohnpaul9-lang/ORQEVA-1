@@ -18,7 +18,15 @@ import type { AdminUserContext, BlockedIp, SecurityEvent, SupportTicket } from "
 interface AdminUser {
   id: string; email: string; username: string; tier: string;
   is_admin: boolean; is_active: boolean; telegram_chat_id: string | null;
-  created_at: string;
+  created_at: string; last_seen_at: string | null; is_online: boolean;
+}
+interface UsersPage {
+  items: AdminUser[]; total: number; online: number; limit: number; offset: number;
+}
+interface UserStats {
+  total: number; online: number; active: number; disabled: number;
+  by_tier: { free: number; premium: number; vip: number };
+  online_window_seconds: number;
 }
 interface SystemStatus {
   scheduler: { enabled: boolean; interval_minutes: number; cooldown_hours: number };
@@ -64,6 +72,60 @@ interface ForwardTestStats {
 
 const TABS = ["Overview", "Users", "Support", "Billing", "Affiliates", "Signals", "Security", "System"] as const;
 type Tab = (typeof TABS)[number];
+
+const USERS_PAGE_SIZE = 50;
+const USERS_REFRESH_MS = 30_000;
+
+/** Accept both the paginated response and the legacy bare list. */
+function normalizeUsersPage(res: unknown): UsersPage {
+  if (Array.isArray(res)) {
+    const items = res as AdminUser[];
+    return {
+      items,
+      total: items.length,
+      online: items.filter((u) => u.is_online).length,
+      limit: items.length,
+      offset: 0,
+    };
+  }
+  const page = res as Partial<UsersPage> | null;
+  const items = page?.items ?? [];
+  return {
+    items,
+    total: page?.total ?? items.length,
+    online: page?.online ?? items.filter((u) => u.is_online).length,
+    limit: page?.limit ?? USERS_PAGE_SIZE,
+    offset: page?.offset ?? 0,
+  };
+}
+
+function timeAgo(iso: string | null | undefined): string {
+  if (!iso) return "never";
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "just now";
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+function Presence({ online, lastSeen }: { online?: boolean; lastSeen?: string | null }) {
+  if (online) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-xs font-medium text-green">
+        <span className="w-2 h-2 rounded-full bg-green" /> Online
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs text-text-muted">
+      <span className="w-2 h-2 rounded-full bg-text-muted/40" /> Offline · {timeAgo(lastSeen)}
+    </span>
+  );
+}
 
 export default function AdminPage() {
   const { token, user } = useAuth();
@@ -158,21 +220,27 @@ function OverviewTab({ token }: { token: string }) {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [system, setSystem] = useState<SystemStatus | null>(null);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
+  const [stats, setStats] = useState<UserStats | null>(null);
 
   useEffect(() => {
     Promise.all([
       api<BillingStats>("/api/billing/admin/stats", { token }).catch(() => null),
-      api<AdminUser[]>("/api/admin/users?limit=5", { token }).catch(() => []),
+      api<unknown>("/api/admin/users?limit=5", { token }).catch(() => []),
       api<SystemStatus>("/api/admin/system", { token }).catch(() => null),
       api<AuditEntry[]>("/api/admin/audit?limit=8", { token }).catch(() => []),
-    ]).then(([b, u, s, a]) => {
-      setBilling(b); setUsers(u); setSystem(s); setAudit(a);
+      api<UserStats>("/api/admin/users/stats", { token }).catch(() => null),
+    ]).then(([b, u, s, a, st]) => {
+      setBilling(b); setUsers(normalizeUsersPage(u).items); setSystem(s); setAudit(a); setStats(st);
     });
   }, [token]);
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <AdminStatCard label="Total Users" value={stats ? `${stats.total}` : "-"} />
+        <AdminStatCard label="Online Now" value={stats ? `${stats.online}` : "-"} change={stats ? "last 2 min" : undefined} />
+        <AdminStatCard label="Active Accounts" value={stats ? `${stats.active}` : "-"} />
+        <AdminStatCard label="Disabled" value={stats ? `${stats.disabled}` : "-"} />
         <AdminStatCard label="Revenue" value={billing ? `$${billing.revenue_usd.toLocaleString()}` : "-"} />
         <AdminStatCard label="Pending Invoices" value={billing ? `${billing.pending_invoices}` : "-"} />
         <AdminStatCard label="Active Subs" value={billing ? `${billing.active_subscriptions}` : "-"} />
@@ -207,9 +275,15 @@ function OverviewTab({ token }: { token: string }) {
           <div className="space-y-2 text-sm">
             {users.map((u) => (
               <div key={u.id} className="flex items-center justify-between border-b border-border/50 pb-2 last:border-0 last:pb-0">
-                <div className="min-w-0">
-                  <p className="truncate font-medium">{u.email}</p>
-                  <p className="text-xs text-text-muted">@{u.username}</p>
+                <div className="min-w-0 flex items-center gap-2">
+                  <span
+                    className={clsx("w-2 h-2 rounded-full shrink-0", u.is_online ? "bg-green" : "bg-text-muted/40")}
+                    title={u.is_online ? "Online now" : `Last seen ${timeAgo(u.last_seen_at)}`}
+                  />
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">{u.email}</p>
+                    <p className="text-xs text-text-muted">@{u.username}</p>
+                  </div>
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
                   <Badge variant={u.tier === "vip" ? "blue" : u.tier === "premium" ? "yellow" : "gray"}>{u.tier}</Badge>
@@ -249,6 +323,10 @@ function OverviewTab({ token }: { token: string }) {
 
 function UsersTab({ token }: { token: string }) {
   const [users, setUsers] = useState<AdminUser[]>([]);
+  const [total, setTotal] = useState(0);
+  const [online, setOnline] = useState(0);
+  const [stats, setStats] = useState<UserStats | null>(null);
+  const [page, setPage] = useState(0);
   const [search, setSearch] = useState("");
   const [tier, setTier] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
@@ -260,19 +338,43 @@ function UsersTab({ token }: { token: string }) {
   const [anonymize, setAnonymize] = useState(false);
   const [dangerBusy, setDangerBusy] = useState(false);
 
-  const load = useCallback(async (s = search, t = tier) => {
+  const load = useCallback(async () => {
     try {
-      const qs = new URLSearchParams({ limit: "100" });
-      if (s) qs.set("search", s);
-      if (t) qs.set("tier", t);
-      setUsers(await api<AdminUser[]>(`/api/admin/users?${qs}`, { token }));
+      const qs = new URLSearchParams({
+        limit: String(USERS_PAGE_SIZE),
+        offset: String(page * USERS_PAGE_SIZE),
+      });
+      if (search.trim()) qs.set("search", search.trim());
+      if (tier) qs.set("tier", tier);
+      const [listRes, statsRes] = await Promise.all([
+        api<unknown>(`/api/admin/users?${qs}`, { token }),
+        api<UserStats>("/api/admin/users/stats", { token }).catch(() => null),
+      ]);
+      const normalized = normalizeUsersPage(listRes);
+      setUsers(normalized.items);
+      setTotal(normalized.total);
+      setOnline(normalized.online);
+      setStats(statsRes);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load users");
     }
-  }, [token, search, tier]);
+  }, [token, search, tier, page]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const timer = setTimeout(load, search ? 300 : 0);
+    return () => clearTimeout(timer);
+  }, [load, search]);
+
+  useEffect(() => {
+    const iv = setInterval(load, USERS_REFRESH_MS);
+    return () => clearInterval(iv);
+  }, [load]);
+
+  const totalUsers = stats?.total ?? total;
+  const onlineUsers = stats?.online ?? online;
+  const activeUsers = stats?.active ?? users.filter((u) => u.is_active).length;
+  const lastShown = total > 0 ? Math.min(total, (page + 1) * USERS_PAGE_SIZE) : 0;
 
   async function update(u: AdminUser, patch: Partial<AdminUser>) {
     try {
@@ -346,12 +448,18 @@ function UsersTab({ token }: { token: string }) {
       {error && <p className="text-sm text-red">{error}</p>}
       {notice && <p className="text-sm text-green">{notice}</p>}
 
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <AdminStatCard label="Total Users" value={`${totalUsers}`} />
+        <AdminStatCard label="Online Now" value={`${onlineUsers}`} change="last 2 min" />
+        <AdminStatCard label="Active Accounts" value={`${activeUsers}`} />
+      </div>
+
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
-        <Input label="Search (email / username)" value={search} onChange={(e) => { setSearch(e.target.value); load(e.target.value, tier); }} placeholder="user@example.com" />
+        <Input label="Search (email / username)" value={search} onChange={(e) => { setSearch(e.target.value); setPage(0); }} placeholder="user@example.com" />
         <Select
           label="Tier filter"
           value={tier}
-          onChange={(e) => { setTier(e.target.value); load(search, e.target.value); }}
+          onChange={(e) => { setTier(e.target.value); setPage(0); }}
           options={[{ value: "", label: "All tiers" }, { value: "free", label: "Free" }, { value: "premium", label: "Premium" }, { value: "vip", label: "VIP" }]}
         />
         <Button variant="secondary" onClick={() => load()}>Refresh</Button>
@@ -359,14 +467,14 @@ function UsersTab({ token }: { token: string }) {
 
       <AdminCard padding={false}>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm min-w-[720px]">
+          <table className="w-full text-sm min-w-[860px]">
             <thead>
               <tr className="border-b border-purple/25 text-left text-text-muted">
                 <th className="px-4 py-2 font-medium">User</th>
                 <th className="px-4 py-2 font-medium">Tier</th>
                 <th className="px-4 py-2 font-medium">Role</th>
-                <th className="px-4 py-2 font-medium">Status</th>
-                <th className="px-4 py-2 font-medium">Telegram</th>
+                <th className="px-4 py-2 font-medium">Account</th>
+                <th className="px-4 py-2 font-medium">Online</th>
                 <th className="px-4 py-2 font-medium">Actions</th>
               </tr>
             </thead>
@@ -378,7 +486,10 @@ function UsersTab({ token }: { token: string }) {
                 <tr key={u.id} className="border-b border-border/50 last:border-0">
                   <td className="px-4 py-2.5">
                     <p className="font-medium">{u.email}</p>
-                    <p className="text-xs text-text-muted">@{u.username} Â· {new Date(u.created_at).toLocaleDateString()}</p>
+                    <p className="text-xs text-text-muted">
+                      @{u.username} · {new Date(u.created_at).toLocaleDateString()}
+                      {u.telegram_chat_id && <span className="ml-1.5 text-purple">· TG</span>}
+                    </p>
                   </td>
                   <td className="px-4 py-2.5">
                     <Select
@@ -396,21 +507,21 @@ function UsersTab({ token }: { token: string }) {
                     </div>
                   </td>
                   <td className="px-4 py-2.5">
-                    <Badge variant={u.is_active ? "green" : "red"}>{u.is_active ? "active" : "disabled"}</Badge>
+                    <Badge variant={u.is_active ? "green" : "red"}>{u.is_active ? "Active" : "Disabled"}</Badge>
                   </td>
                   <td className="px-4 py-2.5">
-                    {u.is_active ? (
-                      <Button size="sm" variant={u.tier === "vip" ? "secondary" : "danger"} onClick={() => update(u, { is_active: false })}>
-                        Disable
-                      </Button>
-                    ) : (
-                      <Button size="sm" onClick={() => update(u, { is_active: true })}>Enable</Button>
-                    )}
+                    <Presence online={u.is_online} lastSeen={u.last_seen_at} />
                   </td>
                   <td className="px-4 py-2.5">
                     <div className="flex flex-wrap gap-1.5 items-center">
-                      <span className="text-xs text-text-muted">{u.telegram_chat_id ? "linked" : "â€”"}</span>
                       <Button size="sm" variant="secondary" onClick={() => resetPassword(u)}>Reset PW</Button>
+                      {u.is_active ? (
+                        <Button size="sm" variant={u.tier === "vip" ? "secondary" : "danger"} onClick={() => update(u, { is_active: false })}>
+                          Disable
+                        </Button>
+                      ) : (
+                        <Button size="sm" onClick={() => update(u, { is_active: true })}>Enable</Button>
+                      )}
                       {u.is_active ? (
                         <Button size="sm" variant="danger" onClick={() => openDanger(u, "deactivate")}>Deactivate</Button>
                       ) : (
@@ -423,6 +534,24 @@ function UsersTab({ token }: { token: string }) {
               ))}
             </tbody>
           </table>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-t border-border/50 text-xs text-text-muted">
+          <span>
+            {total === 0
+              ? "0 users"
+              : `${page * USERS_PAGE_SIZE + 1}–${lastShown} of ${total} users`}
+            {" · "}
+            <span className="text-green">{onlineUsers} online</span>
+          </span>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="secondary" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
+              Prev
+            </Button>
+            <span>Page {page + 1} of {Math.max(1, Math.ceil(total / USERS_PAGE_SIZE))}</span>
+            <Button size="sm" variant="secondary" disabled={lastShown >= total} onClick={() => setPage((p) => p + 1)}>
+              Next
+            </Button>
+          </div>
         </div>
       </AdminCard>
 
@@ -654,7 +783,10 @@ function SupportTab({ token }: { token: string }) {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
             <div>
               <p className="text-text-muted mb-1">Profile</p>
-              <Row k="Email" v={ctx.profile.email} /><Row k="Tier" v={ctx.profile.tier} /><Row k="Admin" v={ctx.profile.is_admin?"yes":"no"} /><Row k="Active" v={ctx.profile.is_active?"yes":"no"} />
+              <Row k="Email" v={ctx.profile.email} /><Row k="Tier" v={ctx.profile.tier} /><Row k="Admin" v={ctx.profile.is_admin?"yes":"no"} />
+              <Row k="Account" v={ctx.profile.is_active?"Active":"Disabled"} />
+              <Row k="Online" v={ctx.profile.is_online ? "yes" : "no"} />
+              <Row k="Last seen" v={ctx.profile.last_seen_at ? new Date(ctx.profile.last_seen_at).toLocaleString() : "never"} />
             </div>
             <div>
               <p className="text-text-muted mb-1">Activity</p>

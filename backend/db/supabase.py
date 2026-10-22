@@ -132,6 +132,31 @@ class SupabaseDB:
         rows = resp.data or []
         return rows[0] if rows else None
 
+    async def fetch_page(
+        self,
+        table: str,
+        *,
+        where: dict[str, Any] | None = None,
+        any_ilike: dict[str, str] | None = None,
+        order: str | list[str] | None = None,
+        limit: int = 50,
+        offset: int = 0,
+        columns: str = "*",
+    ) -> tuple[list[dict], int]:
+        """One page plus the exact count of rows matching the same filters.
+
+        ``any_ilike`` maps columns to a pattern and is OR-ed together, e.g.
+        {"email": "%foo%", "username": "%foo%"} for a single search box.
+        """
+        q = _apply_filters(self._c.table(table).select(columns, count="exact"), where)
+        if any_ilike:
+            clause = ",".join(f"{col}.ilike.{pat}" for col, pat in any_ilike.items())
+            q = q.or_(clause)
+        q = _apply_order(q, order)
+        q = q.limit(limit).offset(offset)
+        resp = await _run(q, safe_to_repeat=True)
+        return list(resp.data or []), int(resp.count or 0)
+
     async def count(self, table: str, where: dict[str, Any] | None = None) -> int:
         q = _apply_filters(self._c.table(table).select("id", count="exact"), where)
         resp = await _run(q, safe_to_repeat=True)

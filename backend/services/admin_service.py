@@ -4,6 +4,7 @@ Every mutating admin endpoint calls :func:`log_action`, so the operator has a
 "who did what" trail. Config values returned to the UI are booleans only --
 never secrets.
 """
+import asyncio
 import logging
 import os
 
@@ -21,6 +22,7 @@ from backend.db.models import (
     gen_uuid,
 )
 from backend.db.supabase import SupabaseDB, now_iso
+from backend.services import presence_service
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +76,9 @@ def user_view(u: dict) -> dict:
         "is_active": bool(u.get("is_active")),
         "telegram_chat_id": u.get("telegram_chat_id"),
         "created_at": u.get("created_at"),
+        # Presence (on the site now) is separate from is_active (account enabled).
+        "last_seen_at": u.get("last_seen_at"),
+        "is_online": presence_service.is_online(u.get("last_seen_at")),
     }
 
 
@@ -93,24 +98,81 @@ def signal_view(s: dict) -> dict:
     }
 
 
+def _search_term(value: str | None) -> str:
+    """Strip PostgREST ``or`` syntax characters so the term stays literal."""
+    return "".join(ch for ch in (value or "").strip() if ch not in ",()*%\\")
+
+
 async def list_users(
     db: SupabaseDB,
     search: str | None = None,
     tier: str | None = None,
     limit: int = 50,
     offset: int = 0,
-) -> list[dict]:
+) -> dict:
+    """Paginated users plus exact totals.
+
+    Returns ``{items, total, online, limit, offset}``. ``online`` counts users
+    with recent presence (ignoring ``search``, so the header stays stable while
+    filtering) and is separate from ``is_active``.
+    """
     where = {"tier": tier} if tier else None
-    # Small platform scale: pull recent users and filter/paginate in Python
-    # so we can search across email OR username with one call.
-    rows = await db.fetch_all(USERS, where=where, order="created_at.desc", limit=min(limit + offset, 2000))
-    if search:
-        s = search.strip().lower()
-        rows = [
-            r for r in rows
-            if s in (r.get("email") or "").lower() or s in (r.get("username") or "").lower()
-        ]
-    return [user_view(r) for r in rows[offset:offset + limit]]
+    online_where: dict = {
+        "last_seen_at": {"op": "gte", "value": presence_service.online_cutoff_iso()}
+    }
+    if where:
+        online_where.update(where)
+
+    term = _search_term(search)
+    if term:
+        rows, total = await db.fetch_page(
+            USERS,
+            where=where,
+            any_ilike={"email": f"%{term}%", "username": f"%{term}%"},
+            order="created_at.desc",
+            limit=limit,
+            offset=offset,
+        )
+        online = await db.count(USERS, online_where)
+    else:
+        (rows, total), online = await asyncio.gather(
+            db.fetch_page(
+                USERS, where=where, order="created_at.desc", limit=limit, offset=offset
+            ),
+            db.count(USERS, online_where),
+        )
+
+    return {
+        "items": [user_view(r) for r in rows],
+        "total": total,
+        "online": online,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+async def user_stats(db: SupabaseDB) -> dict:
+    """Platform-wide user counts for the admin overview cards."""
+    online_where = {
+        "last_seen_at": {"op": "gte", "value": presence_service.online_cutoff_iso()}
+    }
+    total, online, active, disabled, free, premium, vip = await asyncio.gather(
+        db.count(USERS),
+        db.count(USERS, online_where),
+        db.count(USERS, {"is_active": True}),
+        db.count(USERS, {"is_active": False}),
+        db.count(USERS, {"tier": "free"}),
+        db.count(USERS, {"tier": "premium"}),
+        db.count(USERS, {"tier": "vip"}),
+    )
+    return {
+        "total": total,
+        "online": online,
+        "active": active,
+        "disabled": disabled,
+        "by_tier": {"free": free, "premium": premium, "vip": vip},
+        "online_window_seconds": presence_service.ONLINE_WINDOW_SECONDS,
+    }
 
 
 def _integration_flags() -> dict:
