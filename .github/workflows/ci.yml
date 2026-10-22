@@ -35,6 +35,10 @@ jobs:
         run: python -m compileall backend engines security payments notifications -q
       - name: Import check (app boots)
         run: python -c "from backend.main import app; print('routes:', len(app.routes))"
+      - name: Set throwaway encryption key
+        # The broker-credential tests encrypt data. CI has no .env, and a real key
+        # must never be committed or reused, so generate a fresh one per run.
+        run: echo "ENCRYPTION_KEY=$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" >> "$GITHUB_ENV"
       - name: Test suite
         run: python -m pytest tests -q
 
