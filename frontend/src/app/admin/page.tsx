@@ -22,6 +22,7 @@ interface AdminUser {
 }
 interface UsersPage {
   items: AdminUser[]; total: number; online: number; limit: number; offset: number;
+  legacy: boolean;
 }
 interface UserStats {
   total: number; online: number; active: number; disabled: number;
@@ -86,6 +87,7 @@ function normalizeUsersPage(res: unknown): UsersPage {
       online: items.filter((u) => u.is_online).length,
       limit: items.length,
       offset: 0,
+      legacy: true,
     };
   }
   const page = res as Partial<UsersPage> | null;
@@ -96,6 +98,7 @@ function normalizeUsersPage(res: unknown): UsersPage {
     online: page?.online ?? items.filter((u) => u.is_online).length,
     limit: page?.limit ?? USERS_PAGE_SIZE,
     offset: page?.offset ?? 0,
+    legacy: false,
   };
 }
 
@@ -325,6 +328,7 @@ function UsersTab({ token }: { token: string }) {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [total, setTotal] = useState(0);
   const [online, setOnline] = useState(0);
+  const [legacy, setLegacy] = useState(false);
   const [stats, setStats] = useState<UserStats | null>(null);
   const [page, setPage] = useState(0);
   const [search, setSearch] = useState("");
@@ -354,6 +358,7 @@ function UsersTab({ token }: { token: string }) {
       setUsers(normalized.items);
       setTotal(normalized.total);
       setOnline(normalized.online);
+      setLegacy(normalized.legacy);
       setStats(statsRes);
       setError(null);
     } catch (err) {
@@ -371,10 +376,12 @@ function UsersTab({ token }: { token: string }) {
     return () => clearInterval(iv);
   }, [load]);
 
-  const totalUsers = stats?.total ?? total;
-  const onlineUsers = stats?.online ?? online;
-  const activeUsers = stats?.active ?? users.filter((u) => u.is_active).length;
+  const totalUsers = stats?.total ?? (legacy ? null : total);
+  const onlineUsers = stats?.online ?? (legacy ? null : online);
+  const activeUsers = stats?.active ?? (legacy ? null : users.filter((u) => u.is_active).length);
   const lastShown = total > 0 ? Math.min(total, (page + 1) * USERS_PAGE_SIZE) : 0;
+  const hasNext = legacy ? users.length >= USERS_PAGE_SIZE : lastShown < total;
+  const fmtCount = (n: number | null) => (n == null ? "-" : `${n}`);
 
   async function update(u: AdminUser, patch: Partial<AdminUser>) {
     try {
@@ -449,9 +456,9 @@ function UsersTab({ token }: { token: string }) {
       {notice && <p className="text-sm text-green">{notice}</p>}
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <AdminStatCard label="Total Users" value={`${totalUsers}`} />
-        <AdminStatCard label="Online Now" value={`${onlineUsers}`} change="last 2 min" />
-        <AdminStatCard label="Active Accounts" value={`${activeUsers}`} />
+        <AdminStatCard label="Total Users" value={fmtCount(totalUsers)} />
+        <AdminStatCard label="Online Now" value={fmtCount(onlineUsers)} change="last 2 min" />
+        <AdminStatCard label="Active Accounts" value={fmtCount(activeUsers)} />
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
@@ -537,18 +544,22 @@ function UsersTab({ token }: { token: string }) {
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-t border-border/50 text-xs text-text-muted">
           <span>
-            {total === 0
-              ? "0 users"
-              : `${page * USERS_PAGE_SIZE + 1}–${lastShown} of ${total} users`}
+            {legacy
+              ? `${users.length} shown`
+              : total === 0
+                ? "0 users"
+                : `${page * USERS_PAGE_SIZE + 1}–${lastShown} of ${total} users`}
             {" · "}
-            <span className="text-green">{onlineUsers} online</span>
+            <span className="text-green">{fmtCount(onlineUsers)} online</span>
           </span>
           <div className="flex items-center gap-2">
             <Button size="sm" variant="secondary" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
               Prev
             </Button>
-            <span>Page {page + 1} of {Math.max(1, Math.ceil(total / USERS_PAGE_SIZE))}</span>
-            <Button size="sm" variant="secondary" disabled={lastShown >= total} onClick={() => setPage((p) => p + 1)}>
+            <span>
+              {legacy ? `Page ${page + 1}` : `Page ${page + 1} of ${Math.max(1, Math.ceil(total / USERS_PAGE_SIZE))}`}
+            </span>
+            <Button size="sm" variant="secondary" disabled={!hasNext} onClick={() => setPage((p) => p + 1)}>
               Next
             </Button>
           </div>
