@@ -10,18 +10,11 @@ COPY frontend/ .
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
-FROM node:20-alpine AS runner
-WORKDIR /app
-ENV NODE_ENV=production \
-    NEXT_TELEMETRY_DISABLED=1
-
-RUN addgroup -S nodejs && adduser -S nextjs -G nodejs
-COPY --from=build /app/public ./public
-COPY --from=build /app/.next ./.next
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/package.json ./package.json
-
-USER nextjs
+# next.config.ts sets output: "export", so `next start` is not an option -
+# serve the exported static site instead. The port matches docker-compose/Caddy.
+FROM nginx:1.27-alpine AS runner
+ENV PORT=3000
+RUN printf 'server {\n  listen ${PORT};\n  root /usr/share/nginx/html;\n  index index.html;\n  location / { try_files $uri $uri/ $uri.html /index.html; }\n}\n' \
+        > /etc/nginx/templates/default.conf.template
+COPY --from=build /app/out /usr/share/nginx/html
 EXPOSE 3000
-
-CMD ["npm", "run", "start"]

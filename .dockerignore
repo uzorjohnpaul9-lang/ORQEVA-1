@@ -5,7 +5,11 @@
 .env.production
 .env.example
 node_modules
-frontend
+frontend/node_modules
+frontend/.next
+frontend/out
+frontend/.env
+frontend/.env.local
 tests
 temp
 logs
@@ -13,6 +17,5 @@ logs
 *.sqlite3
 *.pyc
 __pycache__
-.gitignore
 Dockerfile.frontend
 docker-compose.yml
