@@ -17,7 +17,7 @@ logging.basicConfig(
     level=getattr(logging, monitoring_settings.log_level),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(monitoring_settings.log_file),
+        logging.FileHandler(monitoring_settings.log_file, delay=True),
         logging.StreamHandler()
     ]
 )

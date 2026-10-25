@@ -36,7 +36,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(LOG_DIR / "trading.log"),
+        logging.FileHandler(LOG_DIR / "trading.log", delay=True),
         logging.StreamHandler()
     ]
 )
