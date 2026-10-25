@@ -1,11 +1,15 @@
 """Engine scan orchestration shared by the admin endpoint and the background scheduler."""
 import asyncio
+import logging
 import os
 from typing import Any
 
 from backend.db.models import SIGNALS, USERS
 from backend.db.supabase import SupabaseDB, now_iso
 from backend.services import signal_service
+from engines.price_levels import round_price, valid_levels
+
+log = logging.getLogger(__name__)
 
 # (bucket, module, class, strategy, tier, db_market)
 # bucket = result grouping; db_market = value stored in signals.market
@@ -28,17 +32,26 @@ def _engine_signal_to_db(signal, market: str, strategy: str, tier: str = "free",
     data_source = indicators.pop("data_source", None) or "live"
     if event_context:
         indicators["event_context"] = event_context
+    # Engines emit "BUY"/"SELL"; rows are stored lowercased, so normalise
+    # here too - otherwise the cooldown lookup never matches the stored
+    # signal and the same call gets published over and over.
+    direction = str(signal.direction or "").lower()
+    entry = round_price(signal.price)
+    stop_loss = round_price(signal.stop_loss)
+    take_profit = round_price(signal.target_price)
+    if not valid_levels(direction, entry, stop_loss, take_profit):
+        raise ValueError(
+            f"invalid levels for {signal.symbol}: entry={entry} "
+            f"sl={stop_loss} tp={take_profit}"
+        )
     return {
         "symbol": signal.symbol,
         "market": market,
-        # Engines emit "BUY"/"SELL"; rows are stored lowercased, so normalise
-        # here too - otherwise the cooldown lookup never matches the stored
-        # signal and the same call gets published over and over.
-        "direction": str(signal.direction or "").lower(),
+        "direction": direction,
         "confidence": round(signal.confidence, 4),
-        "entry_price": round(signal.price, 4),
-        "stop_loss": round(signal.stop_loss, 4),
-        "take_profit": round(signal.target_price, 4),
+        "entry_price": entry,
+        "stop_loss": stop_loss,
+        "take_profit": take_profit,
         "strategy": (signal.metadata or {}).get("strategy") or strategy,
         "tier": tier,
         "indicators": indicators,
@@ -91,6 +104,7 @@ async def run_scan(db: SupabaseDB, *, cooldown_hours: int = 0) -> dict:
     """
     results: dict[str, list] = _empty_results()
     errors: list[str] = []
+    dropped_invalid = 0
 
     try:
         from backend.services import calendar_service
@@ -104,9 +118,16 @@ async def run_scan(db: SupabaseDB, *, cooldown_hours: int = 0) -> dict:
             engine = getattr(module, cls_name)()
             if await asyncio.to_thread(engine.is_market_hours):
                 raw = await asyncio.to_thread(engine.run_cycle)
-                results[bucket].extend(
-                    _engine_signal_to_db(s, db_market, strategy, tier, event_context) for s in raw
-                )
+                for signal in raw:
+                    try:
+                        row = _engine_signal_to_db(
+                            signal, db_market, strategy, tier, event_context
+                        )
+                    except ValueError as e:
+                        dropped_invalid += 1
+                        log.warning("dropped invalid signal: %s", e)
+                        continue
+                    results[bucket].append(row)
         except Exception as e:
             errors.append(f"{bucket} engine: {str(e)[:150]}")
 
@@ -146,6 +167,7 @@ async def run_scan(db: SupabaseDB, *, cooldown_hours: int = 0) -> dict:
         "by_market": {k: len(v) for k, v in results.items()},
         "promoted_to_premium": promoted,
         "dropped_simulated": dropped_simulated,
+        "dropped_invalid": dropped_invalid,
         "errors": errors,
         "saved": saved,
     }

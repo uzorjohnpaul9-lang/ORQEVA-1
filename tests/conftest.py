@@ -99,6 +99,41 @@ def _skip_db_without_supabase(request):
     request.addfinalizer(mp.undo)
 
 
+def _purge_test_signals() -> None:
+    """Remove signals written by test fixtures from the configured database.
+
+    The suite runs against the real Supabase project (CI has no separate test
+    project), and the fake engines tag their rows with ``{"src": "test"}``.
+    Without this, every run leaves impossible entries such as EURUSD @ 100
+    with SL 95 / TP 110 visible to real users.
+    """
+    from backend.config import settings
+
+    if not (settings.SUPABASE_URL and settings.SUPABASE_SECRET_KEY):
+        return
+    headers = {
+        "apikey": settings.SUPABASE_SECRET_KEY,
+        "Authorization": f"Bearer {settings.SUPABASE_SECRET_KEY}",
+        "Prefer": "return=minimal",
+    }
+    url = (
+        settings.SUPABASE_URL.rstrip("/")
+        + "/rest/v1/signals?indicators->>src=eq.test"
+    )
+    try:
+        with httpx.Client(timeout=30.0) as c:
+            c.delete(url, headers=headers)
+    except Exception:
+        pass
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _clean_test_signals():
+    _purge_test_signals()
+    yield
+    _purge_test_signals()
+
+
 @pytest.fixture(autouse=True)
 def _clean_state():
     from backend.middleware.rate_limiter import rate_limiter

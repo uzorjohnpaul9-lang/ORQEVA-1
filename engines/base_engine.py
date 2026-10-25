@@ -13,6 +13,7 @@ from .indicators import (
     calculate_atr, calculate_ema, score_signal,
 )
 from . import strategy_library
+from .price_levels import round_price
 
 logger = logging.getLogger(__name__)
 
@@ -169,8 +170,8 @@ class BaseEngine(ABC):
                 price=current_price,
                 confidence=confidence,
                 reason=reason,
-                target_price=round(target_price, 4),
-                stop_loss=round(stop_loss, 4),
+                target_price=round_price(target_price),
+                stop_loss=round_price(stop_loss),
                 signal_type=self.market_type,
                 fees=fees,
                 slippage=slippage,
@@ -217,8 +218,8 @@ class BaseEngine(ABC):
                 price=price,
                 confidence=round(cand["confidence"], 4),
                 reason=cand["reason"],
-                target_price=round(target_price, 4),
-                stop_loss=round(stop_loss, 4),
+                target_price=round_price(target_price),
+                stop_loss=round_price(stop_loss),
                 signal_type=self.market_type,
                 fees=self.calculate_fees(symbol, quantity, price),
                 slippage=self.calculate_slippage(symbol, quantity, price),

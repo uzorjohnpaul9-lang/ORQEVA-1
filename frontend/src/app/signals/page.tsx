@@ -56,7 +56,13 @@ function eventLabel(ctx: CalendarEventContext): string {
 
 function fmt(v: number | null | undefined): string {
   if (v == null) return "—";
-  return v >= 1000 ? v.toLocaleString(undefined, { maximumFractionDigits: 2 }) : v.toFixed(4);
+  const abs = Math.abs(v);
+  if (abs >= 1000) return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  if (abs >= 1) return v.toFixed(abs >= 100 ? 3 : 4);
+  if (abs === 0) return "0";
+  // Sub-cent assets (PEPE, SHIB, FLOKI) need the full stored 8dp precision,
+  // otherwise entry/SL/TP all render as 0.0000.
+  return v.toFixed(8).replace(/0+$/, "").replace(/\.$/, "");
 }
 
 function ageLabel(hours: number | null | undefined): string {
