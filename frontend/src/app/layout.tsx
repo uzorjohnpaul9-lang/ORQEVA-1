@@ -16,6 +16,21 @@ export const metadata: Metadata = {
     title: "ORQEVA — Multi-Market Trading Intelligence",
     description: "Structured signals, explicit risk context and paper-first execution across forex, equities, commodities and crypto.",
     url: "https://orqeva.pages.dev",
+    images: [
+      {
+        url: "/og-orqeva.jpg",
+        width: 1200,
+        height: 630,
+        type: "image/jpeg",
+        alt: "ORQEVA social preview with a sample EUR/USD signal brief, risk context and guardrails.",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "ORQEVA — Multi-Market Trading Intelligence",
+    description: "Structured signals, explicit risk context and paper-first execution across forex, equities, commodities and crypto.",
+    images: ["/og-orqeva.jpg"],
   },
 };
 

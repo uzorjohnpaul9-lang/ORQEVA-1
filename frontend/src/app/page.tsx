@@ -32,6 +32,14 @@ const siteUrl = "https://orqeva.pages.dev";
 const title = "ORQEVA — Signals with context. Execution with guardrails.";
 const description =
   "Multi-market trading intelligence across forex, US equities, commodities and crypto. ORQEVA pairs structured signals with explicit risk context and paper-first execution.";
+const socialImage = {
+  url: `${siteUrl}/og-orqeva.jpg`,
+  secureUrl: `${siteUrl}/og-orqeva.jpg`,
+  width: 1200,
+  height: 630,
+  type: "image/jpeg",
+  alt: "ORQEVA social preview with a sample EUR/USD signal brief, risk context and guardrails.",
+};
 
 export const metadata: Metadata = {
   title: { absolute: title },
@@ -44,11 +52,13 @@ export const metadata: Metadata = {
     siteName: "ORQEVA",
     type: "website",
     locale: "en_US",
+    images: [socialImage],
   },
   twitter: {
     card: "summary_large_image",
     title,
     description,
+    images: [socialImage],
   },
   robots: { index: true, follow: true },
 };
