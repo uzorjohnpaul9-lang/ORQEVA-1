@@ -11,7 +11,7 @@ export function SignalBrief() {
   return (
     <div className="relative mx-auto w-full max-w-[540px]">
       <div
-        className="pointer-events-none absolute -inset-10 -z-10 rounded-full blur-3xl"
+        className="pointer-events-none absolute -inset-10 -z-10 rounded-full"
         style={{
           background:
             "radial-gradient(circle, rgba(0,214,143,0.14), transparent 68%)",

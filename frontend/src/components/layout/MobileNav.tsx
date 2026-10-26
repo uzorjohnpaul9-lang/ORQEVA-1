@@ -39,6 +39,7 @@ export function MobileNav() {
 return (
               <button
                 key={tab.href}
+                data-tour={tab.label === "Home" ? "overview" : tab.label.toLowerCase()}
                 onClick={isMore ? () => setMenuOpen(true) : () => router.push(tab.href)}
                 className={clsx(
                   "flex flex-col items-center gap-1 px-3 py-1.5 rounded-lg min-w-[60px] transition-colors cursor-pointer",
@@ -62,6 +63,7 @@ return (
             return (
               <button
                 key={item.href}
+                data-tour={item.href === "/dashboard" ? "overview" : item.href.slice(1)}
                 onClick={() => {
                   setMenuOpen(false);
                   router.push(item.href);

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
-import { Chart, registerables } from "chart.js";
+import { Chart, registerables, type Plugin } from "chart.js";
 
 Chart.register(...registerables);
 
@@ -276,16 +276,17 @@ export function CandleChartInner({
       yMax = hi + pad;
     }
 
-    const crosshairPlugin = {
+    const crosshairPlugin: Plugin = {
       id: "crosshair",
-      afterDraw(chart: Chart, args: unknown, options: any) {
+      afterDraw(chart) {
         const { ctx, chartArea, scales, tooltip } = chart;
         if (!chartArea) return;
-        const active = (tooltip as any)?.getActiveElements?.();
+        const active = tooltip?.getActiveElements?.();
         if (!active || active.length === 0) return;
         const el = active[0];
-        const x = (scales.x as any).getPixelForValue(el.index);
-        const y = el.element?.y ?? (scales.y as any).getPixelForValue(el.element?.yValue ?? 0);
+        const element = el.element as unknown as { y?: number; yValue?: number };
+        const x = scales.x.getPixelForValue(el.index);
+        const y = element?.y ?? scales.y.getPixelForValue(element?.yValue ?? 0);
         ctx.save();
         ctx.strokeStyle = "rgba(139, 143, 163, 0.5)";
         ctx.lineWidth = 1;

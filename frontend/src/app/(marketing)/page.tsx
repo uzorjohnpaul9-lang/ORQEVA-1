@@ -238,6 +238,60 @@ const faqs = [
   },
 ];
 
+const startSteps = [
+  {
+    number: "01",
+    title: "Create your account",
+    body: "Use an email, username and password. No card is required, and you can stay on the free plan for as long as you need.",
+    icon: Check,
+  },
+  {
+    number: "02",
+    title: "Open the Overview",
+    body: "Overview is your home base: portfolio value, P&L, open trades and the latest signals in one place.",
+    icon: Activity,
+  },
+  {
+    number: "03",
+    title: "Practise in paper mode",
+    body: "Review a setup, set your risk limits, then place a paper trade. Connect a broker only when the workflow is familiar.",
+    icon: ShieldCheck,
+  },
+];
+
+const dashboardMap = [
+  {
+    title: "Overview",
+    body: "Portfolio value, recent signals, open trades and performance at a glance.",
+    icon: Activity,
+  },
+  {
+    title: "AI Signals",
+    body: "Structured setups with direction, entry, invalidation, target and confidence.",
+    icon: Zap,
+  },
+  {
+    title: "Risk Mgmt",
+    body: "Daily loss limits, exposure caps and a kill switch that blocks new orders.",
+    icon: ShieldCheck,
+  },
+  {
+    title: "Portfolio",
+    body: "Open positions, trade history and the equity curve behind your results.",
+    icon: Layers,
+  },
+  {
+    title: "Trading",
+    body: "Place orders in paper mode first, then enable live routing only when ready.",
+    icon: BarChart3,
+  },
+  {
+    title: "Help & Guide",
+    body: "A full walkthrough of signals, risk, brokers, billing and the dashboard.",
+    icon: GraduationCap,
+  },
+];
+
 const tierStyles = {
   Free: "border-white/[0.08] bg-white/[0.04] text-text-secondary",
   Premium: "border-yellow/20 bg-yellow-dim text-yellow",
@@ -298,7 +352,7 @@ export default function LandingPage() {
           />
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute -top-64 left-1/2 -z-10 h-[720px] w-[1100px] -translate-x-1/2 rounded-full blur-3xl"
+            className="pointer-events-none absolute -top-64 left-1/2 -z-10 h-[720px] w-[1100px] -translate-x-1/2 rounded-full"
             style={{
               background:
                 "radial-gradient(circle, rgba(0,214,143,0.12), transparent 66%)",
@@ -357,6 +411,14 @@ export default function LandingPage() {
                     Cancel anytime
                   </span>
                 </div>
+
+                <a
+                  href="#start-here"
+                  className="mt-6 inline-flex items-center gap-1.5 text-sm font-medium text-green transition-colors hover:text-green/80"
+                >
+                  New here? Start with the guide
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </a>
               </div>
 
               <SignalBrief />
@@ -365,6 +427,115 @@ export default function LandingPage() {
             <div className="mt-16 flex flex-col gap-3 border-t border-white/[0.06] pt-6 text-[11px] uppercase tracking-[0.16em] text-text-muted sm:flex-row sm:items-center sm:justify-between">
               <p>Forex · US equities · Commodities · Digital assets</p>
               <p>Paper-first · Live only when you enable it</p>
+            </div>
+          </div>
+        </section>
+
+        <section
+          id="start-here"
+          className="scroll-mt-24 border-b border-white/[0.06] py-20 sm:py-28"
+        >
+          <div className="mx-auto max-w-7xl px-5 sm:px-8">
+            <div className="grid gap-10 lg:grid-cols-[0.82fr_1.18fr] lg:gap-16">
+              <div>
+                <p className="text-[11px] font-medium uppercase tracking-[0.2em] text-green/80">
+                  New here?
+                </p>
+                <h2 className="mt-4 text-balance text-3xl font-semibold tracking-[-0.03em] text-text-primary sm:text-4xl lg:text-5xl">
+                  Three steps from sign-up to your first paper trade.
+                </h2>
+                <p className="mt-5 text-base leading-7 text-text-secondary">
+                  ORQEVA is a workspace, not a feed you scroll and guess from.
+                  Start with the account view, learn where the signals and risk
+                  controls live, then practise before any live capital is
+                  involved.
+                </p>
+                <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
+                  <Link
+                    href="/register"
+                    className="group inline-flex items-center justify-center gap-2 rounded-lg bg-green px-5 py-3 text-sm font-semibold text-bg-primary transition-[background-color,transform] hover:bg-green/90 active:scale-[0.98]"
+                  >
+                    Create free account
+                    <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+                  </Link>
+                  <span className="text-xs leading-5 text-text-muted">
+                    No card required. Paper trading first.
+                  </span>
+                </div>
+              </div>
+
+              <ol className="space-y-3">
+                {startSteps.map((step) => {
+                  const Icon = step.icon;
+
+                  return (
+                    <li
+                      key={step.number}
+                      className="group flex gap-4 rounded-2xl border border-white/[0.07] bg-white/[0.025] p-5 transition-colors hover:border-white/[0.13] sm:p-6"
+                    >
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-green/15 bg-green/[0.07] text-green">
+                        <Icon className="h-[18px] w-[18px]" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2.5">
+                          <span className="font-mono text-[10px] text-green/70">
+                            {step.number}
+                          </span>
+                          <h3 className="text-sm font-medium text-text-primary">
+                            {step.title}
+                          </h3>
+                        </div>
+                        <p className="mt-2 max-w-xl text-sm leading-6 text-text-muted">
+                          {step.body}
+                        </p>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ol>
+            </div>
+
+            <div className="mt-14">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-medium uppercase tracking-[0.2em] text-green/80">
+                    Inside the dashboard
+                  </p>
+                  <p className="mt-2 text-sm text-text-muted">
+                    The six areas you will use first.
+                  </p>
+                </div>
+                <span className="rounded-full border border-white/[0.08] px-3 py-1 text-[10px] uppercase tracking-[0.12em] text-text-muted">
+                  Available after sign-up
+                </span>
+              </div>
+
+              <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {dashboardMap.map((item) => {
+                  const Icon = item.icon;
+
+                  return (
+                    <article
+                      key={item.title}
+                      className="group rounded-2xl border border-white/[0.07] bg-[#0B0E13] p-5 transition-colors hover:border-white/[0.13]"
+                    >
+                      <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/[0.07] bg-white/[0.025] text-green">
+                        <Icon className="h-4 w-4" />
+                      </div>
+                      <h3 className="mt-5 text-sm font-medium text-text-primary">
+                        {item.title}
+                      </h3>
+                      <p className="mt-1.5 text-xs leading-5 text-text-muted">
+                        {item.body}
+                      </p>
+                    </article>
+                  );
+                })}
+              </div>
+              <p className="mt-4 text-xs leading-6 text-text-muted">
+                Illustrative guidance only. Signals are informational, not
+                financial advice, and confidence does not remove risk.
+              </p>
             </div>
           </div>
         </section>
@@ -587,7 +758,7 @@ export default function LandingPage() {
             <div className="relative overflow-hidden rounded-[28px] border border-white/[0.08] bg-[#0C1016] p-7 sm:p-10 lg:p-12">
               <div
                 aria-hidden="true"
-                className="pointer-events-none absolute -right-24 -top-32 h-80 w-80 rounded-full blur-3xl"
+                className="pointer-events-none absolute -right-24 -top-32 h-80 w-80 rounded-full"
                 style={{
                   background:
                     "radial-gradient(circle, rgba(0,214,143,0.12), transparent 68%)",
@@ -796,7 +967,7 @@ export default function LandingPage() {
         <section className="relative overflow-hidden py-20 sm:py-28">
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute left-1/2 top-1/2 h-[500px] w-[850px] -translate-x-1/2 -translate-y-1/2 rounded-full blur-3xl"
+            className="pointer-events-none absolute left-1/2 top-1/2 h-[500px] w-[850px] -translate-x-1/2 -translate-y-1/2 rounded-full"
             style={{
               background:
                 "radial-gradient(circle, rgba(0,214,143,0.1), transparent 68%)",

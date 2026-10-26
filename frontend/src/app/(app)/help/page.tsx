@@ -1,8 +1,11 @@
 ﻿"use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { RotateCcw } from "lucide-react";
 import { Card, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import { TOUR_SESSION_KEY, TOUR_STORAGE_KEY } from "@/lib/onboarding";
 
 const SECTIONS = [
   { id: "getting-started", label: "Getting Started" },
@@ -31,13 +34,35 @@ function Step({ n, title, children }: { n: number; title: string; children?: Rea
 }
 
 export default function HelpPage() {
+  const router = useRouter();
+
+  function replayTour() {
+    try {
+      window.localStorage.removeItem(TOUR_STORAGE_KEY);
+      window.sessionStorage.removeItem(TOUR_SESSION_KEY);
+    } catch {
+      // Storage can be unavailable in private browsing.
+    }
+    router.push("/dashboard");
+  }
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Help & Guide</h1>
-        <p className="text-sm text-text-secondary mt-1">
-          Everything you need to navigate ORQEVA â€” from your first login to live broker routing.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold">Help & Guide</h1>
+          <p className="text-sm text-text-secondary mt-1">
+            Everything you need to navigate ORQEVA â€” from your first login to live broker routing.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={replayTour}
+          className="inline-flex items-center gap-2 rounded-lg border border-border bg-bg-secondary px-3 py-2 text-xs font-medium text-text-secondary transition-colors hover:border-green/40 hover:text-text-primary active:scale-[0.98]"
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+          Replay dashboard tour
+        </button>
       </div>
 
       {/* quick jump */}

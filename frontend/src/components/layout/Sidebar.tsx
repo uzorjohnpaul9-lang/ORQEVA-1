@@ -30,6 +30,7 @@ export function Sidebar() {
             <Link
               key={item.href}
               href={item.href}
+              data-tour={item.href === "/dashboard" ? "overview" : item.href.slice(1)}
               className={clsx(
                 "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm mb-1 transition-colors",
                 active

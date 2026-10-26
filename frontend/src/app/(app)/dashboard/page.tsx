@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { StatCard } from "@/components/ui/Card";
@@ -9,6 +10,14 @@ import { Badge } from "@/components/ui/Badge";
 import { LineChart } from "@/components/charts/LineChart";
 import { EventBanner } from "@/components/calendar/EventBanner";
 import type { DashboardOverview, PortfolioPerformance, Signal, Trade } from "@/lib/types";
+
+const DashboardTour = dynamic(
+  () =>
+    import("@/components/onboarding/DashboardTour").then(
+      (module) => module.DashboardTour
+    ),
+  { ssr: false }
+);
 
 export default function OverviewPage() {
   const { token } = useAuth();
@@ -102,6 +111,8 @@ export default function OverviewPage() {
           </table>
         </div>
       </Card>
+
+      <DashboardTour />
     </div>
   );
 }
