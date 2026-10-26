@@ -1,27 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://orqeva.pages.dev/</loc><lastmod>2026-10-07</lastmod><changefreq>daily</changefreq><priority>1.0</priority></url>
-  <url><loc>https://orqeva.pages.dev/signals</loc><lastmod>2026-10-07</lastmod><changefreq>daily</changefreq><priority>0.9</priority></url>
-  <url><loc>https://orqeva.pages.dev/market</loc><lastmod>2026-10-07</lastmod><changefreq>daily</changefreq><priority>0.8</priority></url>
-  <url><loc>https://orqeva.pages.dev/trading</loc><lastmod>2026-10-07</lastmod><changefreq>daily</changefreq><priority>0.8</priority></url>
-  <url><loc>https://orqeva.pages.dev/portfolio</loc><lastmod>2026-10-07</lastmod><changefreq>daily</changefreq><priority>0.7</priority></url>
-  <url><loc>https://orqeva.pages.dev/risk</loc><lastmod>2026-10-07</lastmod><changefreq>weekly</changefreq><priority>0.7</priority></url>
-  <url><loc>https://orqeva.pages.dev/analytics</loc><lastmod>2026-10-07</lastmod><changefreq>weekly</changefreq><priority>0.7</priority></url>
-  <url><loc>https://orqeva.pages.dev/ai-analysis</loc><lastmod>2026-10-07</lastmod><changefreq>daily</changefreq><priority>0.7</priority></url>
-  <url><loc>https://orqeva.pages.dev/auto-trade</loc><lastmod>2026-10-07</lastmod><changefreq>weekly</changefreq><priority>0.7</priority></url>
-  <url><loc>https://orqeva.pages.dev/trades</loc><lastmod>2026-10-07</lastmod><changefreq>weekly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://orqeva.pages.dev/history</loc><lastmod>2026-10-07</lastmod><changefreq>weekly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://orqeva.pages.dev/exchanges</loc><lastmod>2026-10-07</lastmod><changefreq>weekly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://orqeva.pages.dev/billing</loc><lastmod>2026-10-07</lastmod><changefreq>weekly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://orqeva.pages.dev/vip</loc><lastmod>2026-10-07</lastmod><changefreq>weekly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://orqeva.pages.dev/login</loc><lastmod>2026-10-07</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://orqeva.pages.dev/register</loc><lastmod>2026-10-07</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://orqeva.pages.dev/forgot</loc><lastmod>2026-10-07</lastmod><changefreq>monthly</changefreq><priority>0.4</priority></url>
-  <url><loc>https://orqeva.pages.dev/reset</loc><lastmod>2026-10-07</lastmod><changefreq>monthly</changefreq><priority>0.4</priority></url>
-  <url><loc>https://orqeva.pages.dev/settings</loc><lastmod>2026-10-07</lastmod><changefreq>monthly</changefreq><priority>0.4</priority></url>
-  <url><loc>https://orqeva.pages.dev/notifications</loc><lastmod>2026-10-07</lastmod><changefreq>weekly</changefreq><priority>0.4</priority></url>
-  <url><loc>https://orqeva.pages.dev/help</loc><lastmod>2026-10-07</lastmod><changefreq>monthly</changefreq><priority>0.5</priority></url>
-  <url><loc>https://orqeva.pages.dev/legal/privacy</loc><lastmod>2026-10-07</lastmod><changefreq>yearly</changefreq><priority>0.3</priority></url>
-  <url><loc>https://orqeva.pages.dev/legal/terms</loc><lastmod>2026-10-07</lastmod><changefreq>yearly</changefreq><priority>0.3</priority></url>
-  <url><loc>https://orqeva.pages.dev/legal/refunds</loc><lastmod>2026-10-07</lastmod><changefreq>yearly</changefreq><priority>0.3</priority></url>
+  <url><loc>https://orqeva.pages.dev/</loc><lastmod>2026-10-26</lastmod><changefreq>weekly</changefreq><priority>1.0</priority></url>
+  <url><loc>https://orqeva.pages.dev/register</loc><lastmod>2026-10-26</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://orqeva.pages.dev/login</loc><lastmod>2026-10-26</lastmod><changefreq>monthly</changefreq><priority>0.4</priority></url>
+  <url><loc>https://orqeva.pages.dev/support</loc><lastmod>2026-10-26</lastmod><changefreq>monthly</changefreq><priority>0.4</priority></url>
+  <url><loc>https://orqeva.pages.dev/legal/privacy</loc><lastmod>2026-10-26</lastmod><changefreq>yearly</changefreq><priority>0.3</priority></url>
+  <url><loc>https://orqeva.pages.dev/legal/terms</loc><lastmod>2026-10-26</lastmod><changefreq>yearly</changefreq><priority>0.3</priority></url>
+  <url><loc>https://orqeva.pages.dev/legal/refunds</loc><lastmod>2026-10-26</lastmod><changefreq>yearly</changefreq><priority>0.3</priority></url>
 </urlset>

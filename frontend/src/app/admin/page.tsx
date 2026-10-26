@@ -140,7 +140,7 @@ export default function AdminPage() {
     if (!user) return;
     if (!user.is_admin) {
       setNotAuthorized(true);
-      router.replace("/");
+      router.replace("/dashboard");
     }
   }, [user, router]);
 

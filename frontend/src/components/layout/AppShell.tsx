@@ -7,10 +7,8 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { Navbar } from "@/components/layout/Navbar";
 import { MobileNav } from "@/components/layout/MobileNav";
 import { SignalsFeedProvider } from "@/lib/signalsFeed";
+import { isPublicRoute } from "@/lib/routes";
 import { usePathname } from "next/navigation";
-
-const publicRoutes = ["/login", "/register", "/forgot", "/reset", "/support"];
-const legalRoutes = ["/legal/terms", "/legal/privacy", "/legal/refunds"];
 
 /**
  * Fades a page in on route change WITHOUT remounting its subtree.
@@ -37,12 +35,15 @@ function PageTransition({ children }: { children: React.ReactNode }) {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const isPublic = publicRoutes.includes(pathname) || legalRoutes.some((r) => pathname.startsWith(r));
+  const isLanding = pathname === "/";
+  const isPublic = isPublicRoute(pathname);
 
   return (
     <AuthProvider>
       <AuthGuard>
-        {isPublic ? (
+        {isLanding ? (
+          children
+        ) : isPublic ? (
           <div className="min-h-dvh flex flex-col">
             <PageTransition><div className="flex-1">{children}</div></PageTransition>
             <DisclaimerFooter />

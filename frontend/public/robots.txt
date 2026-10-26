@@ -1,5 +1,26 @@
 User-agent: *
 Allow: /
 Disallow: /admin
+Disallow: /dashboard
+Disallow: /signals
+Disallow: /auto-trade
+Disallow: /trades
+Disallow: /trading
+Disallow: /portfolio
+Disallow: /market
+Disallow: /calendar
+Disallow: /charts
+Disallow: /analytics
+Disallow: /risk
+Disallow: /history
+Disallow: /billing
+Disallow: /ai-analysis
+Disallow: /exchanges
+Disallow: /notifications
+Disallow: /settings
+Disallow: /vip
+Disallow: /partners
+Disallow: /learn
+Disallow: /help
 
 Sitemap: https://orqeva.pages.dev/sitemap.xml

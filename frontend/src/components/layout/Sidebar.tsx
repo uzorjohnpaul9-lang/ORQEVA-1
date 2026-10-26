@@ -16,12 +16,12 @@ export function Sidebar() {
 
   return (
     <aside className="hidden xl:flex w-64 flex-col bg-bg-secondary border-r border-border h-dvh">
-      <div className="flex items-center gap-3 px-6 py-5 border-b border-border">
+      <Link href="/dashboard" className="flex items-center gap-3 px-6 py-5 border-b border-border">
         <SignalPulse size={34} rings={2}>
           <span className="text-[10px] font-bold">O</span>
         </SignalPulse>
         <span className="font-semibold text-lg tracking-wide">ORQEVA</span>
-      </div>
+      </Link>
 
       <nav className="flex-1 overflow-y-auto py-4 px-3">
         {items.map((item) => {

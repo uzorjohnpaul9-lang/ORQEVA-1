@@ -5,16 +5,16 @@ import { AppShell } from "@/components/layout/AppShell";
 export const metadata: Metadata = {
   metadataBase: new URL("https://orqeva.pages.dev"),
   title: {
-    default: "ORQEVA — AI Market Signals",
+    default: "ORQEVA — Multi-Market Trading Intelligence",
     template: "%s | ORQEVA",
   },
-  description: "ORQEVA: AI trading signals for forex, crypto and stocks, with live broker routing and risk controls.",
+  description: "Multi-market trading intelligence with structured signals, explicit risk context and paper-first execution across forex, equities, commodities and crypto.",
   robots: { index: true, follow: true },
   openGraph: {
     type: "website",
     siteName: "ORQEVA",
-    title: "ORQEVA — AI Market Signals",
-    description: "AI trading signals for forex, crypto and stocks, with live broker routing and risk controls.",
+    title: "ORQEVA — Multi-Market Trading Intelligence",
+    description: "Structured signals, explicit risk context and paper-first execution across forex, equities, commodities and crypto.",
     url: "https://orqeva.pages.dev",
   },
 };

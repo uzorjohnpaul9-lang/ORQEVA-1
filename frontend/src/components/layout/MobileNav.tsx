@@ -8,7 +8,7 @@ import { Modal } from "@/components/ui/Modal";
 import { adminNavItems, navIconMap, navItems } from "@/lib/nav";
 
 const tabs = [
-  { href: "/", label: "Home", icon: "M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" },
+  { href: "/dashboard", label: "Home", icon: "M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" },
   { href: "/signals", label: "Signals", icon: "M13 10V3L4 14h7v7l9-11h-7z" },
   { href: "/trades", label: "Trades", icon: "M7 17l9.2-9.2M17 17V7.8H7.8" },
   { href: "/market", label: "Market", icon: "M22 12h-4l-3 9L9 3l-3 9H2" },

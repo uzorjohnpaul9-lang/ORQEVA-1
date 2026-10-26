@@ -5,7 +5,7 @@
 }
 
 export const navItems: NavItem[] = [
-  { href: "/", label: "Overview", icon: "grid" },
+  { href: "/dashboard", label: "Overview", icon: "grid" },
   { href: "/signals", label: "AI Signals", icon: "zap" },
   { href: "/learn", label: "Academy", icon: "book" },
   { href: "/auto-trade", label: "Auto-Trade", icon: "sliders" },

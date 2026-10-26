@@ -1,10 +1,9 @@
 "use client";
 
 import { useAuth } from "@/lib/auth";
+import { isPublicRoute } from "@/lib/routes";
 import { useRouter, usePathname } from "next/navigation";
 import { useEffect } from "react";
-
-const publicRoutes = ["/login", "/register", "/forgot", "/reset"];
 
 function LoadingBar() {
   return (
@@ -21,18 +20,18 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (loading) return;
-    if (!user && !publicRoutes.includes(pathname)) {
+    if (!user && !isPublicRoute(pathname)) {
       router.push("/login");
       return;
     }
     if (user && pathname.startsWith("/admin") && !user.is_admin) {
-      router.push("/");
+      router.push("/dashboard");
     }
   }, [user, loading, pathname, router]);
 
   // Already signed out on a protected route: render nothing while the
   // redirect effect fires (avoids flashing a page we don't own).
-  if (!loading && !user && !publicRoutes.includes(pathname)) {
+  if (!loading && !user && !isPublicRoute(pathname)) {
     return null;
   }
 
