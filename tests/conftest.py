@@ -5,7 +5,10 @@ DASHBOARD_DATABASE_URL must be set BEFORE backend modules are imported.
 import asyncio
 import os
 import sys
+import time
 import uuid
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 TEST_DB = Path(__file__).parent / "test_dashboard.db"
@@ -127,11 +130,132 @@ def _purge_test_signals() -> None:
         pass
 
 
+def _purge_test_users(created_after=None, older_than=None) -> None:
+    """Delete ``@test.dev`` accounts from both Auth and the app database.
+
+    Auth and ``public.users`` are separate stores, so a guard that only cleans
+    one leaves the other polluted. The suite runs against production, and a
+    single run used to leave ~1,250 Auth accounts behind.
+
+    ``created_after`` scopes end-of-session cleanup to accounts made by this
+    run. ``older_than`` clears leftovers from crashed runs while leaving a
+    concurrently running suite alone.
+    """
+    from backend.config import settings
+
+    key = settings.SUPABASE_SECRET_KEY
+    if not (settings.SUPABASE_URL and key):
+        return
+    base = settings.SUPABASE_URL.rstrip("/")
+    rest_headers = {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Prefer": "return=minimal",
+    }
+
+    with httpx.Client(timeout=30.0, headers=rest_headers) as c:
+
+        def call(method, url, **kwargs):
+            response = None
+            for attempt in range(4):
+                try:
+                    response = c.request(method, url, **kwargs)
+                    if response.status_code not in (429, 500, 502, 503, 504):
+                        return response
+                except httpx.HTTPError:
+                    response = None
+                time.sleep(1.5 * (attempt + 1))
+            return response
+
+        r = call(
+            "GET",
+            base + "/rest/v1/users",
+            params={
+                "select": "id,email,created_at",
+                "email": "like.*@test.dev",
+                "limit": "10000",
+            },
+        )
+        if r is None or r.status_code != 200:
+            return
+
+        # CI runners and Supabase can disagree by an hour or more. Translate the
+        # local session boundaries onto the database clock instead of widening
+        # the window and risking another suite's accounts.
+        skew = timedelta(0)
+        if r.headers.get("date"):
+            server_now = parsedate_to_datetime(r.headers["date"])
+            if server_now.tzinfo is None:
+                server_now = server_now.replace(tzinfo=timezone.utc)
+            skew = server_now - datetime.now(timezone.utc)
+        start = created_after + skew if created_after else None
+        stale = older_than + skew if older_than else None
+
+        def wanted(user: dict) -> bool:
+            raw = user.get("created_at")
+            if not raw:
+                return False
+            created = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if start is not None and created < start:
+                return False
+            if stale is not None and created >= stale:
+                return False
+            return True
+
+        public_ids = [u["id"] for u in r.json() if wanted(u)]
+
+        for i in range(0, len(public_ids), 20):
+            chunk = public_ids[i : i + 20]
+            ids = ",".join(chunk)
+            call(
+                "DELETE",
+                base + "/rest/v1/notifications",
+                params={"user_id": f"in.({ids})"},
+            )
+            call("DELETE", base + "/rest/v1/users", params={"id": f"in.({ids})"})
+
+        auth_users = []
+        page = 1
+        while True:
+            r = call(
+                "GET",
+                base + "/auth/v1/admin/users",
+                params={"page": page, "per_page": 1000},
+            )
+            if r is None or r.status_code != 200:
+                return
+            batch = r.json().get("users", [])
+            auth_users += [
+                u
+                for u in batch
+                if (u.get("email") or "").lower().endswith("@test.dev")
+                and wanted(u)
+            ]
+            if len(batch) < 1000:
+                break
+            page += 1
+
+        for user in auth_users:
+            call("DELETE", base + "/auth/v1/admin/users/" + user["id"])
+
+
+_SESSION_START = datetime.now(timezone.utc)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _clean_test_signals():
     _purge_test_signals()
     yield
     _purge_test_signals()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _clean_test_users():
+    _purge_test_users(older_than=_SESSION_START - timedelta(hours=2))
+    yield
+    # Allow for clock skew between the runner and Supabase, and for setup time
+    # before the first account is created. CI serialises runs via `concurrency`.
+    _purge_test_users(created_after=_SESSION_START - timedelta(minutes=10))
 
 
 @pytest.fixture(autouse=True)
