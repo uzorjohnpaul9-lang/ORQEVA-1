@@ -74,9 +74,10 @@ export const FEATURE_MATRIX: FeatureRow[] = [
   { label: "Stock signals", free: false, premium: true, vip: true },
   { label: "Commodity signals", free: false, premium: true, vip: true },
   { label: "Crypto & memecoin signals", free: false, premium: false, vip: true },
-  { label: "Auto-trade markets", free: "Forex", premium: "Forex + Stocks", vip: "All markets" },
+  { label: "Auto-trade markets", free: "Forex only", premium: "Forex + Stocks + Commodities", vip: "All markets" },
   { label: "Signal latency", free: "5 min", premium: "1 min", vip: "Real-time" },
-  { label: "API rate limit", free: "30/min", premium: "120/min", vip: "300/min" },
+  { label: "Telegram alerts", free: false, premium: true, vip: true },
+  { label: "API rate limit", free: "30/min (for reference)", premium: "120/min (for reference)", vip: "300/min (for reference)" },
   { label: "Custom risk profiles", free: false, premium: true, vip: true },
   { label: "Priority support", free: false, premium: false, vip: true },
 ];

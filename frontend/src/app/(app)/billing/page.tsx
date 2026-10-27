@@ -477,15 +477,15 @@ export default function BillingPage() {
                       <span className="text-xs text-text-muted ml-2">{p.duration_days} days</span>
                     </div>
                     <span className="font-mono font-bold text-lg">
-                      ${p.price_usd}
-                      <span className="text-xs text-text-muted font-normal">/mo</span>
+                      ${cycle === "annual" && p.annual_price_usd ? Math.round(p.annual_price_usd / 12) : p.price_usd}
+                      <span className="text-xs text-text-muted font-normal">/ month</span>
                     </span>
                   </div>
                   {p.annual_price_usd ? (
                     <p className="text-xs text-text-muted mt-1">
-                      Yearly{" "}
+                      Billed annually{" "}
                       <span className="text-green font-mono">${p.annual_price_usd}/yr</span>
-                      {p.annual_savings_usd ? ` - save $${p.annual_savings_usd}` : ""}
+                      {p.annual_savings_usd ? ` • Save $${p.annual_savings_usd}/yr vs 12× monthly` : ""}
                     </p>
                   ) : null}
                 </button>
@@ -516,7 +516,7 @@ export default function BillingPage() {
                       : "bg-bg-tertiary text-text-secondary hover:text-text-primary",
                   )}
                 >
-                  {c === "monthly" ? "Monthly" : "Annual (2 months free)"}
+                  {c === "monthly" ? "Monthly (30 days)" : "Annual (save ~17%)"}
                 </button>
               ))}
             </div>
@@ -638,9 +638,9 @@ export default function BillingPage() {
               {FEATURE_MATRIX.map((f) => (
                 <tr key={f.label} className="border-b border-border/50 last:border-0">
                   <td className="px-4 py-2.5">{f.label}</td>
-                  <td className="px-4 py-2.5 text-center"><FeatureCell value={f.free} /></td>
-                  <td className="px-4 py-2.5 text-center"><FeatureCell value={f.premium} /></td>
-                  <td className="px-4 py-2.5 text-center"><FeatureCell value={f.vip} /></td>
+                  <td className="px-4 py-2.5 text-center" aria-label={f.label + " for Free: " + (f.free === true ? "included" : f.free === false ? "not included" : String(f.free))}><FeatureCell value={f.free} /></td>
+                  <td className="px-4 py-2.5 text-center" aria-label={f.label + " for Premium: " + (f.premium === true ? "included" : f.premium === false ? "not included" : String(f.premium))}><FeatureCell value={f.premium} /></td>
+                  <td className="px-4 py-2.5 text-center" aria-label={f.label + " for VIP: " + (f.vip === true ? "included" : f.vip === false ? "not included" : String(f.vip))}><FeatureCell value={f.vip} /></td>
                 </tr>
               ))}
             </tbody>
