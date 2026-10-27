@@ -7,7 +7,7 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Card, CardHeader, CardTitle, StatCard } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
-import { EventBanner } from "@/components/calendar/EventBanner";
+ // import { EventBanner } from "@/components/calendar/EventBanner";
 import type { DashboardOverview } from "@/lib/types";
 
 const DashboardTour = dynamic(
@@ -93,7 +93,7 @@ export default function OverviewPage() {
 
   return (
     <div className="space-y-6">
-      <EventBanner />
+      {/* <EventBanner /> */}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard label="Portfolio Value" value={o ? `$${o.portfolio_value.toLocaleString()}` : "..."} />
