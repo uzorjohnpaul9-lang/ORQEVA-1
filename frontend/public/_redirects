@@ -1,0 +1,21 @@
+# Permanent redirects for the consolidated information architecture.
+# Cloudflare Pages evaluates these before serving static files.
+
+/charts /market/charts 301
+/charts/* /market/charts/:splat 301
+/calendar /market/calendar 301
+/calendar/* /market/calendar/:splat 301
+/ai-analysis /market/analysis 301
+/ai-analysis/* /market/analysis/:splat 301
+
+/trades /portfolio/positions 301
+/trades/* /portfolio/positions/:splat 301
+/history /portfolio/history 301
+/history/* /portfolio/history/:splat 301
+/analytics /portfolio/analytics 301
+/analytics/* /portfolio/analytics/:splat 301
+
+/auto-trade /trading/automation 301
+/auto-trade/* /trading/automation/:splat 301
+/vip /billing 301
+/vip/* /billing/:splat 301

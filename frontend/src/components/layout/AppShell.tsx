@@ -18,7 +18,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <Sidebar />
             <div className="flex flex-1 flex-col overflow-hidden">
               <Navbar />
-              <main className="flex-1 overflow-y-auto p-4 pb-20 xl:pb-6">
+              <main className="flex-1 overflow-y-auto p-4 pb-24 lg:pb-6">
                 <PageTransition>{children}</PageTransition>
                 <DisclaimerFooter inApp />
               </main>

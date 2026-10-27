@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { FEATURE_MATRIX, tierBadgeVariant, tierLabel, type FeatureValue } from "@/lib/plans";
 import type { Invoice, Subscription } from "@/lib/types";
 
 interface Plan {
@@ -103,6 +104,12 @@ function RailIcon({ kind, className }: { kind: string; className?: string }) {
       <path d="M9.5 8.5h4a2 2 0 0 1 0 4h-4v4h4" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
+}
+
+function FeatureCell({ value }: { value: FeatureValue }) {
+  if (value === true) return <span className="text-green font-medium">Yes</span>;
+  if (value === false) return <span className="text-text-muted">-</span>;
+  return <span className="text-text-secondary">{value}</span>;
 }
 
 function corridorLabel(inv: Invoice): string {
@@ -364,6 +371,7 @@ export default function BillingPage() {
 
   const pendingInvoice = invoices.find((i) => i.status === "pending");
   const exactAmount = (inv: Invoice) => inv.unique_amount ?? inv.amount_usd;
+  const currentTier = (sub?.status !== "none" && sub?.tier ? sub.tier : user?.tier ?? "free").toLowerCase();
 
   return (
     <div className="space-y-6">
@@ -382,7 +390,7 @@ export default function BillingPage() {
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
         <StatCard
           label="Current Tier"
-          value={(sub?.status !== "none" && sub?.tier ? sub.tier : user?.tier ?? "free").toUpperCase()}
+          value={currentTier.toUpperCase()}
         />
         <StatCard label="Status" value={(sub?.status ?? "none").toUpperCase()} />
         <StatCard
@@ -607,6 +615,38 @@ export default function BillingPage() {
           </form>
         </Card>
       </div>
+
+      {/* Plan comparison */}
+      <Card padding={false}>
+        <div className="flex items-center justify-between gap-3 px-4 pt-4">
+          <CardTitle>Compare Plans</CardTitle>
+          <Badge variant={tierBadgeVariant(currentTier)}>
+            Current: {tierLabel(currentTier)}
+          </Badge>
+        </div>
+        <div className="overflow-x-auto mt-2">
+          <table className="w-full text-sm min-w-[560px]">
+            <thead>
+              <tr className="border-b border-border">
+                <th className="text-left text-xs text-text-muted px-4 py-2 font-medium">Feature</th>
+                <th className="text-center text-xs text-text-muted px-4 py-2 font-medium">Free</th>
+                <th className="text-center text-xs text-text-muted px-4 py-2 font-medium">Premium</th>
+                <th className="text-center text-xs text-text-muted px-4 py-2 font-medium">VIP</th>
+              </tr>
+            </thead>
+            <tbody>
+              {FEATURE_MATRIX.map((f) => (
+                <tr key={f.label} className="border-b border-border/50 last:border-0">
+                  <td className="px-4 py-2.5">{f.label}</td>
+                  <td className="px-4 py-2.5 text-center"><FeatureCell value={f.free} /></td>
+                  <td className="px-4 py-2.5 text-center"><FeatureCell value={f.premium} /></td>
+                  <td className="px-4 py-2.5 text-center"><FeatureCell value={f.vip} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
 
       {/* Invoices */}
       <Card padding={false}>

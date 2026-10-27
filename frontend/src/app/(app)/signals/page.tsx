@@ -224,7 +224,7 @@ export default function SignalsPage() {
                 ? " Your feed is 5 minutes behind real time."
                 : " Your feed is 1 minute behind real time."}
             </p>
-            <Link href="/vip">
+            <Link href="/billing">
               <Button size="sm">See plans & upgrade</Button>
             </Link>
           </div>
@@ -342,7 +342,7 @@ export default function SignalsPage() {
                       <p className="text-[11px] font-semibold text-text-secondary">
                         Upgrade to unlock entry, SL &amp; TP
                       </p>
-                      <Link href="/vip" onClick={(e) => e.stopPropagation()}>
+                      <Link href="/billing" onClick={(e) => e.stopPropagation()}>
                         <Button size="sm" variant="secondary">See plans</Button>
                       </Link>
                     </div>
@@ -540,7 +540,7 @@ export default function SignalsPage() {
             </div>
 
             <Link
-              href={`/charts?symbol=${encodeURIComponent(selected.symbol)}&market=${selected.market}&entry=${selected.entry_price}&sl=${selected.stop_loss ?? ""}&tp=${selected.take_profit ?? ""}&side=${selected.direction}`}
+              href={`/market/charts?symbol=${encodeURIComponent(selected.symbol)}&market=${selected.market}&entry=${selected.entry_price}&sl=${selected.stop_loss ?? ""}&tp=${selected.take_profit ?? ""}&side=${selected.direction}`}
               className="inline-flex w-full items-center justify-center rounded-lg border border-border bg-bg-tertiary px-4 py-2 text-sm font-medium text-text-primary hover:bg-hover transition-colors"
             >
               View chart with entry / stop / target

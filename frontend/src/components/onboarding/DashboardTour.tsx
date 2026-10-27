@@ -15,10 +15,10 @@ type TourStep = {
 const STEPS: TourStep[] = [
   {
     target: "overview",
-    fallback: "home",
+    fallback: "overview",
     eyebrow: "Your home base",
     title: "Start with Overview",
-    body: "Portfolio value, P&L, open trades and recent signals are collected here. It is the first place to check before acting on anything.",
+    body: "Portfolio value, total P&L, open-position count and active signals are collected here. The Action Center points you to anything that needs attention before you act.",
   },
   {
     target: "signals",
@@ -36,17 +36,17 @@ const STEPS: TourStep[] = [
   },
   {
     target: "trading",
-    fallback: "trades",
+    fallback: "more",
     eyebrow: "Practice first",
     title: "Place a paper trade",
-    body: "Open Trading, choose a symbol and keep Route set to Paper. No real money moves until you explicitly enable live routing.",
+    body: "Open Trade, choose a symbol and keep Route set to Paper. No real money moves until you explicitly enable live routing.",
   },
   {
     target: "portfolio",
     fallback: "more",
     eyebrow: "Review and learn",
     title: "Track Portfolio and Help",
-    body: "Portfolio shows positions and the equity curve. Help & Guide has the full walkthrough, and you can replay this tour from there.",
+    body: "Portfolio now groups performance, positions, history and analytics. Help & Guide has the full walkthrough, and you can replay this tour from there.",
   },
 ];
 
@@ -227,7 +227,7 @@ export function DashboardTour() {
       };
     }
 
-    if (window.innerWidth < 1280) {
+    if (window.innerWidth < 1024) {
       return {
         left: 16,
         right: 16,

@@ -59,7 +59,7 @@ export function NotificationSheet({ notif, onClose, token }: NotificationSheetPr
   function manage(e: React.MouseEvent) {
     e.preventDefault();
     onClose();
-    router.push("/trading");
+    router.push("/portfolio/positions");
   }
 
   return (
@@ -83,8 +83,8 @@ export function NotificationSheet({ notif, onClose, token }: NotificationSheetPr
             {related.length === 0 ? (
               <div className="bg-bg-tertiary rounded-lg p-3 text-sm text-text-muted">
                 No open position{symbol ? ` for ${symbol}` : ""}. It may already be closed.
-                <Link href="/history" onClick={onClose} className="block mt-2 text-blue hover:underline">
-                  View History →
+                <Link href="/portfolio/history" onClick={onClose} className="block mt-2 text-blue hover:underline">
+                  View history →
                 </Link>
               </div>
             ) : (
@@ -105,7 +105,7 @@ export function NotificationSheet({ notif, onClose, token }: NotificationSheetPr
                     )}
                   </div>
                 ))}
-                <Button className="w-full" onClick={manage}>Manage in Trading</Button>
+                <Button className="w-full" onClick={manage}>Manage positions</Button>
               </div>
             )}
           </div>

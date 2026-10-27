@@ -1,15 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import dynamic from "next/dynamic";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { StatCard } from "@/components/ui/Card";
-import { Card, CardHeader, CardTitle } from "@/components/ui/Card";
+import { Card, CardHeader, CardTitle, StatCard } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
-import { LineChart } from "@/components/charts/LineChart";
 import { EventBanner } from "@/components/calendar/EventBanner";
-import type { DashboardOverview, PortfolioPerformance, Signal, Trade } from "@/lib/types";
+import type { DashboardOverview } from "@/lib/types";
 
 const DashboardTour = dynamic(
   () =>
@@ -19,98 +18,132 @@ const DashboardTour = dynamic(
   { ssr: false }
 );
 
+interface RiskSnapshot {
+  kill_switch_active: boolean;
+  daily_loss_used_pct: number;
+  open_positions: number;
+  max_positions: number;
+  trades_today: number;
+  max_daily_trades: number;
+  risk_score?: string;
+}
+
+interface ExchangeConnection {
+  exchange: string;
+  is_active: boolean;
+}
+
+function ActionItem({
+  href,
+  label,
+  value,
+  tone,
+}: {
+  href: string;
+  label: string;
+  value: string;
+  tone: "green" | "yellow" | "red" | "gray";
+}) {
+  return (
+    <Link
+      href={href}
+      className="flex items-center justify-between gap-3 rounded-lg border border-border bg-bg-tertiary px-3 py-3 transition-colors hover:bg-bg-hover"
+    >
+      <span className="min-w-0">
+        <span className="block text-xs text-text-muted">{label}</span>
+        <span className="mt-0.5 block truncate text-sm font-medium">{value}</span>
+      </span>
+      <Badge variant={tone} dot>{tone === "green" ? "OK" : tone === "gray" ? "VIEW" : "CHECK"}</Badge>
+    </Link>
+  );
+}
+
 export default function OverviewPage() {
   const { token } = useAuth();
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
-  const [signals, setSignals] = useState<Signal[]>([]);
-  const [trades, setTrades] = useState<Trade[]>([]);
-  const [perf, setPerf] = useState<PortfolioPerformance | null>(null);
+  const [risk, setRisk] = useState<RiskSnapshot | null>(null);
+  const [unread, setUnread] = useState(0);
+  const [connections, setConnections] = useState<ExchangeConnection[]>([]);
 
   useEffect(() => {
     if (!token) return;
     api<DashboardOverview>("/api/dashboard/overview", { token }).then(setOverview).catch(() => {});
-    api<Signal[]>("/api/signals/?limit=5", { token }).then(setSignals).catch(() => {});
-    api<Trade[]>("/api/portfolio/trades?limit=5", { token }).then(setTrades).catch(() => {});
-    api<PortfolioPerformance>("/api/portfolio/performance", { token }).then(setPerf).catch(() => {});
+    api<RiskSnapshot>("/api/risk/status", { token }).then(setRisk).catch(() => {});
+    api<{ unread_count: number }>("/api/notifications?limit=1", { token })
+      .then((body) => setUnread(body.unread_count))
+      .catch(() => {});
+    api<ExchangeConnection[]>("/api/exchanges", { token }).then(setConnections).catch(() => {});
   }, [token]);
 
   const o = overview;
-  const pnlData = perf && perf.equity_curve.length > 0
-    ? {
-        labels: perf.equity_curve.map((p) => p.label),
-        datasets: [{ label: "P&L", data: perf.equity_curve.map((p) => p.value), color: "#00D68F" }],
-      }
-    : null;
+  const activeConnections = connections.filter((c) => c.is_active).length;
+
+  const riskTone: "green" | "yellow" | "red" | "gray" = !risk
+    ? "gray"
+    : risk.kill_switch_active || risk.daily_loss_used_pct >= 100
+      ? "red"
+      : risk.daily_loss_used_pct >= 80
+        ? "yellow"
+        : "green";
+  const riskValue = !risk
+    ? "Risk status unavailable"
+    : risk.kill_switch_active
+      ? "Kill switch active"
+      : `Daily loss used ${risk.daily_loss_used_pct.toFixed(0)}%`;
 
   return (
     <div className="space-y-6">
       <EventBanner />
+
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Portfolio Value" value={o ? `$${o.portfolio_value.toLocaleString()}` : "..."} change={o ? `Win rate ${o.win_rate}%` : undefined} />
-        <StatCard label="Total P&L" value={o ? `$${o.total_pnl.toLocaleString()}` : "..."} />
-        <StatCard label="Win Rate" value={o ? `${o.win_rate}%` : "..."} />
+        <StatCard label="Portfolio Value" value={o ? `$${o.portfolio_value.toLocaleString()}` : "..."} />
+        <StatCard
+          label="Total P&L"
+          value={o ? `${o.total_pnl >= 0 ? "+" : "-"}$${Math.abs(o.total_pnl).toLocaleString()}` : "..."}
+        />
+        <StatCard label="Open Positions" value={o ? o.open_trades.toString() : "..."} />
         <StatCard label="Active Signals" value={o ? o.active_signals.toString() : "..."} />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card className="lg:col-span-2">
-          <CardHeader><CardTitle>P&L Curve</CardTitle></CardHeader>
-          {pnlData
-            ? <LineChart data={pnlData} height={250} />
-            : <p className="text-sm text-text-muted py-8 text-center">No closed trades yet.</p>}
-        </Card>
-
-        <Card>
-          <CardHeader><CardTitle>Recent Signals</CardTitle></CardHeader>
-          <div className="space-y-3">
-            {signals.length === 0 && <p className="text-sm text-text-muted">No signals yet</p>}
-            {signals.map((s) => (
-              <div key={s.id} className="flex items-center justify-between py-2 border-b border-border/50 last:border-0">
-                <div>
-                  <p className="text-sm font-medium">{s.symbol}</p>
-                  <p className="text-xs text-text-muted">{s.strategy || s.market}</p>
-                  {(() => {
-                    const sent = (s as { indicators?: { sentiment?: { tag?: string | null; modifier?: number } } }).indicators?.sentiment;
-                    if (!sent?.tag) return null;
-                    const m = sent.modifier ?? 0;
-                    return <p className="text-xs text-text-muted">Sentiment: {sent.tag} ({m >= 0 ? "+" : ""}{(m * 100).toFixed(1)}%)</p>;
-                  })()}
-                </div>
-                <Badge variant={s.direction === "buy" ? "green" : "red"}>{s.direction.toUpperCase()}</Badge>
-              </div>
-            ))}
-          </div>
-        </Card>
-      </div>
-
       <Card>
-        <CardHeader><CardTitle>Open Trades</CardTitle></CardHeader>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm min-w-[540px]">
-            <thead>
-              <tr className="border-b border-border">
-                <th className="text-left text-xs text-text-muted py-2">Symbol</th>
-                <th className="text-left text-xs text-text-muted py-2">Side</th>
-                <th className="text-left text-xs text-text-muted py-2">Entry</th>
-                <th className="text-left text-xs text-text-muted py-2">Strategy</th>
-              </tr>
-            </thead>
-            <tbody>
-              {trades.filter(t => t.status === "open").length === 0 && (
-                <tr><td colSpan={4} className="py-6 text-center text-text-muted">No open trades</td></tr>
-              )}
-              {trades.filter(t => t.status === "open").map((t) => (
-                <tr key={t.id} className="border-b border-border/50">
-                  <td className="py-2.5 font-medium">{t.symbol}</td>
-                  <td className="py-2.5"><Badge variant={t.side === "buy" ? "green" : "red"}>{t.side.toUpperCase()}</Badge></td>
-                  <td className="py-2.5 font-mono">{t.entry_price.toLocaleString()}</td>
-                  <td className="py-2.5 text-text-secondary">{t.strategy}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <CardHeader><CardTitle>Action Center</CardTitle></CardHeader>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <ActionItem href="/risk" label="Risk" value={riskValue} tone={riskTone} />
+          <ActionItem
+            href="/notifications"
+            label="Notifications"
+            value={unread > 0 ? `${unread} unread` : "All caught up"}
+            tone={unread > 0 ? "yellow" : "green"}
+          />
+          <ActionItem
+            href="/exchanges"
+            label="Broker connections"
+            value={activeConnections > 0 ? `${activeConnections} active` : "No active broker"}
+            tone={activeConnections > 0 ? "green" : "red"}
+          />
+          <ActionItem
+            href="/portfolio/positions"
+            label="Open positions"
+            value={o ? `${o.open_trades} open` : "..."}
+            tone="gray"
+          />
         </div>
       </Card>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <Link
+          href="/portfolio"
+          className="rounded-lg border border-border bg-bg-secondary px-4 py-3 text-sm text-text-secondary transition-colors hover:border-green/40 hover:text-text-primary"
+        >
+          Review performance and equity curve →
+        </Link>
+        <Link
+          href="/signals"
+          className="rounded-lg border border-border bg-bg-secondary px-4 py-3 text-sm text-text-secondary transition-colors hover:border-green/40 hover:text-text-primary"
+        >
+          Browse the latest AI signals →
+        </Link>
+      </div>
 
       <DashboardTour />
     </div>

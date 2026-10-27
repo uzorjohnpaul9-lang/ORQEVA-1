@@ -1,16 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Card, CardHeader, CardTitle, StatCard } from "@/components/ui/Card";
+import { Card, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
-import { TradePanel } from "@/components/trade/TradePanel";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import type { Position, Trade } from "@/lib/types";
 
 const MARKETS = [
   { value: "forex", label: "Forex" },
@@ -21,11 +20,8 @@ const MARKETS = [
 export default function TradingPage() {
   const { token } = useAuth();
   const params = useSearchParams();
-  const [positions, setPositions] = useState<Position[]>([]);
   const [mode, setMode] = useState<"demo" | "live">("demo");
   const [resetting, setResetting] = useState(false);
-  const [recent, setRecent] = useState<Trade[]>([]);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -43,7 +39,6 @@ export default function TradingPage() {
     const qMode = params.get("mode");
     const qSymbol = params.get("symbol")?.trim();
     const qSide = params.get("side");
-    const qEntry = params.get("entry");
     const qSl = params.get("sl");
     const qTp = params.get("tp");
     const qMarket = params.get("market");
@@ -54,29 +49,6 @@ export default function TradingPage() {
     if (qSl) setStopLoss(qSl);
     if (qTp) setTakeProfit(qTp);
   }, [params]);
-
-  const refresh = useCallback(async () => {
-    if (!token) return;
-    const demo = mode === "demo";
-    try {
-      const [p, t] = await Promise.all([
-        api<Position[]>(`/api/portfolio/positions?is_demo=${demo}`, { token }),
-        api<Trade[]>(`/api/portfolio/trades?limit=50&is_demo=${demo}`, { token }),
-      ]);
-      setPositions(p);
-      setRecent(t);
-      setError(null);
-    } catch {
-      setError("Could not load trades");
-    } finally {
-      setLoading(false);
-    }
-  }, [token, mode]);
-
-  useEffect(() => {
-    if (!token) return;
-    refresh();
-  }, [token, refresh]);
 
   const [connections, setConnections] = useState<{ exchange: string; is_active: boolean }[]>([]);
   const [adapterMarkets, setAdapterMarkets] = useState<Record<string, string[]>>({});
@@ -122,32 +94,12 @@ export default function TradingPage() {
       });
       const where = res.venue && res.venue !== "paper" ? ` via ${res.venue}` : "";
       setNotice(`Order filled: ${res.side.toUpperCase()} ${res.symbol} @ ${res.entry_price}${where}`);
-      await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Order failed");
     } finally {
       setSubmitting(false);
     }
   }
-
-  async function closePosition(id: string) {
-    if (!token) return;
-    setError(null);
-    try {
-      const res = await api<{ status: string; pnl: number | null }>(`/api/trading/close/${id}`, {
-        method: "POST",
-        token,
-        body: "{}",
-      });
-      setNotice(`Position closed - P&L ${res.pnl !== null ? `$${res.pnl}` : "n/a"}`);
-      await refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Close failed");
-    }
-  }
-
-  const invested = positions.reduce((s, t) => s + t.entry_price * t.quantity, 0);
-  const unrealized = positions.reduce((s, t) => s + (t.unrealized_pnl ?? 0), 0);
 
   async function resetDemo() {
     if (!token || !window.confirm("Clear all demo trades and restore the starting balance?")) return;
@@ -160,7 +112,6 @@ export default function TradingPage() {
         body: "{}",
       });
       setNotice(`Demo reset: cleared ${res.deleted} trade(s). Balance $${res.starting_balance.toLocaleString()}`);
-      await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Demo reset failed");
     } finally {
@@ -233,15 +184,6 @@ export default function TradingPage() {
           </p>
         </Card>
       )}
-
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <StatCard label="Open Positions" value={positions.length.toString()} />
-        <StatCard label="Total Invested" value={`$${invested.toLocaleString(undefined, { maximumFractionDigits: 0 })}`} />
-        <StatCard
-          label="Unrealized P&L"
-          value={`${unrealized >= 0 ? "+" : "-"}$${Math.abs(unrealized).toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
-        />
-      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card>
@@ -316,52 +258,60 @@ export default function TradingPage() {
         </Card>
 
         <div className="lg:col-span-2 space-y-4">
-          <div>
-            <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3">Open Positions</h2>
-            {loading ? (
-              <p className="text-sm text-text-muted">Loading...</p>
-            ) : positions.length === 0 ? (
-              <Card><p className="text-sm text-text-muted">No open positions.</p></Card>
-            ) : (
-              <div className="space-y-3">
-                {positions.map((t) => (
-                  <div key={t.id} className="flex items-center gap-3">
-                    <div className="flex-1">
-                      <TradePanel trade={t} />
-                    </div>
-                    <Button variant="danger" size="sm" onClick={() => closePosition(t.id)}>
-                      Close
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <Card padding={false}>
-            <div className="px-4 pt-4">
-              <CardTitle>Recent Orders</CardTitle>
-            </div>
-            <div className="mt-2 divide-y divide-border/50">
-              {recent.map((t) => (
-                <div key={t.id} className="flex items-center justify-between px-4 py-2.5 text-sm">
-                  <span className="flex items-center gap-2">
-                    <Badge variant={t.side === "buy" ? "green" : "red"}>{t.side.toUpperCase()}</Badge>
-                    <span className="font-medium">{t.symbol}</span>
-                    <span className="text-text-muted">{t.quantity}</span>
-                    {t.is_demo && <Badge variant="purple">DEMO</Badge>}
-                  </span>
-                  <span className="flex items-center gap-3">
-                    <span className="font-mono">{t.entry_price.toLocaleString()}</span>
-                    <Badge variant={t.status === "open" ? "yellow" : "gray"} dot={t.status === "open"}>
-                      {t.status.toUpperCase()}
-                    </Badge>
-                  </span>
+          <Card>
+            <CardHeader>
+              <CardTitle>Execution Context</CardTitle>
+            </CardHeader>
+            <div className="space-y-4 text-sm">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-lg bg-bg-tertiary p-3">
+                  <p className="text-xs text-text-muted">Symbol</p>
+                  <p className="mt-1 font-medium">{symbol || "-"}</p>
                 </div>
-              ))}
-              {recent.length === 0 && !loading && (
-                <p className="px-4 py-6 text-sm text-text-muted">No orders yet.</p>
-              )}
+                <div className="rounded-lg bg-bg-tertiary p-3">
+                  <p className="text-xs text-text-muted">Market</p>
+                  <p className="mt-1 font-medium capitalize">{market}</p>
+                </div>
+                <div className="rounded-lg bg-bg-tertiary p-3">
+                  <p className="text-xs text-text-muted">Route</p>
+                  <Badge variant={route === "live" ? "green" : "purple"}>{route === "live" ? "LIVE" : "PAPER"}</Badge>
+                </div>
+                <div className="rounded-lg bg-bg-tertiary p-3">
+                  <p className="text-xs text-text-muted">Side</p>
+                  <Badge variant={side === "buy" ? "green" : "red"}>{side.toUpperCase()}</Badge>
+                </div>
+              </div>
+
+              <p className="text-text-secondary">
+                Open positions, closed trades and performance live in Portfolio. Risk limits apply to every order.
+              </p>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <Link
+                  href={`/market/charts?symbol=${encodeURIComponent(symbol || "")}&market=${market}&side=${side}`}
+                  className="inline-flex items-center justify-center rounded-lg border border-border bg-bg-tertiary px-4 py-2 text-sm font-medium text-text-primary transition-colors hover:bg-bg-hover"
+                >
+                  Open chart
+                </Link>
+                <Link
+                  href="/portfolio/positions"
+                  className="inline-flex items-center justify-center rounded-lg border border-border bg-bg-tertiary px-4 py-2 text-sm font-medium text-text-primary transition-colors hover:bg-bg-hover"
+                >
+                  View positions
+                </Link>
+                <Link
+                  href="/portfolio/history"
+                  className="inline-flex items-center justify-center rounded-lg border border-border bg-bg-tertiary px-4 py-2 text-sm font-medium text-text-primary transition-colors hover:bg-bg-hover"
+                >
+                  Trade history
+                </Link>
+                <Link
+                  href="/risk"
+                  className="inline-flex items-center justify-center rounded-lg border border-border bg-bg-tertiary px-4 py-2 text-sm font-medium text-text-primary transition-colors hover:bg-bg-hover"
+                >
+                  Risk settings
+                </Link>
+              </div>
             </div>
           </Card>
         </div>

@@ -3,12 +3,15 @@ import { clsx } from "clsx";
 import type { Trade } from "@/lib/types";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
 
 interface TradePanelProps {
   trade: Trade & { current_price?: number | null; unrealized_pnl?: number | null };
+  onClose?: () => void;
+  closing?: boolean;
 }
 
-export function TradePanel({ trade }: TradePanelProps) {
+export function TradePanel({ trade, onClose, closing }: TradePanelProps) {
   const isOpen = trade.status === "open";
 
   return (
@@ -64,12 +67,19 @@ export function TradePanel({ trade }: TradePanelProps) {
         )}
       </div>
 
-      <Link
-        href={`/charts?symbol=${encodeURIComponent(trade.symbol)}&market=${trade.market}&entry=${trade.entry_price}&side=${trade.side}`}
-        className="mt-4 inline-flex w-full items-center justify-center rounded-lg border border-border bg-bg-tertiary px-4 py-2 text-sm font-medium text-text-primary hover:bg-hover transition-colors"
-      >
-        View chart
-      </Link>
+      <div className={clsx("mt-4 grid gap-2", onClose ? "grid-cols-2" : "grid-cols-1")}>
+        <Link
+          href={`/market/charts?symbol=${encodeURIComponent(trade.symbol)}&market=${trade.market}&entry=${trade.entry_price}&side=${trade.side}`}
+          className="inline-flex w-full items-center justify-center rounded-lg border border-border bg-bg-tertiary px-4 py-2 text-sm font-medium text-text-primary hover:bg-hover transition-colors"
+        >
+          View chart
+        </Link>
+        {onClose && (
+          <Button variant="danger" size="sm" onClick={onClose} disabled={closing}>
+            {closing ? "Closing..." : "Close position"}
+          </Button>
+        )}
+      </div>
     </Card>
   );
 }

@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
 export const metadata: Metadata = {
-  title: "Auto Trade",
+  title: "Charts",
   description:
-    "Configure AI auto-trading with risk profiles, position sizing and execution rules.",
+    "Interactive charts with EMA overlays, entry, stop and target levels across markets.",
 };
 
 export default function Layout({ children }: { children: ReactNode }) {

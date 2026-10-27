@@ -88,8 +88,12 @@ export default function HelpPage() {
           <Step n={1} title="Create an account">
             <p>Click <b>Sign Up</b> on the login page. You only need an email, a username and a password.</p>
           </Step>
-          <Step n={2} title="Explore the Overview page (home)">
-            <p>Your dashboard shows open positions, recent signals, portfolio value and P&amp;L at a glance.</p>
+          <Step n={2} title="Explore the Overview page">
+            <p>
+              The <Link href="/dashboard" className="text-green hover:underline">Overview</Link> shows portfolio value,
+              total P&amp;L, open-position count and active signals. Its Action Center links to risk, notifications,
+              broker connections and positions.
+            </p>
           </Step>
           <Step n={3} title="Check the AI Signals feed">
             <p>Go to <Link href="/signals" className="text-green hover:underline">AI Signals</Link> to see current market calls from the three engines.</p>
@@ -123,7 +127,7 @@ export default function HelpPage() {
                 <td>Forex signals Â· paper trading Â· web notifications Â· signals on Telegram</td>
               </tr>
               <tr>
-                <td className="pr-4"><Badge variant="blue">PREMIUM</Badge></td>
+                <td className="pr-4"><Badge variant="yellow">PREMIUM</Badge></td>
                 <td className="pr-4">$49 / month</td>
                 <td>+ Stock engine signals Â· faster API limits Â· full notification center</td>
               </tr>
@@ -136,7 +140,7 @@ export default function HelpPage() {
           </table>
         </div>
         <p className="text-xs text-text-muted mt-3">
-          Your tier is shown in the sidebar. Upgrade anytime under <Link href="/billing" className="text-green hover:underline">Billing</Link>.
+          Your tier is shown in your account menu. Upgrade anytime under <Link href="/billing" className="text-green hover:underline">Billing</Link>.
         </p>
       </Card>
 

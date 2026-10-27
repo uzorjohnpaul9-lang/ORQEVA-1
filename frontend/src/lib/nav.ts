@@ -2,33 +2,111 @@
   href: string;
   label: string;
   icon: string;
+  tour?: string;
 }
 
-export const navItems: NavItem[] = [
-  { href: "/dashboard", label: "Overview", icon: "grid" },
-  { href: "/signals", label: "AI Signals", icon: "zap" },
-  { href: "/learn", label: "Academy", icon: "book" },
-  { href: "/auto-trade", label: "Auto-Trade", icon: "sliders" },
-  { href: "/trades", label: "Open Trades", icon: "trending-up" },
-  { href: "/trading", label: "Trading", icon: "dollar" },
-  { href: "/portfolio", label: "Portfolio", icon: "briefcase" },
-  { href: "/market", label: "Market", icon: "activity" },
-  { href: "/calendar", label: "Calendar", icon: "calendar" },
-  { href: "/charts", label: "Charts", icon: "chart" },
-  { href: "/analytics", label: "Analytics", icon: "chart" },
-  { href: "/risk", label: "Risk Mgmt", icon: "shield" },
-  { href: "/history", label: "History", icon: "clock" },
-  { href: "/billing", label: "Billing", icon: "card" },
-  { href: "/ai-analysis", label: "AI Analysis", icon: "brain" },
-  { href: "/exchanges", label: "Exchanges", icon: "link" },
-  { href: "/notifications", label: "Notifications", icon: "bell" },
-{ href: "/help", label: "Help & Guide", icon: "question" }, { href: "/support", label: "Support", icon: "question" },
-  { href: "/settings", label: "Settings", icon: "settings" },
-  { href: "/vip", label: "VIP", icon: "crown" },
-  { href: "/partners", label: "Partners", icon: "link" },
+export interface NavGroup {
+  label: string;
+  items: NavItem[];
+}
+
+export interface RouteMeta {
+  title: string;
+  section?: string;
+}
+
+export const primaryNav: NavItem[] = [
+  { href: "/dashboard", label: "Overview", icon: "grid", tour: "overview" },
+  { href: "/signals", label: "Signals", icon: "zap", tour: "signals" },
+  { href: "/market", label: "Markets", icon: "activity", tour: "markets" },
+  { href: "/portfolio", label: "Portfolio", icon: "briefcase", tour: "portfolio" },
+  { href: "/trading", label: "Trade", icon: "dollar", tour: "trading" },
+  { href: "/risk", label: "Risk", icon: "shield", tour: "risk" },
 ];
 
-export const adminNavItems: NavItem[] = [{ href: "/admin", label: "Admin", icon: "tools" }];
+export const mobileTabs: NavItem[] = [
+  { href: "/dashboard", label: "Overview", icon: "grid", tour: "overview" },
+  { href: "/signals", label: "Signals", icon: "zap", tour: "signals" },
+  { href: "/market", label: "Markets", icon: "activity", tour: "markets" },
+  { href: "/portfolio", label: "Portfolio", icon: "briefcase", tour: "portfolio" },
+  { href: "__more", label: "More", icon: "menu", tour: "more" },
+];
+
+export const accountNav: NavItem[] = [
+  { href: "/settings", label: "Settings", icon: "settings" },
+  { href: "/billing", label: "Billing & plan", icon: "card" },
+  { href: "/exchanges", label: "Broker connections", icon: "link" },
+];
+
+export const resourceNav: NavItem[] = [
+  { href: "/learn", label: "Academy", icon: "book" },
+  { href: "/help", label: "Help & Guide", icon: "question" },
+  { href: "/support", label: "Support", icon: "question" },
+  { href: "/partners", label: "Partner desks", icon: "link" },
+];
+
+export const moreGroups: NavGroup[] = [
+  {
+    label: "Account",
+    items: accountNav,
+  },
+  {
+    label: "Trade & risk",
+    items: [
+      { href: "/trading/automation", label: "Automation", icon: "sliders" },
+      { href: "/risk", label: "Risk management", icon: "shield" },
+    ],
+  },
+  {
+    label: "Learn & support",
+    items: resourceNav,
+  },
+];
+
+export const adminNavItems: NavItem[] = [
+  { href: "/admin", label: "Admin", icon: "tools" },
+];
+
+const ROUTE_META: Record<string, RouteMeta> = {
+  "/dashboard": { title: "Overview" },
+  "/signals": { title: "AI Signals" },
+  "/market": { title: "Markets" },
+  "/market/charts": { title: "Charts", section: "Markets" },
+  "/market/calendar": { title: "Calendar", section: "Markets" },
+  "/market/analysis": { title: "AI Analysis", section: "Markets" },
+  "/portfolio": { title: "Portfolio" },
+  "/portfolio/positions": { title: "Positions", section: "Portfolio" },
+  "/portfolio/history": { title: "History", section: "Portfolio" },
+  "/portfolio/analytics": { title: "Analytics", section: "Portfolio" },
+  "/trading": { title: "Trade" },
+  "/trading/automation": { title: "Automation", section: "Trade" },
+  "/risk": { title: "Risk Management" },
+  "/notifications": { title: "Notifications" },
+  "/settings": { title: "Settings" },
+  "/billing": { title: "Billing & plans" },
+  "/exchanges": { title: "Broker connections" },
+  "/learn": { title: "Academy" },
+  "/learn/glossary": { title: "Glossary", section: "Academy" },
+  "/learn/quiz": { title: "Quiz", section: "Academy" },
+  "/help": { title: "Help & Guide" },
+  "/support": { title: "Support" },
+  "/partners": { title: "Partner desks" },
+  "/admin": { title: "Admin" },
+};
+
+const ROUTE_KEYS = Object.keys(ROUTE_META).sort((a, b) => b.length - a.length);
+
+export function isNavActive(pathname: string, href: string): boolean {
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+export function getRouteMeta(pathname: string): RouteMeta {
+  const normalized = pathname !== "/" ? pathname.replace(/\/+$/, "") : pathname;
+  const match = ROUTE_KEYS.find(
+    (key) => normalized === key || normalized.startsWith(`${key}/`)
+  );
+  return (match ? ROUTE_META[match] : undefined) ?? { title: "ORQEVA" };
+}
 
 export const navIconMap: Record<string, string> = {
   grid: "M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z",
@@ -51,4 +129,5 @@ export const navIconMap: Record<string, string> = {
   crown: "M2 4l3 12h14l3-12-5 4-5-4-5 4-5-4z",
   tools: "M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z",
   sliders: "M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M2 14h4M10 8h4M18 16h4",
+  menu: "M4 6h16M4 12h16M4 18h16",
 };

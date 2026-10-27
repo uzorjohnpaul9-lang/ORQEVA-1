@@ -1,22 +1,18 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import clsx from "clsx";
 import { Card, CardHeader, CardTitle, StatCard } from "@/components/ui/Card";
-import { Badge } from "@/components/ui/Badge";
-import { DataTable } from "@/components/tables/DataTable";
 import { LineChart } from "@/components/charts/LineChart";
 import { DonutChart } from "@/components/charts/DonutChart";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import type { PortfolioPerformance, Trade } from "@/lib/types";
+import type { PortfolioPerformance } from "@/lib/types";
 
 const DONUT_COLORS = ["#3B82F6", "#00D68F", "#FFBE0B", "#FF4757", "#A855F7"];
 
-export default function PortfolioPage() {
+export default function PortfolioPerformancePage() {
   const { token } = useAuth();
   const [perf, setPerf] = useState<PortfolioPerformance | null>(null);
-  const [closed, setClosed] = useState<Trade[]>([]);
   const [ledger, setLedger] = useState<"" | "demo" | "live">("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -26,20 +22,20 @@ export default function PortfolioPage() {
     let active = true;
     const demoSuffix = ledger ? `is_demo=${ledger === "demo"}` : "";
     const perfUrl = demoSuffix ? `/api/portfolio/performance?${demoSuffix}` : "/api/portfolio/performance";
-    const tradesUrl = `/api/portfolio/trades?status=closed&limit=50${demoSuffix ? `&${demoSuffix}` : ""}`;
-    (async () => {
-      try {
-        const [p, t] = await Promise.all([
-          api<PortfolioPerformance>(perfUrl, { token }),
-          api<Trade[]>(tradesUrl, { token }),
-        ]);
-        if (active) { setPerf(p); setClosed(t); }
-      } catch {
+    setLoading(true);
+    api<PortfolioPerformance>(perfUrl, { token })
+      .then((data) => {
+        if (active) {
+          setPerf(data);
+          setError(null);
+        }
+      })
+      .catch(() => {
         if (active) setError("Could not load portfolio");
-      } finally {
+      })
+      .finally(() => {
         if (active) setLoading(false);
-      }
-    })();
+      });
     return () => { active = false; };
   }, [token, ledger]);
 
@@ -47,8 +43,8 @@ export default function PortfolioPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">Portfolio</h1>
-          <p className="text-sm text-text-secondary mt-1">Holdings and realized performance</p>
+          <h1 className="text-2xl font-bold">Performance</h1>
+          <p className="text-sm text-text-secondary mt-1">Realized performance and allocation</p>
         </div>
         <div className="flex items-center gap-1 rounded-lg border border-border bg-bg-tertiary p-1">
           {([["", "All"], ["demo", "Demo"], ["live", "Live"]] as const).map(([val, label]) => (
@@ -67,6 +63,7 @@ export default function PortfolioPage() {
       </div>
 
       {error && <p className="text-sm text-red">{error}</p>}
+      {loading && <p className="text-sm text-text-muted">Loading portfolio...</p>}
       {!loading && !error && perf && (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -115,46 +112,8 @@ export default function PortfolioPage() {
               )}
             </Card>
           </div>
-
-          <Card padding={false}>
-            <div className="px-4 pt-4">
-              <CardTitle>Trade History</CardTitle>
-            </div>
-            <div className="mt-3">
-              <DataTable<Trade>
-                data={closed}
-                columns={[
-                  {
-                    key: "symbol",
-                    header: "Symbol",
-                    render: (t) => (
-                      <span className="flex items-center gap-2">
-                        <span className="font-medium">{t.symbol}</span>
-                        <Badge variant={t.side === "buy" ? "green" : "red"}>{t.side.toUpperCase()}</Badge>
-                        {t.is_demo && <Badge variant="purple">DEMO</Badge>}
-                      </span>
-                    ),
-                  },
-                  { key: "market", header: "Market", render: (t) => <span className="capitalize">{t.market}</span> },
-                  { key: "entry", header: "Entry", render: (t) => <span className="font-mono">{t.entry_price.toLocaleString()}</span> },
-                  { key: "exit", header: "Exit", render: (t) => <span className="font-mono">{t.exit_price != null ? t.exit_price.toLocaleString() : "-"}</span> },
-                  {
-                    key: "pnl",
-                    header: "P&L",
-                    render: (t) => (
-                      <span className={clsx("font-mono font-bold", (t.pnl ?? 0) >= 0 ? "text-green" : "text-red")}>
-                        {(t.pnl ?? 0) >= 0 ? "+" : ""}{(t.pnl ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                      </span>
-                    ),
-                  },
-                  { key: "strategy", header: "Strategy", render: (t) => <span className="text-text-muted">{t.strategy}</span> },
-                ]}
-              />
-            </div>
-          </Card>
         </>
       )}
-      {loading && <p className={clsx("text-sm text-text-muted")}>Loading portfolio...</p>}
     </div>
   );
 }

@@ -58,7 +58,7 @@ export function EventBanner() {
                 ` · may affect ${active.affected_markets.join(", ")}`}
             </p>
             <Link
-              href="/calendar"
+              href="/market/calendar"
               className="text-xs text-text-muted hover:text-text-primary mt-1 inline-block"
             >
               View calendar →
@@ -85,7 +85,7 @@ export function EventBanner() {
             <span className="text-text-muted">{relTime(upcoming.time_utc, now)}</span>
           </p>
         </div>
-        <Link href="/calendar" className="text-xs text-text-muted hover:text-text-primary whitespace-nowrap">
+        <Link href="/market/calendar" className="text-xs text-text-muted hover:text-text-primary whitespace-nowrap">
           Calendar →
         </Link>
       </div>

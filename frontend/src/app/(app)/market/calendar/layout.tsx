@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
 export const metadata: Metadata = {
-  title: "VIP Membership",
+  title: "Economic Calendar",
   description:
-    "Unlock VIP signals, priority analysis and premium features with ORQEVA VIP.",
+    "High-impact economic events and market-moving releases with affected-market context.",
 };
 
 export default function Layout({ children }: { children: ReactNode }) {

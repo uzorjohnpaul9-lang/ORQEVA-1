@@ -2,16 +2,18 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
+import { getRouteMeta } from "@/lib/nav";
 import { NotificationSheet, type Notif } from "@/components/ui/NotificationSheet";
-import { Badge } from "@/components/ui/Badge";
-import { tierBadgeVariant, tierLabel } from "@/lib/plans";
+import { ProfileMenu } from "@/components/layout/ProfileMenu";
 
 export function Navbar() {
+  const pathname = usePathname();
+  const meta = getRouteMeta(pathname);
   const [showNotifs, setShowNotifs] = useState(false);
-  const [showUser, setShowUser] = useState(false);
-  const { user, token, logout } = useAuth();
+  const { token } = useAuth();
   const [notifs, setNotifs] = useState<Notif[]>([]);
   const [unread, setUnread] = useState(0);
   const [detail, setDetail] = useState<Notif | null>(null);
@@ -32,6 +34,10 @@ export function Navbar() {
     return () => clearInterval(iv);
   }, [load]);
 
+  useEffect(() => {
+    setShowNotifs(false);
+  }, [pathname]);
+
   async function markAll() {
     if (!token) return;
     try {
@@ -41,37 +47,46 @@ export function Navbar() {
   }
 
   return (
-    <header className="flex items-center justify-between px-4 md:px-6 py-3 border-b border-border bg-bg-secondary">
-      <div className="flex items-center gap-3">
-        <h1 className="text-lg font-semibold hidden md:block">Dashboard</h1>
+    <header className="flex h-14 items-center justify-between gap-3 px-4 md:px-6 border-b border-border bg-bg-secondary">
+      <div className="flex min-w-0 items-center gap-2">
+        {meta.section && (
+          <span className="hidden sm:inline text-xs text-text-muted shrink-0">{meta.section} /</span>
+        )}
+        <h1 className="truncate text-base font-semibold">{meta.title}</h1>
       </div>
 
-      <div className="flex items-center gap-3">
-        <div className="hidden md:flex items-center gap-2 bg-bg-tertiary rounded-lg px-3 py-2">
-          <svg className="w-4 h-4 text-text-muted" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+      <div className="flex items-center gap-1.5">
+        <Link
+          href="/trading"
+          data-tour="trading"
+          className="lg:hidden inline-flex items-center gap-1.5 rounded-lg bg-green px-3 py-2 text-xs font-semibold text-bg-primary hover:bg-green/90 transition-colors"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" />
           </svg>
-          <input
-            type="text"
-            placeholder="Search..."
-            className="bg-transparent text-sm text-text-primary placeholder-text-muted outline-none w-48"
-          />
-        </div>
+          Trade
+        </Link>
 
         <div className="relative">
-          <button onClick={() => setShowNotifs(!showNotifs)} className="relative p-2 rounded-lg hover:bg-bg-hover transition-colors">
+          <button
+            type="button"
+            onClick={() => setShowNotifs(!showNotifs)}
+            aria-label="Notifications"
+            aria-expanded={showNotifs}
+            className="relative p-2 rounded-lg hover:bg-bg-hover transition-colors"
+          >
             <svg className="w-5 h-5 text-text-secondary" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 01-3.46 0" />
             </svg>
             {unread > 0 && (
-              <span className={`absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 bg-red rounded-full text-[10px] flex items-center justify-center text-white font-bold`}>
+              <span className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 bg-red rounded-full text-[10px] flex items-center justify-center text-white font-bold">
                 {unread > 9 ? "9+" : unread}
               </span>
             )}
           </button>
 
           {showNotifs && (
-            <div className="absolute right-0 top-full mt-2 w-80 bg-bg-secondary border border-border rounded-xl shadow-2xl z-50">
+            <div className="absolute right-0 top-full mt-2 w-80 max-w-[calc(100vw-1.5rem)] bg-bg-secondary border border-border rounded-xl shadow-2xl z-50">
               <div className="px-4 py-3 border-b border-border flex justify-between items-center">
                 <span className="font-medium text-sm">Notifications</span>
                 <button onClick={markAll} className="text-xs text-blue cursor-pointer hover:underline">Mark all read</button>
@@ -106,40 +121,7 @@ export function Navbar() {
           )}
         </div>
 
-        <div className="relative">
-          <button onClick={() => setShowUser(!showUser)} className="flex items-center gap-2 p-1.5 rounded-lg hover:bg-bg-hover transition-colors">
-            <div className="w-8 h-8 rounded-full bg-blue/20 flex items-center justify-center text-blue text-sm font-medium">
-              {user?.username?.charAt(0).toUpperCase() || "U"}
-            </div>
-            <span className="text-sm hidden md:block">{user?.username || "User"}</span>
-          </button>
-
-          {showUser && (
-            <div className="absolute right-0 top-full mt-2 w-56 bg-bg-secondary border border-border rounded-xl shadow-2xl z-50">
-              <div className="px-4 py-3 border-b border-border">
-                <p className="text-sm font-medium truncate">{user?.username || user?.email}</p>
-                <div className="mt-1 flex items-center gap-2">
-                  <Badge variant={tierBadgeVariant(user?.tier)}>{tierLabel(user?.tier)} tier</Badge>
-                </div>
-              </div>
-              {(user?.tier || "free").toLowerCase() !== "vip" && (
-                <Link
-                  href="/vip"
-                  onClick={() => setShowUser(false)}
-                  className="flex items-center gap-2 w-full text-left px-4 py-3 text-sm text-green hover:bg-bg-hover"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M2 4l3 12h14l3-12-5 4-5-4-5 4-5-4z" />
-                  </svg>
-                  Upgrade plan
-                </Link>
-              )}
-              <button onClick={logout} className="w-full text-left px-4 py-3 text-sm text-red hover:bg-bg-hover rounded-b-xl">
-                Sign Out
-              </button>
-            </div>
-          )}
-        </div>
+        <ProfileMenu />
       </div>
 
       <NotificationSheet notif={detail} onClose={() => setDetail(null)} token={token} />
