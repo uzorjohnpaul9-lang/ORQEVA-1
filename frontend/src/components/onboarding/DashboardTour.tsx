@@ -42,11 +42,11 @@ const STEPS: TourStep[] = [
     body: "Open Trade, choose a symbol and keep Route set to Paper. No real money moves until you explicitly enable live routing.",
   },
   {
-    target: "portfolio",
+    target: "nav-hamburger",
     fallback: "more",
-    eyebrow: "Review and learn",
-    title: "Track Portfolio and Help",
-    body: "Portfolio now groups performance, positions, history and analytics. Help & Guide has the full walkthrough, and you can replay this tour from there.",
+    eyebrow: "Secondary items",
+    title: "Use the menu for extras",
+    body: "Automation, account settings, billing, broker connections, academy, help and admin live in the hamburger menu.",
   },
 ];
 
