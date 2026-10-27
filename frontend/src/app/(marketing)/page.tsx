@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import { MarketingHeader } from "@/components/marketing/MarketingHeader";
-import { SignalBrief } from "@/components/marketing/SignalBrief";
+import { InteractiveMarketChart } from "@/components/marketing/InteractiveMarketChart";
 import { SignalPulse } from "@/components/ui/SignalPulse";
 import {
   FEATURE_MATRIX,
@@ -421,7 +421,7 @@ export default function LandingPage() {
                 </a>
               </div>
 
-              <SignalBrief />
+              <InteractiveMarketChart />
             </div>
 
             <div className="mt-16 flex flex-col gap-3 border-t border-white/[0.06] pt-6 text-[11px] uppercase tracking-[0.16em] text-text-muted sm:flex-row sm:items-center sm:justify-between">

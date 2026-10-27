@@ -7,6 +7,7 @@ import { Select } from "@/components/ui/Select";
 import { Button } from "@/components/ui/Button";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { useTheme } from "@/components/theme/ThemeProvider";
 
 interface Prefs {
   telegram_signals: boolean;
@@ -37,6 +38,7 @@ const TG_ITEMS: { key: keyof Prefs; label: string }[] = [
 
 export default function SettingsPage() {
   const { user, token } = useAuth();
+  const { theme, setTheme } = useTheme();
   const [prefs, setPrefs] = useState<Prefs | null>(null);
   const [chatId, setChatId] = useState("");
   const [watchInput, setWatchInput] = useState("");
@@ -73,7 +75,6 @@ export default function SettingsPage() {
         body: {
           default_market: prefs.default_market,
           risk_tolerance: prefs.risk_tolerance,
-          theme: prefs.theme,
           email_notifications: prefs.email_notifications,
           web_notifications: prefs.web_notifications,
         },
@@ -82,6 +83,11 @@ export default function SettingsPage() {
       setNotice("Preferences saved");
     } catch { setNotice("Save failed"); }
     setBusy(false);
+  }
+
+  function saveTheme(next: "dark" | "light" | "system") {
+    setTheme(next);
+    setNotice("Theme updated");
   }
 
   function toggleDirection(d: "buy" | "sell") {
@@ -287,13 +293,18 @@ export default function SettingsPage() {
           />
           <Select
             label="Theme"
-            value={prefs?.theme ?? "dark"}
-            onChange={(e) => prefs && setPrefs({ ...prefs, theme: e.target.value })}
-            options={[{ value: "dark", label: "Dark" }, { value: "light", label: "Light" }]}
+            value={theme}
+            onChange={(e) => saveTheme(e.target.value as "dark" | "light" | "system")}
+            options={[
+              { value: "system", label: "System" },
+              { value: "dark", label: "Dark" },
+              { value: "light", label: "Light" },
+            ]}
           />
-          <Button variant="secondary" size="sm" onClick={saveGeneral} disabled={busy || !prefs}>Save Preferences</Button>
         </div>
       </Card>
+
+      <ApiKeysCard token={token} />
 
       <ApiKeysCard token={token} />
     </div>

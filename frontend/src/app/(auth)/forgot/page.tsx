@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
-import { API_BASE } from "@/lib/api";
+import { supabase } from "@/lib/supabase";
 
 export default function ForgotPage() {
   const [email, setEmail] = useState("");
@@ -17,12 +17,10 @@ export default function ForgotPage() {
     e.preventDefault();
     setError("");
     setLoading(true);
+    const redirectTo = typeof window !== "undefined" ? `${window.location.origin}/reset` : undefined;
     try {
-      await fetch(`${API_BASE}/api/auth/forgot`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
-      });
+      const { error: err } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
+      if (err) throw err;
       setSent(true);
     } catch {
       setError("Something went wrong - try again");

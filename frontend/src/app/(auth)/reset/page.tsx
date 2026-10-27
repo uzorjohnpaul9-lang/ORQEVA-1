@@ -1,17 +1,17 @@
 "use client";
 
-import { Suspense, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
-import { API_BASE } from "@/lib/api";
+import { supabase } from "@/lib/supabase";
 
 function ResetForm() {
-  const params = useSearchParams();
   const router = useRouter();
-  const token = params.get("token") || "";
+  const [ready, setReady] = useState(false);
+  const [hasSession, setHasSession] = useState(false);
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [loading, setLoading] = useState(false);
@@ -30,13 +30,9 @@ function ResetForm() {
     }
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/auth/reset`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, new_password: password }),
-      });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.detail || "Reset failed");
+      const { error: err } = await supabase.auth.updateUser({ password });
+      if (err) throw err;
+      await supabase.auth.signOut().catch(() => {});
       router.push("/login?reset=1");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Reset failed");
@@ -45,9 +41,26 @@ function ResetForm() {
     }
   };
 
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setHasSession(Boolean(session));
+      setReady(true);
+    });
+  }, []);
+
+  if (!ready) {
+    return (
+      <Card>
+        <div className="space-y-4 text-center py-4">
+          <p className="text-sm text-text-secondary">Loading...</p>
+        </div>
+      </Card>
+    );
+  }
+
   return (
     <Card>
-      {!token ? (
+      {!hasSession ? (
         <div className="space-y-4 text-center py-4">
           <p className="text-sm text-text-secondary">
             This link is missing its reset token. Request a fresh one.
