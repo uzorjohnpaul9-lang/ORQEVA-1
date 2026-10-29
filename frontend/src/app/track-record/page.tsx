@@ -24,6 +24,7 @@ const rules = [
   "Only live-data signals count. Simulated and unknown-provenance rows are excluded and reported separately.",
   "Net R subtracts an assumed 0.05R round-trip cost; gross R is shown alongside it.",
   "The headline win rate is withheld until 30 live signals have resolved. Below that, the ledger shows progress only.",
+  "The public cohort starts at the look-ahead fix. Older rows resolved against bars that included the signal day are reported separately, never blended into the headline.",
 ];
 
 export default function TrackRecordPage() {
@@ -47,10 +48,11 @@ export default function TrackRecordPage() {
               Every result, including the ones that lost.
             </h1>
             <p className="mt-5 max-w-2xl text-base leading-7 text-text-secondary">
-              This is the full resolved history of ORQEVA&apos;s paper signals, generated
-              from live market data. It is not a highlight reel: the table, the CSV and the
-              statistics all come from the same underlying rows, and simulated data is never
-              mixed in.
+              This is the audited, current-cohort history of ORQEVA&apos;s paper signals,
+              generated from live market data. It is not a highlight reel: the table, the CSV
+              and the statistics all come from the same underlying rows, and simulated data is
+              never mixed in. Results from before the look-ahead fix are excluded and reported
+              separately.
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-3">
               <a
@@ -58,7 +60,7 @@ export default function TrackRecordPage() {
                 className="inline-flex items-center gap-2 rounded-lg bg-green px-4 py-2.5 text-sm font-semibold text-black transition-opacity hover:opacity-90"
               >
                 <Download className="h-4 w-4" aria-hidden="true" />
-                Download full CSV
+                Download cohort CSV
               </a>
               <Link
                 href="/#pricing"
@@ -94,17 +96,18 @@ export default function TrackRecordPage() {
               <div className="rounded-2xl border border-white/[0.07] bg-[#0B0E13] p-6">
                 <h3 className="text-sm font-semibold text-text-primary">What is excluded</h3>
                 <p className="mt-2 text-sm leading-6 text-text-secondary">
-                  Simulated signals, demo accounts, unknown-provenance legacy rows and any
-                  user-specific signal. The public ledger only reads platform-wide signals
-                  created from live market data.
+                  Simulated signals, demo accounts, unknown-provenance rows and any
+                  user-specific signal. The headline also excludes the pre-fix cohort that was
+                  resolved with look-ahead bias. The public ledger only reads platform-wide
+                  signals created from live market data.
                 </p>
               </div>
               <div className="rounded-2xl border border-white/[0.07] bg-[#0B0E13] p-6">
                 <h3 className="text-sm font-semibold text-text-primary">What the CSV contains</h3>
                 <p className="mt-2 text-sm leading-6 text-text-secondary">
-                  One row per resolved live signal: open and close timestamps, symbol, market,
-                  direction, entry, stop, target, exit, outcome, gross R, net R, data source and
-                  the resolution basis used.
+                  One row per current-cohort resolved live signal: open and close timestamps,
+                  symbol, market, direction, entry, stop, target, exit, outcome, gross R, net R,
+                  data source and the resolution basis used. Pre-fix rows are not included.
                 </p>
               </div>
               <div className="flex items-start gap-2.5 rounded-2xl border border-yellow/15 bg-yellow/[0.04] p-6">

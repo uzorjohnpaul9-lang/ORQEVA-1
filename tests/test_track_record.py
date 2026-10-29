@@ -4,6 +4,7 @@ import json
 import pytest
 
 from backend.db import supabase as supabase_db
+from backend.db.supabase import parse_dt
 from backend.services import outcome_service, track_record_service
 
 
@@ -110,7 +111,7 @@ def test_aggregate_live_only_gross_and_net():
     assert out["win_rate_tp_sl"] == 50.0
     assert out["avg_r_gross"] == 0.375
     assert out["avg_r_net"] == 0.325
-    assert out["excluded"] == {"simulated": 1, "unknown": 1}
+    assert out["excluded"] == {"simulated": 1, "unknown": 1, "legacy": 0}
     assert out["status"] == "live"
     assert out["live_only"] is True
     assert out["by_market"][0]["market"] == "crypto"
@@ -122,6 +123,40 @@ def test_aggregate_collecting_below_gate():
     assert out["sample"] == {
         "resolved": 1, "needed": 30, "remaining": 29, "progress_pct": 3.3
     }
+
+
+def test_aggregate_epoch_keeps_legacy_out_of_headline():
+    old = {**_row("tp", 2.0), "resolved_at": "2026-01-02T00:00:00Z"}
+    new = {**_row("sl", -1.0, source="live", market="forex"), "resolved_at": "2026-02-01T00:00:00Z"}
+    since = parse_dt("2026-02-01T00:00:00Z")
+    out = track_record_service.aggregate([old, new], cost=0.05, gate=1, since=since)
+
+    assert out["resolved"] == 1
+    assert out["tp"] == 0 and out["sl"] == 1
+    assert out["excluded"]["legacy"] == 1
+    assert out["legacy_cohort"]["resolved"] == 1
+    assert out["legacy_cohort"]["win_rate_tp_sl"] == 100.0
+    assert out["status"] == "live"
+
+
+async def test_snapshot_recent_only_includes_epoch_cohort(monkeypatch):
+    old = {**_row("tp", 2.0), "resolved_at": "2026-01-02T00:00:00Z"}
+    new = {**_row("sl", -1.0, source="live", market="forex"), "resolved_at": "2026-02-01T00:00:00Z"}
+
+    async def fake_fetch(_db):
+        return [old, new], "provenance"
+
+    monkeypatch.setattr(track_record_service, "_fetch_rows", fake_fetch)
+    monkeypatch.setattr(
+        track_record_service, "epoch", lambda: parse_dt("2026-02-01T00:00:00Z")
+    )
+    out = await track_record_service.snapshot(object())
+
+    assert out["resolved"] == 1
+    assert out["excluded"]["legacy"] == 1
+    assert [r["symbol"] for r in out["recent"]] == ["BTCUSDT"]
+    assert out["recent"][0]["r_multiple_net"] == -1.05
+    assert out["cohort_started_at"] == "2026-02-01T00:00:00+00:00"
 
 
 def test_csv_has_header_and_guards_formulas():
@@ -136,12 +171,17 @@ def test_csv_has_header_and_guards_formulas():
         },
         cost=0.05,
     )
-    text = track_record_service.rows_to_csv([row])
+    loss = track_record_service._public_row(_row("sl", -1.0), cost=0.05)
+    text = track_record_service.rows_to_csv([row, loss])
     lines = text.split("\r\n")
     assert lines[0].startswith("signal_id,opened_at,closed_at,symbol")
     assert "r_multiple_gross" in lines[0] and "r_multiple_net" in lines[0]
     assert "'=cmd" in text
+    assert "tp-2.0-live,2026-01-01T00:00:00Z,2026-01-02T00:00:00Z" in text
+    assert ",100.0,95.0,110.0,110.0," in text
     assert ",1.95," in text  # 2.0 gross - 0.05 cost
+    assert ",'-1" not in text  # negative numbers are not formula-escaped
+    assert ",-1.0,-1.05," in text
 
 
 async def test_public_endpoint_is_unauthenticated_and_cached(client, monkeypatch):

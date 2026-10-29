@@ -30,6 +30,10 @@ from backend.services.outcome_service import (
 
 PAGE_SIZE = 1000
 MAX_ROWS = 50_000
+# Pre-fix rows were resolved against daily bars that included the signal's
+# creation day (look-ahead). They are useful history but are not comparable to
+# the corrected cohort, so the public headline starts at the integrity deploy.
+DEFAULT_EPOCH = "2026-10-29T16:00:00Z"
 
 PUBLIC_COLUMNS = (
     "id,symbol,market,direction,entry_price,stop_loss,take_profit,exit_price,"
@@ -44,16 +48,16 @@ LEGACY_COLUMNS = (
 )
 
 CSV_COLUMNS = [
-    ("signal_id", "id"),
-    ("opened_at", "created_at"),
-    ("closed_at", "resolved_at"),
+    ("signal_id", "signal_id"),
+    ("opened_at", "opened_at"),
+    ("closed_at", "closed_at"),
     ("symbol", "symbol"),
     ("market", "market"),
     ("direction", "direction"),
-    ("entry", "entry_price"),
-    ("stop", "stop_loss"),
-    ("target", "take_profit"),
-    ("exit", "exit_price"),
+    ("entry", "entry"),
+    ("stop", "stop"),
+    ("target", "target"),
+    ("exit", "exit"),
     ("outcome", "outcome"),
     ("r_multiple_gross", "r_multiple"),
     ("r_multiple_net", "r_multiple_net"),
@@ -68,6 +72,20 @@ def min_resolved() -> int:
         return max(1, int(os.getenv("TRACK_RECORD_MIN_RESOLVED", "30")))
     except ValueError:
         return 30
+
+
+def epoch() -> datetime | None:
+    """Start of the comparable public cohort. Set TRACK_RECORD_EPOCH=off to disable."""
+    raw = os.getenv("TRACK_RECORD_EPOCH", DEFAULT_EPOCH).strip()
+    if raw.lower() in ("", "off", "none", "0"):
+        return None
+    try:
+        value = parse_dt(raw)
+    except (TypeError, ValueError):
+        value = parse_dt(DEFAULT_EPOCH)
+    if value is not None and value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value
 
 
 def _num(value) -> float | None:
@@ -107,69 +125,81 @@ def _dt(value) -> datetime | None:
         return None
 
 
+def _tally(group: list[dict]) -> dict:
+    stats = {
+        "tp": 0, "sl": 0, "expired": 0, "breakeven": 0,
+        "r_sum": 0.0, "r_count": 0,
+        "by_market": {}, "by_strategy": {},
+        "first_live": None, "last_resolved": None,
+    }
+    for r in group:
+        outcome = r.get("outcome")
+        if outcome in ("tp", "sl", "expired", "breakeven"):
+            stats[outcome] += 1
+
+        rmul = _num(r.get("r_multiple"))
+        if rmul is not None:
+            stats["r_sum"] += rmul
+            stats["r_count"] += 1
+
+        market = r.get("market") or "unknown"
+        m = stats["by_market"].setdefault(market, {"resolved": 0, "wins": 0})
+        m["resolved"] += 1
+        m["wins"] += 1 if outcome == "tp" else 0
+
+        strategy = r.get("strategy")
+        if strategy:
+            s = stats["by_strategy"].setdefault(
+                strategy, {"resolved": 0, "wins": 0, "markets": set()}
+            )
+            s["resolved"] += 1
+            s["wins"] += 1 if outcome == "tp" else 0
+            if r.get("market"):
+                s["markets"].add(market)
+
+        created = _dt(r.get("created_at"))
+        if created and (stats["first_live"] is None or created < stats["first_live"]):
+            stats["first_live"] = created
+        resolved = _dt(r.get("resolved_at"))
+        if resolved and (stats["last_resolved"] is None or resolved > stats["last_resolved"]):
+            stats["last_resolved"] = resolved
+    return stats
+
+
 def aggregate(rows: list[dict], *, cost: float | None = None,
-              gate: int | None = None) -> dict:
-    """Aggregate raw signal rows into the public performance summary."""
+              gate: int | None = None, since: datetime | None = None) -> dict:
+    """Aggregate raw signal rows into the public performance summary.
+
+    ``since`` is the start of the comparable cohort. Rows resolved before it are
+    counted as ``legacy`` and reported separately, never in the headline.
+    """
     cost = cost_r() if cost is None else cost
     gate = min_resolved() if gate is None else gate
 
-    live_rows: list[dict] = []
-    excluded = {"simulated": 0, "unknown": 0}
+    current: list[dict] = []
+    legacy: list[dict] = []
+    excluded = {"simulated": 0, "unknown": 0, "legacy": 0}
     for r in rows:
         src = r.get("data_source")
         if src != "live":
             excluded["simulated" if src == "simulated" else "unknown"] += 1
             continue
-        if r.get("outcome"):
-            live_rows.append(r)
+        if not r.get("outcome"):
+            continue
+        resolved_at = _dt(r.get("resolved_at"))
+        if since is not None and (resolved_at is None or resolved_at < since):
+            legacy.append(r)
+            continue
+        current.append(r)
+    excluded["legacy"] = len(legacy)
 
-    tp = sl = expired = breakeven = 0
-    r_sum = r_net_sum = 0.0
-    r_count = 0
-    by_market: dict[str, dict] = {}
-    by_strategy: dict[str, dict] = {}
-    first_live: datetime | None = None
-    last_resolved: datetime | None = None
+    s = _tally(current)
+    tp, sl = s["tp"], s["sl"]
+    resolved_count = len(current)
+    r_count = s["r_count"]
+    r_net_sum = s["r_sum"] - cost * r_count
+    tp_sl = tp + sl
 
-    for r in live_rows:
-        outcome = r.get("outcome")
-        win = outcome == "tp"
-        if outcome == "tp":
-            tp += 1
-        elif outcome == "sl":
-            sl += 1
-        elif outcome == "expired":
-            expired += 1
-        elif outcome == "breakeven":
-            breakeven += 1
-
-        rmul = _num(r.get("r_multiple"))
-        if rmul is not None:
-            r_sum += rmul
-            r_net_sum += rmul - cost
-            r_count += 1
-
-        market = r.get("market") or "unknown"
-        m = by_market.setdefault(market, {"resolved": 0, "wins": 0})
-        m["resolved"] += 1
-        m["wins"] += 1 if win else 0
-
-        strategy = r.get("strategy")
-        if strategy:
-            s = by_strategy.setdefault(strategy, {"resolved": 0, "wins": 0, "markets": set()})
-            s["resolved"] += 1
-            s["wins"] += 1 if win else 0
-            if r.get("market"):
-                s["markets"].add(market)
-
-        created = _dt(r.get("created_at"))
-        if created and (first_live is None or created < first_live):
-            first_live = created
-        resolved = _dt(r.get("resolved_at"))
-        if resolved and (last_resolved is None or resolved > last_resolved):
-            last_resolved = resolved
-
-    resolved_count = len(live_rows)
     markets = [
         {
             "market": name,
@@ -178,24 +208,34 @@ def aggregate(rows: list[dict], *, cost: float | None = None,
             "losses": m["resolved"] - m["wins"],
             "win_rate": round(m["wins"] / m["resolved"] * 100, 1) if m["resolved"] else 0.0,
         }
-        for name, m in by_market.items()
+        for name, m in s["by_market"].items()
     ]
     markets.sort(key=lambda x: x["resolved"], reverse=True)
 
     strategies = [
         {
             "strategy": name,
-            "markets": sorted(s["markets"]),
-            "resolved": s["resolved"],
-            "wins": s["wins"],
-            "losses": s["resolved"] - s["wins"],
-            "win_rate": round(s["wins"] / s["resolved"] * 100, 1) if s["resolved"] else 0.0,
+            "markets": sorted(v["markets"]),
+            "resolved": v["resolved"],
+            "wins": v["wins"],
+            "losses": v["resolved"] - v["wins"],
+            "win_rate": round(v["wins"] / v["resolved"] * 100, 1) if v["resolved"] else 0.0,
         }
-        for name, s in by_strategy.items()
+        for name, v in s["by_strategy"].items()
     ]
     strategies.sort(key=lambda x: x["resolved"], reverse=True)
 
-    tp_sl = tp + sl
+    legacy_cohort = None
+    if legacy:
+        ls = _tally(legacy)
+        lt, ls_sl = ls["tp"], ls["sl"]
+        legacy_cohort = {
+            "resolved": len(legacy),
+            "win_rate_tp_sl": round(lt / (lt + ls_sl) * 100, 1) if lt + ls_sl else None,
+            "avg_r_gross": round(ls["r_sum"] / ls["r_count"], 3) if ls["r_count"] else 0.0,
+            "note": "Resolved before the look-ahead fix; excluded from the public headline.",
+        }
+
     return {
         "status": "live" if resolved_count >= gate else "collecting",
         "sample": {
@@ -209,18 +249,19 @@ def aggregate(rows: list[dict], *, cost: float | None = None,
         "losses": resolved_count - tp,
         "tp": tp,
         "sl": sl,
-        "expired": expired,
-        "breakeven": breakeven,
+        "expired": s["expired"],
+        "breakeven": s["breakeven"],
         "win_rate": round(tp / resolved_count * 100, 1) if resolved_count else 0.0,
         "win_rate_tp_sl": round(tp / tp_sl * 100, 1) if tp_sl else None,
-        "avg_r_gross": round(r_sum / r_count, 3) if r_count else 0.0,
+        "avg_r_gross": round(s["r_sum"] / r_count, 3) if r_count else 0.0,
         "avg_r_net": round(r_net_sum / r_count, 3) if r_count else 0.0,
         "cost_r": cost,
         "by_market": markets,
         "by_strategy": strategies,
         "excluded": excluded,
-        "first_live_at": first_live.isoformat() if first_live else None,
-        "last_resolved_at": last_resolved.isoformat() if last_resolved else None,
+        "legacy_cohort": legacy_cohort,
+        "first_live_at": s["first_live"].isoformat() if s["first_live"] else None,
+        "last_resolved_at": s["last_resolved"].isoformat() if s["last_resolved"] else None,
         "live_only": True,
     }
 
@@ -264,8 +305,10 @@ async def snapshot(db: SupabaseDB, *, recent_limit: int = 50) -> dict:
     """Build the public ledger payload. Reads only closed rows."""
     rows, schema = await _fetch_rows(db)
     cost = cost_r()
-    summary = aggregate(rows, cost=cost)
+    start = epoch()
+    summary = aggregate(rows, cost=cost, since=start)
     summary["schema"] = schema
+    summary["cohort_started_at"] = start.isoformat() if start else None
     summary["generated_at"] = now_iso()
     summary["resolution_version"] = RESOLUTION_VERSION
     summary["methodology"] = {
@@ -273,6 +316,7 @@ async def snapshot(db: SupabaseDB, *, recent_limit: int = 50) -> dict:
         "live_only": True,
         "sample_gate": min_resolved(),
         "cost_r": cost,
+        "cohort_started_at": start.isoformat() if start else None,
         "bar_interval": DEFAULT_BAR_INTERVAL,
         "fallback_interval": FALLBACK_BAR_INTERVAL,
         "same_bar_policy": "stop_first",
@@ -286,7 +330,18 @@ async def snapshot(db: SupabaseDB, *, recent_limit: int = 50) -> dict:
         ),
     }
 
-    live = [r for r in rows if r.get("data_source") == "live" and r.get("outcome")]
+    live = [
+        r for r in rows
+        if r.get("data_source") == "live"
+        and r.get("outcome")
+        and (
+            start is None
+            or (
+                (resolved := _dt(r.get("resolved_at"))) is not None
+                and resolved >= start
+            )
+        )
+    ]
     live.sort(key=lambda r: _dt(r.get("resolved_at")) or datetime.min.replace(tzinfo=timezone.utc),
               reverse=True)
     summary["recent"] = [_public_row(r, cost) for r in live[:recent_limit]]
@@ -294,8 +349,11 @@ async def snapshot(db: SupabaseDB, *, recent_limit: int = 50) -> dict:
 
 
 def _csv_cell(value) -> str:
+    # Numbers stay numeric (negative R values must not look like formulas).
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return repr(value) if isinstance(value, float) else str(value)
     text = "" if value is None else str(value)
-    # Spreadsheet formula injection guard.
+    # Spreadsheet formula injection guard for text cells only.
     if text and text[0] in ("=", "+", "-", "@", "\t", "\r"):
         return "'" + text
     return text

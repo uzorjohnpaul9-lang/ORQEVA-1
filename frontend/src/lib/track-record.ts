@@ -56,7 +56,14 @@ export interface TrackRecordSnapshot {
   cost_r: number;
   by_market: TrackRecordMarket[];
   by_strategy: TrackRecordStrategy[];
-  excluded: { simulated: number; unknown: number };
+  excluded: { simulated: number; unknown: number; legacy: number };
+  cohort_started_at?: string | null;
+  legacy_cohort?: {
+    resolved: number;
+    win_rate_tp_sl: number | null;
+    avg_r_gross: number;
+    note: string;
+  } | null;
   first_live_at: string | null;
   last_resolved_at: string | null;
   live_only: boolean;
@@ -84,7 +91,7 @@ export const EMPTY_SNAPSHOT: TrackRecordSnapshot = {
   cost_r: 0.05,
   by_market: [],
   by_strategy: [],
-  excluded: { simulated: 0, unknown: 0 },
+  excluded: { simulated: 0, unknown: 0, legacy: 0 },
   first_live_at: null,
   last_resolved_at: null,
   live_only: true,

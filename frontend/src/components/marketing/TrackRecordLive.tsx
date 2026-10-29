@@ -65,7 +65,7 @@ export function TrackRecordLive({ full = false }: { full?: boolean }) {
           className="inline-flex items-center gap-2 rounded-lg border border-white/[0.1] bg-white/[0.03] px-4 py-2.5 text-sm font-medium text-text-primary transition-colors hover:bg-white/[0.06]"
         >
           <Download className="h-4 w-4 text-green" aria-hidden="true" />
-          Download CSV
+          Download cohort CSV
         </a>
       </div>
 
@@ -81,6 +81,14 @@ export function TrackRecordLive({ full = false }: { full?: boolean }) {
             {s.sample.remaining} more resolved live signals before a headline win rate is published
           </p>
         </div>
+      )}
+
+      {s.excluded.legacy > 0 && !loading && !failed && (
+        <p className="mt-3 text-[10px] leading-5 text-text-muted">
+          {s.excluded.legacy.toLocaleString()} pre-fix results are excluded from this headline
+          and CSV because they were resolved with a look-ahead bug. They are reported separately
+          and never blended into the current cohort.
+        </p>
       )}
 
       {s.resolved > 0 && (
