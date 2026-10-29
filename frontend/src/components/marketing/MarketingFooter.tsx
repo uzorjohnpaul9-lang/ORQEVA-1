@@ -2,10 +2,11 @@ import Link from "next/link";
 import { SignalPulse } from "@/components/ui/SignalPulse";
 
 const productLinks = [
-  { label: "Platform", href: "/#platform" },
   { label: "How it works", href: "/#how" },
+  { label: "Track record", href: "/track-record" },
   { label: "Markets", href: "/#markets" },
   { label: "Pricing", href: "/#pricing" },
+  { label: "About", href: "/#about" },
 ];
 
 const accountLinks = [

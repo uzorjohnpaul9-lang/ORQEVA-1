@@ -6,9 +6,9 @@ import { ArrowUpRight, Menu, X } from "lucide-react";
 import { SignalPulse } from "@/components/ui/SignalPulse";
 
 const links = [
-  { label: "Start here", href: "#start-here" },
-  { label: "Platform", href: "#platform" },
   { label: "How it works", href: "#how" },
+  { label: "Confidence", href: "#confidence" },
+  { label: "Track record", href: "/track-record" },
   { label: "Markets", href: "#markets" },
   { label: "Pricing", href: "#pricing" },
   { label: "FAQ", href: "#faq" },

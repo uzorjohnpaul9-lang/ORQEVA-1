@@ -38,13 +38,13 @@ export const TIERS: TierInfo[] = [
     tier: "free",
     name: "Free",
     tagline: "Get started with forex signals.",
-    perks: ["Forex signals", "Paper auto-trade", "30 requests/min"],
+    perks: ["Forex signals", "Paper auto-trade", "API: 30 requests/min"],
   },
   {
     tier: "premium",
     name: "Premium",
     tagline: "Stocks & commodities, faster alerts.",
-    perks: ["Everything in Free", "Stock + commodity signals", "Stock auto-trade", "120 requests/min"],
+    perks: ["Everything in Free", "Stock + commodity signals", "Stock auto-trade", "API: 120 requests/min"],
   },
   {
     tier: "vip",
@@ -55,7 +55,7 @@ export const TIERS: TierInfo[] = [
       "Crypto + memecoin signals",
       "Crypto auto-trade",
       "Priority support",
-      "300 requests/min",
+      "API: 300 requests/min",
     ],
   },
 ];
@@ -77,7 +77,7 @@ export const FEATURE_MATRIX: FeatureRow[] = [
   { label: "Auto-trade markets", free: "Forex only", premium: "Forex + Stocks + Commodities", vip: "All markets" },
   { label: "Signal latency", free: "5 min", premium: "1 min", vip: "Real-time" },
   { label: "Telegram alerts", free: false, premium: true, vip: true },
-  { label: "API rate limit", free: "30/min (for reference)", premium: "120/min (for reference)", vip: "300/min (for reference)" },
+  { label: "API requests / min", free: "30", premium: "120", vip: "300" },
   { label: "Custom risk profiles", free: false, premium: true, vip: true },
   { label: "Priority support", free: false, premium: false, vip: true },
 ];
