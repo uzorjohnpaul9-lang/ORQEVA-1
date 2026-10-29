@@ -45,3 +45,33 @@ def check_rate_limit(user_id: str, tier: str = "free"):
             status_code=429,
             detail=f"Rate limit exceeded for {tier} tier. Try again later."
         )
+
+
+# Unauthenticated endpoints key off the caller's IP instead of a user id.
+_public_hits: dict[str, list[float]] = defaultdict(list)
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    cf = request.headers.get("cf-connecting-ip")
+    if cf:
+        return cf.strip()
+    return request.client.host if request.client else "unknown"
+
+
+def check_public_rate_limit(request: Request, *, bucket: str = "public",
+                            limit: int = 60, window: int = 60) -> None:
+    """Per-IP limiter for endpoints that have no authenticated user."""
+    now = time.time()
+    key = f"{bucket}:{_client_ip(request)}"
+    hits = _public_hits[key]
+    hits[:] = [t for t in hits if now - t < window]
+    if len(hits) >= limit:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many requests. Try again shortly.",
+            headers={"Retry-After": str(window)},
+        )
+    hits.append(now)

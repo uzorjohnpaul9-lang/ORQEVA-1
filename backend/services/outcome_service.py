@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -23,6 +24,19 @@ log = logging.getLogger("outcomes")
 
 DEFAULT_MAX_AGE_HOURS = 72  # signals older than this expire if untouched
 DEFAULT_LIMIT = 5000
+# Resolution provenance. Bump the version whenever the rules below change so a
+# public track record can explain why two cohorts were scored differently.
+RESOLUTION_VERSION = "2026-10-29.1"
+DEFAULT_BAR_INTERVAL = os.getenv("OUTCOME_BAR_INTERVAL", "1h")
+FALLBACK_BAR_INTERVAL = "1day"
+
+
+def cost_r() -> float:
+    """Assumed round-trip cost per trade, in R. Reported separately from gross."""
+    try:
+        return max(0.0, float(os.getenv("TRACK_RECORD_COST_R", "0.05")))
+    except ValueError:
+        return 0.05
 # Hard wall-clock budget for a single resolve pass. Bar fetches hit external
 # providers synchronously, so without a budget a slow feed could stall the
 # scheduler tick indefinitely. The pass stops cleanly and resumes next tick.
@@ -60,23 +74,35 @@ def _bar_time(bar: dict) -> datetime | None:
         return None
 
 
-def _bars_for(market: str, symbol: str, outputsize: int = 120) -> list[dict]:
-    """Daily OHLC bars (oldest-first) for a symbol. [] when unavailable."""
+def _bars_for(market: str, symbol: str, interval: str = "1day",
+              outputsize: int = 200) -> list[dict]:
+    """OHLC bars (oldest-first) for a symbol. [] when unavailable."""
     try:
         from backend.services import market_service
-        data = market_service.get_bars(market, symbol, "1day", outputsize)
+        data = market_service.get_bars(market, symbol, interval, outputsize)
         return data.get("bars") or []
     except Exception as e:  # pragma: no cover - defensive
         log.warning("bars fetch failed for %s %s: %s", market, symbol, str(e)[:120])
         return []
 
 
+def _bar_outputsize(max_age_hours: int, interval: str) -> int:
+    """Enough bars to cover the signal's whole life, capped by provider limits."""
+    per_hour = {"1h": 1, "30min": 2, "15min": 4, "5min": 12}.get(interval, 0)
+    if per_hour:
+        return max(48, min(200, int((max_age_hours + 24) * per_hour)))
+    return 200
+
+
 def evaluate(direction: str, entry, stop_loss, take_profit,
              bars: list[dict], created_at) -> tuple[str, float] | None:
     """Return (outcome, exit_price) if a level was touched, else None.
 
-    Bars are scanned oldest-first from the signal's creation time. When a single
-    bar's range spans both levels we conservatively assume the stop filled first.
+    Bars are scanned oldest-first from the signal's creation time. Only bars
+    that *open after* creation are eligible: the bar containing creation already
+    contains pre-signal price action, so including it would leak look-ahead
+    information into the track record. When a single bar's range spans both
+    levels we conservatively assume the stop filled first.
     """
     entry = _f(entry)
     sl = _f(stop_loss)
@@ -87,8 +113,12 @@ def evaluate(direction: str, entry, stop_loss, take_profit,
     created = _as_utc(parse_dt(created_at)) if created_at else None
     window = bars
     if created is not None:
-        after = [b for b in bars if (_as_utc(_bar_time(b)) or created) >= created]
-        window = after or bars[-1:]
+        window = [b for b in bars
+                  if _bar_time(b) is not None and _as_utc(_bar_time(b)) > created]
+        # No post-publication bars yet: wait for the next tick instead of
+        # scoring the pre-signal bar (which would be look-ahead).
+        if not window:
+            return None
 
     direction = (direction or "").lower()
     for b in window:
@@ -124,6 +154,52 @@ def r_multiple(direction: str, entry, stop_loss, exit_price) -> float | None:
     return round((entry - exit_price) / risk, 4)
 
 
+_PROVENANCE_KEYS = ("resolution_basis", "resolution_version")
+
+
+async def _persist_outcome(db: SupabaseDB, update: dict, signal_id: str) -> None:
+    """Write a resolution, tolerating a database that predates the migration.
+
+    The provenance columns are additive, but an un-migrated database rejects
+    unknown columns. Resolution must never stall because of that: retry once
+    without provenance so the ledger keeps closing signals.
+    """
+    try:
+        await db.update(SIGNALS, update, where={"id": signal_id})
+    except Exception as e:
+        if not any(k in update for k in _PROVENANCE_KEYS):
+            raise
+        log.warning("provenance columns unavailable; legacy update: %s", str(e)[:120])
+        legacy = {k: v for k, v in update.items() if k not in _PROVENANCE_KEYS}
+        await db.update(SIGNALS, legacy, where={"id": signal_id})
+
+
+async def _fetch_bars_with_fallback(market: str, symbol: str, max_age_hours: int,
+                                    timeout: int) -> tuple[list[dict], str]:
+    """Intraday bars first, daily only as a flagged fallback."""
+    interval = DEFAULT_BAR_INTERVAL
+    try:
+        bars = await asyncio.wait_for(
+            asyncio.to_thread(_bars_for, market, symbol, interval,
+                              _bar_outputsize(max_age_hours, interval)),
+            timeout=timeout,
+        )
+    except Exception:
+        bars = []
+    if bars:
+        return bars, interval
+
+    interval = FALLBACK_BAR_INTERVAL
+    try:
+        bars = await asyncio.wait_for(
+            asyncio.to_thread(_bars_for, market, symbol, interval, 120),
+            timeout=timeout,
+        )
+    except Exception:
+        bars = []
+    return bars, interval
+
+
 async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT_MAX_AGE_HOURS,
                                  limit: int = DEFAULT_LIMIT,
                                  budget_seconds: int = DEFAULT_BUDGET_SECONDS,
@@ -148,7 +224,7 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
 
     cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
     counts = {"tp": 0, "sl": 0, "expired": 0, "skipped": 0, "budget_exhausted": False}
-    bar_cache: dict[tuple[str, str], list[dict]] = {}
+    bar_cache: dict[tuple[str, str], tuple[list[dict], str]] = {}
     errors: list[str] = []
     slow: list[dict] = []
     deadline = time.monotonic() + budget_seconds
@@ -163,18 +239,13 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
             key = (market, symbol)
             if key not in bar_cache:
                 started = time.monotonic()
-                try:
-                    bar_cache[key] = await asyncio.wait_for(
-                        asyncio.to_thread(_bars_for, market, symbol),
-                        timeout=fetch_timeout,
-                    )
-                except Exception:
-                    # Stalled provider (incl. asyncio.TimeoutError): treat as no bars.
-                    bar_cache[key] = []
+                bar_cache[key] = await _fetch_bars_with_fallback(
+                    market, symbol, max_age_hours, fetch_timeout
+                )
                 elapsed = time.monotonic() - started
                 if elapsed >= 2.0:
                     slow.append({"symbol": symbol, "market": market, "seconds": round(elapsed, 2)})
-            bars = bar_cache[key]
+            bars, basis = bar_cache[key]
 
             direction = s.get("direction") or ""
             entry = s.get("entry_price")
@@ -193,6 +264,8 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
                     "exit_price": exit_price,
                     "resolved_at": now_iso(),
                     "r_multiple": r_multiple(direction, entry, sl, exit_price),
+                    "resolution_basis": basis,
+                    "resolution_version": RESOLUTION_VERSION,
                 }
             else:
                 created_dt = _as_utc(parse_dt(created)) if created else None
@@ -204,6 +277,8 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
                         "exit_price": last,
                         "resolved_at": now_iso(),
                         "r_multiple": r_multiple(direction, entry, sl, last) if last is not None else None,
+                        "resolution_basis": basis,
+                        "resolution_version": RESOLUTION_VERSION,
                     }
                     outcome = "expired"
 
@@ -211,7 +286,7 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
                 counts["skipped"] += 1
                 continue
 
-            await db.update(SIGNALS, update, where={"id": s["id"]})
+            await _persist_outcome(db, update, s["id"])
             counts[outcome] += 1
         except Exception as e:  # pragma: no cover - defensive
             errors.append(f"{s.get('symbol')}: {str(e)[:100]}")
@@ -346,9 +421,10 @@ async def forward_test_stats(db: SupabaseDB) -> dict:
             break
         offset += page_size
 
-    resolved = wins = 0
-    r_sum = 0.0
+    resolved = wins = tp = sl = expired = breakeven = 0
+    r_sum = r_net_sum = 0.0
     r_count = 0
+    cost = cost_r()
     by_market: dict[str, dict] = {}
     by_strategy: dict[str, dict] = {}
     excluded = {"simulated": 0, "unknown": 0}
@@ -366,9 +442,14 @@ async def forward_test_stats(db: SupabaseDB) -> dict:
 
         resolved += 1
         wins += 1 if win else 0
+        tp += 1 if outcome == "tp" else 0
+        sl += 1 if outcome == "sl" else 0
+        expired += 1 if outcome == "expired" else 0
+        breakeven += 1 if outcome == "breakeven" else 0
         rmul = _f(r.get("r_multiple"))
         if rmul is not None:
             r_sum += rmul
+            r_net_sum += rmul - cost
             r_count += 1
 
         market = r.get("market") or "unknown"
@@ -414,8 +495,16 @@ async def forward_test_stats(db: SupabaseDB) -> dict:
             "resolved": resolved,
             "wins": wins,
             "losses": resolved - wins,
+            "tp": tp,
+            "sl": sl,
+            "expired": expired,
+            "breakeven": breakeven,
             "win_rate": _rate(wins, resolved),
+            "win_rate_tp_sl": _rate(tp, tp + sl) if tp + sl else None,
             "avg_r": round(r_sum / r_count, 3) if r_count else 0.0,
+            "avg_r_gross": round(r_sum / r_count, 3) if r_count else 0.0,
+            "avg_r_net": round(r_net_sum / r_count, 3) if r_count else 0.0,
+            "cost_r": cost,
         },
         "by_market": markets,
         "by_strategy": strategies,
