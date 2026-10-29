@@ -75,7 +75,9 @@ def _apply_filters(q, where: dict[str, Any] | None):
             op = val["op"]
             if op not in _OPS:
                 raise ValueError(f"unsupported filter op {op!r}")
-            q = getattr(q, op)(col, val["value"])
+            # PostgREST's null test is exposed as ``is_`` on the query builder,
+            # not ``is`` (which would parse as a Python keyword).
+            q = q.is_(col, val["value"]) if op == "is" else getattr(q, op)(col, val["value"])
         elif isinstance(val, (list, tuple)):
             q = q.in_(col, list(val))
         elif val is None:

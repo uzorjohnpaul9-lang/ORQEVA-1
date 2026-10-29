@@ -3,7 +3,20 @@ import json
 
 import pytest
 
+from backend.db import supabase as supabase_db
 from backend.services import outcome_service, track_record_service
+
+
+def test_apply_filters_uses_is_method_for_null():
+    calls = {}
+
+    class Query:
+        def is_(self, col, value):
+            calls["is"] = (col, value)
+            return self
+
+    supabase_db._apply_filters(Query(), {"user_id": {"op": "is", "value": "null"}})
+    assert calls["is"] == ("user_id", "null")
 
 
 def _bar(time, o, h, l, c):
