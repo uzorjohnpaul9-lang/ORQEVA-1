@@ -51,6 +51,12 @@ async def meta(user: dict = Depends(get_current_user)):
             "display_name": a.display_name,
             "markets": a.markets,
             "needs_secret": a.needs_secret,
+            "key_label": a.key_label,
+            "key_hint": a.key_hint,
+            "secret_label": a.secret_label,
+            "needs_server": a.needs_server,
+            "server_label": a.server_label,
+            "server_hint": a.server_hint,
         }
         for a in supported()
     ]

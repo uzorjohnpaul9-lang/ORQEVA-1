@@ -133,13 +133,23 @@ async def _route_close(db: SupabaseDB, user: dict, trade: dict) -> str | None:
     if not conn:
         return f"live trade but no active {trade.get('exchange')} connection - close manually at broker"
     adapter = get_adapter(conn.get("exchange"))
-    opposite = "sell" if (trade.get("side") or "").lower() == "buy" else "buy"
     api_key, api_secret = creds(conn)
-    result = await asyncio.to_thread(
-        adapter.place_order, api_key, api_secret, conn.get("is_paper"),
-        symbol=trade.get("symbol"), side=opposite,
-        quantity=float(trade.get("quantity")), order_type="market", limit_price=None,
-    )
+    # MT5 hedging accounts would just open an offsetting position if we sent the
+    # opposite market order, leaving both legs live at the broker. Venues that
+    # support it close the actual position by ticket instead.
+    if getattr(adapter, "supports_position_close", False):
+        result = await asyncio.to_thread(
+            adapter.close_positions, api_key, api_secret, conn.get("is_paper"),
+            symbol=trade.get("symbol"), side=(trade.get("side") or "").lower(),
+            quantity=float(trade.get("quantity")),
+        )
+    else:
+        opposite = "sell" if (trade.get("side") or "").lower() == "buy" else "buy"
+        result = await asyncio.to_thread(
+            adapter.place_order, api_key, api_secret, conn.get("is_paper"),
+            symbol=trade.get("symbol"), side=opposite,
+            quantity=float(trade.get("quantity")), order_type="market", limit_price=None,
+        )
     if not result.get("ok"):
         return f"broker rejected close order: {result.get('detail')}"
     return None

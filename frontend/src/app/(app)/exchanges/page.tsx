@@ -27,6 +27,12 @@ interface AdapterMeta {
   display_name: string;
   markets: string[];
   needs_secret: boolean;
+  key_label?: string;
+  key_hint?: string | null;
+  secret_label?: string;
+  needs_server?: boolean;
+  server_label?: string;
+  server_hint?: string | null;
 }
 
 export default function ExchangesPage() {
@@ -41,6 +47,7 @@ export default function ExchangesPage() {
   const [exchange, setExchange] = useState("alpaca");
   const [apiKey, setApiKey] = useState("");
   const [apiSecret, setApiSecret] = useState("");
+  const [server, setServer] = useState("");
   const [isPaper, setIsPaper] = useState(true);
   const [busy, setBusy] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -75,15 +82,18 @@ export default function ExchangesPage() {
     setError(null);
     setNotice(null);
     try {
+      const selected = adapters.find((a) => a.name === exchange);
+      const credential = selected?.needs_server ? `${apiKey}|${server}` : apiKey;
       await api("/api/exchanges/connect", {
         method: "POST",
         token,
-        body: JSON.stringify({ exchange, api_key: apiKey, api_secret: apiSecret, is_paper: isPaper }),
+        body: JSON.stringify({ exchange, api_key: credential, api_secret: apiSecret, is_paper: isPaper }),
       });
       setNotice("Connected. Run Test to validate credentials.");
       setShowForm(false);
       setApiKey("");
       setApiSecret("");
+      setServer("");
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Connect failed");
@@ -120,6 +130,7 @@ export default function ExchangesPage() {
   }
 
   const connectedExchanges = new Set((conns ?? []).map((c) => c.exchange));
+  const selected = adapters.find((a) => a.name === exchange);
 
   return (
     <div className="space-y-6">
@@ -142,22 +153,34 @@ export default function ExchangesPage() {
             <Select
               label="Exchange"
               value={exchange}
-              onChange={(e) => setExchange(e.target.value)}
+              onChange={(e) => { setExchange(e.target.value); setServer(""); }}
               options={adapters
                 .filter((a) => !connectedExchanges.has(a.name))
                 .map((a) => ({ value: a.name, label: `${a.display_name} (${a.markets.join("/")})` }))}
               required
             />
             <Input
-              label="API Key"
+              label={selected?.key_label ?? "API Key"}
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
-              minLength={10}
+              minLength={selected?.needs_server ? 1 : 10}
               required
             />
-            {adapters.find((a) => a.name === exchange)?.needs_secret !== false && (
+            {selected?.key_hint && <p className="text-xs text-text-muted -mt-2">{selected.key_hint}</p>}
+            {selected?.needs_server && (
+              <>
+                <Input
+                  label={selected.server_label ?? "Server"}
+                  value={server}
+                  onChange={(e) => setServer(e.target.value)}
+                  required
+                />
+                {selected.server_hint && <p className="text-xs text-text-muted -mt-2">{selected.server_hint}</p>}
+              </>
+            )}
+            {selected?.needs_secret !== false && (
               <Input
-                label="API Secret"
+                label={selected?.secret_label ?? "API Secret"}
                 type="password"
                 value={apiSecret}
                 onChange={(e) => setApiSecret(e.target.value)}
@@ -168,6 +191,11 @@ export default function ExchangesPage() {
               <input type="checkbox" checked={isPaper} onChange={(e) => setIsPaper(e.target.checked)} />
               Paper trading mode
             </label>
+            {selected?.needs_server && (
+              <p className="text-xs text-text-muted -mt-2">
+                Exness: keep this on for a demo MT5 account; turn it off to connect a real one.
+              </p>
+            )}
             <div className="flex gap-2">
               <Button type="submit" disabled={busy} className="flex-1">
                 {busy ? "Connecting..." : "Save Connection"}

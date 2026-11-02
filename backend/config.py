@@ -103,6 +103,13 @@ class Settings(BaseSettings):
     # Where support tickets are announced (optional). Empty = no email notify.
     SUPPORT_EMAIL: str = os.getenv("SUPPORT_EMAIL", "")
 
+    # Exness live routing: the backend calls the self-hosted MT5 bridge (bridge/).
+    # Empty URL/token = the Exness adapter reports "not configured" instead of
+    # silently failing. Server is only a fallback for bare-login credentials.
+    EXNESS_BRIDGE_URL: str = os.getenv("EXNESS_BRIDGE_URL", "")
+    EXNESS_BRIDGE_TOKEN: str = os.getenv("EXNESS_BRIDGE_TOKEN", "")
+    EXNESS_MT5_SERVER: str = os.getenv("EXNESS_MT5_SERVER", "")
+
     # Error tracking (optional). Empty = Sentry disabled.
     SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")
     # Force Sentry on even under pytest (1/true/yes/on).

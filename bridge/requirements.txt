@@ -1,0 +1,6 @@
+# Windows-only bridge dependencies (install on the MT5 VPS, not on Railway).
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.0.0
+# MetaTrader5 ships Windows wheels only and talks to a local MT5 terminal.
+MetaTrader5>=5.0.45

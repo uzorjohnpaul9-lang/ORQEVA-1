@@ -14,6 +14,7 @@ from backend.exchanges.binance_us_adapter import BinanceUSAdapter
 from backend.exchanges.kraken_adapter import KrakenAdapter
 from backend.exchanges.oanda_adapter import OandaAdapter
 from backend.exchanges.coinbase_adapter import CoinbaseAdapter
+from backend.exchanges.exness_adapter import ExnessAdapter
 
 _REGISTRY: dict[str, BaseAdapter] = {}
 
@@ -22,7 +23,8 @@ def register(adapter: BaseAdapter) -> None:
     _REGISTRY[adapter.name] = adapter
 
 
-for _cls in (AlpacaAdapter, BinanceUSAdapter, KrakenAdapter, OandaAdapter, CoinbaseAdapter):
+for _cls in (AlpacaAdapter, BinanceUSAdapter, KrakenAdapter, OandaAdapter,
+             CoinbaseAdapter, ExnessAdapter):
     register(_cls())
 
 

@@ -9,6 +9,15 @@ class BaseAdapter(ABC):
     markets: list[str] = []
     needs_secret: bool = True
     supports_order_routing: bool = False
+    supports_position_close: bool = False
+
+    # Labels/hints the dashboard renders for this venue's connect form.
+    key_label: str = "API Key"
+    key_hint: str | None = None
+    secret_label: str = "API Secret"
+    needs_server: bool = False
+    server_label: str = "Server"
+    server_hint: str | None = None
 
     def validate(self, api_key: str, api_secret: str, is_paper: bool) -> dict:
         """Credential check. Returns {ok: bool, detail: str}."""
