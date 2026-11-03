@@ -196,6 +196,11 @@ export default function ExchangesPage() {
                 Exness: keep this on for a demo MT5 account; turn it off to connect a real one.
               </p>
             )}
+            {selected?.name === "bybit" && (
+              <p className="text-xs text-text-muted -mt-2">
+                Bybit: use a Demo Trading API key with Paper mode on; use a live key with it off.
+              </p>
+            )}
             <div className="flex gap-2">
               <Button type="submit" disabled={busy} className="flex-1">
                 {busy ? "Connecting..." : "Save Connection"}

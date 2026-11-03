@@ -27,6 +27,7 @@ from backend.services import telegram_service
 from backend.services.order_executor import (
     active_connection,
     broker_account_value,
+    is_demo_ledger,
     live_price,
     place_and_record,
 )
@@ -287,8 +288,9 @@ async def execute_for_signal(db: SupabaseDB, signal: dict, settings_rows: list[d
                 await _log(db, user_id=s["user_id"], signal=signal, status="skipped",
                            route=route, reason="could not read live account equity")
                 continue
+            demo_ledger = is_demo_ledger(route, conn)
             status = await risk_service.get_risk_status(
-                db, s["user_id"], is_demo=(route != "live"), account_value=broker_value,
+                db, s["user_id"], is_demo=demo_ledger, account_value=broker_value,
             )
             account_value = float(status.get("account_value") or 0)
             pos_size_pct = status.get("limits", {}).get("max_position_size_pct", 10.0)
@@ -316,11 +318,16 @@ async def execute_for_signal(db: SupabaseDB, signal: dict, settings_rows: list[d
                 continue
 
             # Central engine (cross-market kill switch, drawdown, correlation).
-            decision = await asyncio.to_thread(
-                central.approve_trade, market, signal.get("symbol"),
-                side.upper(), qty, price, account_value
-            )
-            if not getattr(decision, "allowed", False):
+            # Demo/paper trades must not touch the live central ledger, otherwise
+            # simulated P&L or positions could trip the live kill switch.
+            if demo_ledger:
+                decision = None
+            else:
+                decision = await asyncio.to_thread(
+                    central.approve_trade, market, signal.get("symbol"),
+                    side.upper(), qty, price, account_value
+                )
+            if decision is not None and not getattr(decision, "allowed", False):
                 await _log(db, user_id=s["user_id"], signal=signal, status="skipped",
                            quantity=qty, entry_price=float(price), route=route,
                            reason=getattr(decision, "reason", "central risk gate"))
@@ -351,15 +358,17 @@ async def execute_for_signal(db: SupabaseDB, signal: dict, settings_rows: list[d
 
 async def _notify(db: SupabaseDB, user: dict, signal: dict, result: dict, route: str) -> None:
     desc = f"{signal.get('symbol')} {signal.get('direction')} @ {result.get('entry_price')}"
+    ledger = "demo" if result.get("is_demo") else "live"
     try:
         await notif_service.create(
             db, user["id"], "auto_trade",
             f"Auto order placed: {desc}",
-            f"{route} route · {signal.get('strategy')} · via {result.get('venue') or 'paper'}",
+            f"{route} route ({ledger} ledger) · {signal.get('strategy')} · "
+            f"via {result.get('venue') or 'paper'}",
         )
         await telegram_service.notify_user(
             db, user, "signals",
-            f"\u2699\ufe0f <b>AI order placed</b>\n{desc}\nRoute: {route}",
+            f"\u2699\ufe0f <b>AI order placed</b>\n{desc}\nRoute: {route} ({ledger})",
         )
     except Exception:
         pass

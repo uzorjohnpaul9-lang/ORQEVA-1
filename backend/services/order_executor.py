@@ -150,6 +150,11 @@ def _already_closed(detail: str | None) -> bool:
     return "no open" in text or "no closable volume" in text
 
 
+def is_demo_ledger(route: str, conn: dict | None) -> bool:
+    """True for the virtual/demo ledger: paper route or a demo broker connection."""
+    return route != "live" or bool(conn and conn.get("is_paper"))
+
+
 async def close_signal_trades(db: SupabaseDB, signal_id: str, exit_price: float | None,
                               outcome: str) -> dict:
     """Close open auto-trade positions whose signal has resolved.
@@ -194,13 +199,14 @@ async def close_signal_trades(db: SupabaseDB, signal_id: str, exit_price: float 
         if not closed_trade:
             continue
         closed += 1
-        try:
-            await asyncio.to_thread(
-                central.close_position, closed_trade.get("market"),
-                closed_trade.get("symbol"), float(price),
-            )
-        except Exception:
-            pass
+        if not closed_trade.get("is_demo"):
+            try:
+                await asyncio.to_thread(
+                    central.close_position, closed_trade.get("market"),
+                    closed_trade.get("symbol"), float(price),
+                )
+            except Exception:
+                pass
 
     return {"closed": closed, "failed": failed[:10]}
 
@@ -282,11 +288,12 @@ async def place_and_record(db: SupabaseDB, *, user: dict, symbol: str, market: s
             )
 
     fill_price = filled_price or float(price)
+    is_demo = is_demo_ledger(route, conn)
     trade = await trade_service.save_trade(
         db, user_id=user["id"], symbol=symbol.upper(), market=market,
         side=side, quantity=quantity, entry_price=float(fill_price),
         strategy=strategy, exchange=venue, broker_order_id=broker_order_id,
-        is_demo=(route != "live"),
+        is_demo=is_demo,
     )
     # Only claim protection the broker actually accepted. Recording an SL/TP that
     # was never placed shows a stop in the dashboard that does not exist.
@@ -297,14 +304,15 @@ async def place_and_record(db: SupabaseDB, *, user: dict, symbol: str, market: s
             await db.update(TRADES, fields, where={"id": trade["id"]})
     if signal_id:
         await db.update(TRADES, {"signal_id": signal_id}, where={"id": trade["id"]})
-    await asyncio.to_thread(
-        central.open_position, market, trade.get("symbol"),
-        side.upper(), quantity, float(fill_price),
-    )
+    if not is_demo:
+        await asyncio.to_thread(
+            central.open_position, market, trade.get("symbol"),
+            side.upper(), quantity, float(fill_price),
+        )
 
     response = {"status": "filled", "trade_id": trade["id"], "symbol": trade.get("symbol"),
                 "side": trade.get("side"), "quantity": trade.get("quantity"),
-                "entry_price": trade.get("entry_price"),
+                "entry_price": trade.get("entry_price"), "is_demo": is_demo,
                 "route": route, "venue": venue, "broker_order_id": broker_order_id}
     if protective_error:
         warning = (f"Position opened on {venue} but the stop-loss could not be placed: "
