@@ -9,6 +9,7 @@ route (live needs a validated connection, never silent paper fallback) ->
 user risk pre-check -> central engine gate -> risk-per-trade sizing -> place -> ledger.
 """
 import asyncio
+import math
 import os
 import time
 
@@ -167,7 +168,12 @@ def _size_trade(signal: dict, account_value: float, risk_pct: float, max_pos_pct
     else:
         qty = max_notional / price
     qty = min(qty, max_notional / price)
-    return round(max(qty, 0.0), 6) if qty > 0 else None
+    if qty <= 0:
+        return None
+    # Floor, don't round: rounding up can push the notional a hair over the
+    # cap and trip the position-size gate for high-priced symbols.
+    qty = math.floor(qty * 1_000_000) / 1_000_000
+    return qty if qty > 0 else None
 
 
 async def _log(db: SupabaseDB, *, user_id: str, signal: dict, status: str,

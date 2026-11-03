@@ -13,6 +13,10 @@ logger = logging.getLogger(__name__)
 
 DAILY_STATE_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "central_risk_state.json")
 
+# Percentage caps are floats: sizing at exactly the cap can land a hair above
+# it and trip a strict ">" comparison. Match the tolerance used by risk_service.
+_PCT_EPSILON = 1e-6
+
 
 class TradeDecision:
     """Result of a risk check."""
@@ -122,7 +126,7 @@ class CentralRiskEngine:
                                "reason": "Account value is exhausted - no further exposure allowed"})
                 return self._decision_from_checks(checks)
             exposure_pct = new_exposure / account_value
-            if exposure_pct > self.max_total_exposure:
+            if exposure_pct > self.max_total_exposure + _PCT_EPSILON:
                 checks.append({"name": "total_exposure", "allowed": False,
                                "reason": f"Total exposure {exposure_pct:.1%} exceeds {self.max_total_exposure:.0%}"})
                 return self._decision_from_checks(checks)
@@ -136,7 +140,7 @@ class CentralRiskEngine:
             # 7. Position size check (per-market)
             pos_size_pct = (quantity * price) / account_value
             max_pos = self._config.get("max_position_size", {}).get(market, 0.10)
-            if pos_size_pct > max_pos:
+            if pos_size_pct > max_pos + _PCT_EPSILON:
                 checks.append({"name": "position_size", "allowed": False,
                                "reason": f"Position size {pos_size_pct:.1%} exceeds {max_pos:.0%} limit"})
                 return self._decision_from_checks(checks)

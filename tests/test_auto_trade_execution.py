@@ -80,6 +80,40 @@ class TestSizing(unittest.TestCase):
         qty = _size_trade({"entry_price": 50.0}, 100000.0, 1.0, 10.0, 50.0)
         self.assertAlmostEqual(qty, 200.0, places=4)
 
+    def test_high_priced_symbol_never_exceeds_position_cap(self):
+        # XAU-sized notional: rounding 6dp upward used to push the gate over.
+        qty = _size_trade({"entry_price": 3923.5, "stop_loss": 4001.97},
+                          100000.0, 1.2, 10.0, 3923.5)
+        notional = qty * 3923.5
+        self.assertLessEqual(notional, 10000.0 + 1e-9)
+        self.assertLessEqual(notional / 100000.0 * 100, 10.0 + 1e-9)
+
+
+class TestCentralRiskBoundary(unittest.TestCase):
+    def _engine(self):
+        from risk.central_risk import CentralRiskEngine
+        engine = CentralRiskEngine()
+        engine.kill_switch_active = False
+        engine.daily_pnl = 0.0
+        engine.peak_capital = 100009.95
+        engine.current_capital = 100009.95
+        engine.positions = {}
+        engine.daily_trade_count = {"stock": 0, "forex": 0, "crypto": 0, "commodity": 0}
+        return engine
+
+    def test_central_gate_allows_exact_position_cap(self):
+        decision = self._engine().approve_trade(
+            "forex", "USD/CHF", "SELL", 12210.034429, 0.81908, 100009.95
+        )
+        self.assertTrue(decision.allowed, decision.reason)
+
+    def test_central_gate_still_rejects_oversized_position(self):
+        decision = self._engine().approve_trade(
+            "forex", "USD/CHF", "SELL", 12211.0, 0.81908, 100009.95
+        )
+        self.assertFalse(decision.allowed)
+        self.assertIn("Position size", decision.reason)
+
 
 class TestLogThrottle(unittest.TestCase):
     def setUp(self):
