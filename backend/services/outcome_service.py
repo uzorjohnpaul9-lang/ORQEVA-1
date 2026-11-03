@@ -287,6 +287,16 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
                 continue
 
             await _persist_outcome(db, update, s["id"])
+            try:
+                # Close any auto-trade position opened from this signal. A
+                # broker-side TP/SL usually got there first; expired signals do
+                # not, so this is what stops positions lingering after expiry.
+                from backend.services import order_executor
+                await order_executor.close_signal_trades(
+                    db, s["id"], update.get("exit_price"), outcome,
+                )
+            except Exception as e:  # pragma: no cover - defensive
+                log.warning("signal trade close failed for %s: %s", s.get("symbol"), str(e)[:120])
             counts[outcome] += 1
         except Exception as e:  # pragma: no cover - defensive
             errors.append(f"{s.get('symbol')}: {str(e)[:100]}")

@@ -9,6 +9,8 @@ route (live needs a validated connection, never silent paper fallback) ->
 user risk pre-check -> central engine gate -> risk-per-trade sizing -> place -> ledger.
 """
 import asyncio
+import os
+import time
 
 from backend.db.models import (
     USERS,
@@ -21,7 +23,12 @@ from backend.db.schemas import AutoTradeSettings
 from backend.services import notification_service as notif_service
 from backend.services import risk_service
 from backend.services import telegram_service
-from backend.services.order_executor import active_connection, live_price, place_and_record
+from backend.services.order_executor import (
+    active_connection,
+    broker_account_value,
+    live_price,
+    place_and_record,
+)
 from backend.api.risk import central
 
 # Market -> minimum tier that may auto-trade (mirrors engine_service._ENGINE_SPECS).
@@ -32,6 +39,34 @@ _TIER_RANK = {"free": 0, "premium": 1, "vip": 2}
 _LIVE_MIN_TIER_RANK = 1
 
 MARKETS = ["stock", "forex", "crypto", "commodity"]
+
+# Rejection/error spam: a scan can emit thousands of rows with the same reason.
+# Log the first occurrence per (user, status, reason) per window and suppress
+# duplicates; the window is long enough to cover many scan ticks.
+LOG_THROTTLE_SECONDS = float(os.getenv("AUTO_TRADE_LOG_THROTTLE_SECONDS", "900"))
+_log_throttle: dict[tuple[str, str, str], float] = {}
+
+
+def _log_once(user_id: str, status: str, reason: str | None) -> bool:
+    if status == "placed":
+        return True
+    now = time.monotonic()
+    key = (user_id, status, (reason or "")[:160])
+    last = _log_throttle.get(key)
+    if last is not None and now - last < LOG_THROTTLE_SECONDS:
+        return False
+    _log_throttle[key] = now
+    if len(_log_throttle) > 5000:
+        cutoff = now - LOG_THROTTLE_SECONDS
+        for k, ts in list(_log_throttle.items()):
+            if ts < cutoff:
+                del _log_throttle[k]
+    return True
+
+
+def reset_log_throttle() -> None:
+    """Clear the in-process throttle (tests / manual re-runs)."""
+    _log_throttle.clear()
 
 
 async def get_or_create_settings(db: SupabaseDB, user_id: str) -> dict:
@@ -104,12 +139,16 @@ def _tier_allows(tier: str | None, market: str) -> bool:
 
 
 def _size_trade(signal: dict, account_value: float, risk_pct: float, max_pos_pct: float,
-                price: float | None = None) -> float | None:
+                price: float | None = None,
+                remaining_exposure: float | None = None) -> float | None:
     """Risk-per-trade sizing with a notional cap. Returns quantity or None.
 
     ``price`` is passed in by the caller because it may have been resolved from a
     live quote; re-reading ``signal["entry_price"]`` here would return None for any
     signal that lacked one and silently skip the trade.
+
+    ``remaining_exposure`` caps the new notional by the aggregate exposure budget
+    left for the user, so sizing can never produce an order the risk gate rejects.
     """
     resolved = price if price else signal.get("entry_price")
     if not resolved or float(resolved) <= 0:
@@ -118,12 +157,16 @@ def _size_trade(signal: dict, account_value: float, risk_pct: float, max_pos_pct
     risk_amount = account_value * (float(risk_pct or 1.0) / 100.0)
     stop = signal.get("stop_loss")
     distance = abs(price - float(stop)) if stop and float(stop) > 0 else 0.0
+    max_notional = account_value * (float(max_pos_pct or 10.0) / 100.0)
+    if remaining_exposure is not None:
+        max_notional = min(max_notional, max(float(remaining_exposure), 0.0))
+    if max_notional <= 0:
+        return None
     if distance > 0:
         qty = risk_amount / distance
     else:
-        qty = account_value * (float(max_pos_pct or 10.0) / 100.0) / price
-    max_notional_qty = account_value * (float(max_pos_pct or 10.0) / 100.0) / price
-    qty = min(qty, max_notional_qty)
+        qty = max_notional / price
+    qty = min(qty, max_notional / price)
     return round(max(qty, 0.0), 6) if qty > 0 else None
 
 
@@ -131,6 +174,8 @@ async def _log(db: SupabaseDB, *, user_id: str, signal: dict, status: str,
                quantity: float | None = None, entry_price: float | None = None,
                route: str = "paper", reason: str | None = None,
                trade_id: str | None = None) -> None:
+    if not _log_once(user_id, status, reason):
+        return
     try:
         await db.insert(AUTO_TRADE_LOG, {
             "id": gen_uuid(),
@@ -228,12 +273,28 @@ async def execute_for_signal(db: SupabaseDB, signal: dict, settings_rows: list[d
                                route=route, reason="signal take-profit is on the wrong side of the entry price")
                     continue
 
-            # Size from risk-per-trade %, capped by the user's max position %.
-            # Scope the balance to the ledger this order routes to.
-            status = await risk_service.get_risk_status(db, s["user_id"], is_demo=(route != "live"))
+            # Size from risk-per-trade %, capped by the user's max position % AND
+            # by the remaining aggregate exposure budget. Live routing uses the
+            # venue's real equity, never the fixed platform baseline.
+            broker_value = await broker_account_value(conn) if conn is not None else None
+            if conn is not None and broker_value is None:
+                await _log(db, user_id=s["user_id"], signal=signal, status="skipped",
+                           route=route, reason="could not read live account equity")
+                continue
+            status = await risk_service.get_risk_status(
+                db, s["user_id"], is_demo=(route != "live"), account_value=broker_value,
+            )
             account_value = float(status.get("account_value") or 0)
             pos_size_pct = status.get("limits", {}).get("max_position_size_pct", 10.0)
-            qty = _size_trade(signal, account_value, s.get("per_trade_risk_pct"), pos_size_pct, price)
+            exposure_budget = risk_service.remaining_exposure(status)
+            if exposure_budget <= 0:
+                await _log(db, user_id=s["user_id"], signal=signal, status="skipped",
+                           route=route, reason="aggregate exposure limit reached")
+                continue
+            qty = _size_trade(
+                signal, account_value, s.get("per_trade_risk_pct"), pos_size_pct, price,
+                remaining_exposure=exposure_budget,
+            )
             if not qty:
                 await _log(db, user_id=s["user_id"], signal=signal, status="skipped",
                            route=route, reason="could not size position from signal")

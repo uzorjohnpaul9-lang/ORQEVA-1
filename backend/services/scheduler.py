@@ -135,6 +135,13 @@ async def run_scheduled_scan() -> dict:
         except Exception as e:  # pragma: no cover - defensive
             resolved = {"error": str(e)[:150]}
         try:
+            # Retry any signal-linked position that could not be closed at
+            # resolution time (e.g. the broker was unreachable).
+            from backend.services import order_executor
+            reconciled = await order_executor.reconcile_resolved_trades(db)
+        except Exception:  # pragma: no cover - defensive
+            reconciled = {}
+        try:
             digest = await maybe_send_weekly_digests(db)
         except Exception:  # pragma: no cover - defensive
             digest = 0
@@ -170,6 +177,7 @@ async def run_scheduled_scan() -> dict:
         summary["dropped_simulated"] = out.get("dropped_simulated", 0)
         summary["dropped_invalid"] = out.get("dropped_invalid", 0)
         summary["resolved"] = resolved
+        summary["trades_reconciled"] = reconciled
         summary["event_alerts"] = alerts
         summary["deferred_alerts"] = deferred
         summary["weekly_digest"] = digest

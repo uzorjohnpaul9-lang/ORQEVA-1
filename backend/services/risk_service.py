@@ -4,6 +4,20 @@ from backend.db.models import TRADES, RISK_SETTINGS, gen_uuid
 from backend.db.supabase import SupabaseDB, now_iso, parse_dt
 from backend.services import trade_service
 
+# Cap aggregate notional at 80% of account value. Sizing and the gate share this
+# constant so the auto-trader can never size a trade the gate then rejects.
+MAX_TOTAL_EXPOSURE_PCT = 80.0
+# Percentages are floats; 10.0% of a balance can land at 10.0000000001 and trip a
+# strict ">" comparison. Allow a hair of tolerance on the cap comparisons.
+_PCT_EPSILON = 1e-6
+
+
+def remaining_exposure(status: dict) -> float:
+    """Notional still available under the aggregate exposure cap."""
+    account_value = float(status.get("account_value") or 0)
+    limit = float(status.get("limits", {}).get("max_total_exposure_pct", MAX_TOTAL_EXPOSURE_PCT))
+    return max(account_value * (limit / 100.0) - float(status.get("total_exposure") or 0), 0.0)
+
 
 async def get_or_create_settings(db: SupabaseDB, user_id: str) -> dict:
     settings = await db.fetch_one(RISK_SETTINGS, {"user_id": user_id})
@@ -34,11 +48,14 @@ def _utc_day_start() -> datetime:
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-async def get_risk_status(db: SupabaseDB, user_id: str, is_demo: bool | None = None) -> dict:
+async def get_risk_status(db: SupabaseDB, user_id: str, is_demo: bool | None = None,
+                          account_value: float | None = None) -> dict:
     """User-level risk metrics computed from their trades + settings.
 
     ``is_demo`` scopes the metrics to one ledger: True = virtual/demo account,
-    False = live account, None = both (legacy, unscoped).
+    False = live account, None = both (legacy, unscoped). ``account_value``
+    overrides the platform baseline with the venue's real equity for live
+    routing, so size/exposure caps are measured against the actual account.
     """
     settings = await get_or_create_settings(db, user_id)
 
@@ -49,7 +66,10 @@ async def get_risk_status(db: SupabaseDB, user_id: str, is_demo: bool | None = N
         TRADES, where={**base, "status": "closed", **ledger}, columns="id,pnl,closed_at"
     )
     realized = sum(float(r.get("pnl") or 0) for r in closed)
-    account_value = await trade_service.get_starting_balance(db, user_id, bool(is_demo)) + realized
+    if account_value is None:
+        account_value = await trade_service.get_starting_balance(db, user_id, bool(is_demo)) + realized
+    else:
+        account_value = float(account_value)
 
     day_start = _utc_day_start()
     today_closed = [r for r in closed if parse_dt(r.get("closed_at")) and parse_dt(r["closed_at"]) >= day_start]
@@ -127,6 +147,7 @@ async def get_risk_status(db: SupabaseDB, user_id: str, is_demo: bool | None = N
             "max_positions": max_positions,
             "max_position_size_pct": settings.get("max_position_size_pct", 10.0),
             "max_daily_trades": max_daily_trades,
+            "max_total_exposure_pct": MAX_TOTAL_EXPOSURE_PCT,
         },
     }
 
@@ -167,15 +188,17 @@ async def pre_trade_check(db: SupabaseDB, user_id: str, market: str,
         return False, "Account value is exhausted - close positions before trading again"
 
     notional = quantity * price
+    max_position_pct = float(status["limits"]["max_position_size_pct"])
     pos_size_pct = notional / account_value * 100
-    if pos_size_pct > status["limits"]["max_position_size_pct"]:
+    if pos_size_pct > max_position_pct + _PCT_EPSILON:
         return False, (
             f"Position size {pos_size_pct:.1f}% exceeds "
             f"{status['limits']['max_position_size_pct']}% limit"
         )
 
+    max_exposure_pct = float(status["limits"].get("max_total_exposure_pct", MAX_TOTAL_EXPOSURE_PCT))
     projected_exposure_pct = (status["total_exposure"] + notional) / account_value * 100
-    if projected_exposure_pct > 80:
+    if projected_exposure_pct > max_exposure_pct + _PCT_EPSILON:
         return False, f"Total exposure would reach {projected_exposure_pct:.0f}% of account"
 
     return True, "OK"

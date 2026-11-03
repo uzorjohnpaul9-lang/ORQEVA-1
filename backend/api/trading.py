@@ -10,9 +10,14 @@ from backend.db.models import IDEMPOTENCY_RECORDS, TRADES, gen_uuid
 from backend.db.supabase import SupabaseDB
 from backend.auth import get_current_user
 from backend.services import trade_service, analytics_service, risk_service, telegram_service
-from backend.exchanges import get_adapter
 from backend.services import notification_service as notif_service
-from backend.services.order_executor import active_connection, creds, live_price, place_and_record
+from backend.services.order_executor import (
+    active_connection,
+    broker_account_value,
+    live_price,
+    place_and_record,
+    route_close,
+)
 from backend.api.risk import central
 from backend.middleware.rate_limiter import check_rate_limit
 
@@ -125,36 +130,6 @@ def _validate_protective_levels(side: str, entry: float,
             )
 
 
-async def _route_close(db: SupabaseDB, user: dict, trade: dict) -> str | None:
-    """Close a live-routed position at its broker. Returns error detail or None."""
-    if trade.get("exchange") in (None, "", "paper"):
-        return None
-    conn = await active_connection(db, user["id"], trade.get("market"))
-    if not conn:
-        return f"live trade but no active {trade.get('exchange')} connection - close manually at broker"
-    adapter = get_adapter(conn.get("exchange"))
-    api_key, api_secret = creds(conn)
-    # MT5 hedging accounts would just open an offsetting position if we sent the
-    # opposite market order, leaving both legs live at the broker. Venues that
-    # support it close the actual position by ticket instead.
-    if getattr(adapter, "supports_position_close", False):
-        result = await asyncio.to_thread(
-            adapter.close_positions, api_key, api_secret, conn.get("is_paper"),
-            symbol=trade.get("symbol"), side=(trade.get("side") or "").lower(),
-            quantity=float(trade.get("quantity")),
-        )
-    else:
-        opposite = "sell" if (trade.get("side") or "").lower() == "buy" else "buy"
-        result = await asyncio.to_thread(
-            adapter.place_order, api_key, api_secret, conn.get("is_paper"),
-            symbol=trade.get("symbol"), side=opposite,
-            quantity=float(trade.get("quantity")), order_type="market", limit_price=None,
-        )
-    if not result.get("ok"):
-        return f"broker rejected close order: {result.get('detail')}"
-    return None
-
-
 @router.post("/orders")
 async def place_order(
     body: OrderRequest,
@@ -224,8 +199,17 @@ async def _place_order_inner(db: SupabaseDB, user: dict, body: OrderRequest) -> 
     _validate_protective_levels(body.side, price, body.stop_loss, body.take_profit)
 
     # Risk gate: kill switch, max positions, daily loss, position size, exposure.
-    # Paper orders are the demo ledger and are gated on the demo balance.
-    risk_status = await risk_service.get_risk_status(db, user["id"], is_demo=(body.route != "live"))
+    # Paper orders are the demo ledger and are gated on the demo balance. Live
+    # orders must use the venue's actual equity: the platform baseline is fixed.
+    account_value = await broker_account_value(conn) if conn is not None else None
+    if conn is not None and account_value is None:
+        raise HTTPException(
+            status_code=503,
+            detail="could not read live account equity - retry before placing a live order",
+        )
+    risk_status = await risk_service.get_risk_status(
+        db, user["id"], is_demo=(body.route != "live"), account_value=account_value,
+    )
     allowed, reason = await risk_service.pre_trade_check(
         db, user["id"], body.market, body.quantity, price, status=risk_status,
         is_demo=(body.route != "live"),
@@ -280,7 +264,7 @@ async def close_position(
 
     # Live-routed positions must be closed at the broker first; never silently paper-close them.
     # Runs before price resolution - if the broker is unreachable, a price is pointless.
-    close_err = await _route_close(db, user, trade)
+    close_err = await route_close(db, user, trade)
     if close_err:
         raise HTTPException(status_code=502, detail=close_err)
 
