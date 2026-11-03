@@ -135,6 +135,49 @@ def test_bridge_not_configured(monkeypatch):
     assert out["ok"] is False and "EXNESS_BRIDGE_URL" in out["detail"]
 
 
+def test_health_reports_bridge_and_mt5(monkeypatch):
+    monkeypatch.setattr(settings, "EXNESS_BRIDGE_URL", "https://bridge.test")
+    monkeypatch.setattr(settings, "EXNESS_BRIDGE_TOKEN", "tok")
+    monkeypatch.setattr(
+        "backend.exchanges.exness_adapter.requests.get",
+        lambda *a, **k: SimpleNamespace(
+            status_code=200,
+            json=lambda: {"status": "ok", "mt5_available": True},
+        ),
+    )
+    out = get_adapter("exness").health()
+    assert out["ok"] is True and out["reachable"] is True
+    assert out["mt5_available"] is True
+
+
+def test_health_reports_unreachable_bridge(monkeypatch):
+    monkeypatch.setattr(settings, "EXNESS_BRIDGE_URL", "https://bridge.test")
+    monkeypatch.setattr(settings, "EXNESS_BRIDGE_TOKEN", "tok")
+
+    def boom(*a, **k):
+        raise ConnectionError("dns name does not exist")
+
+    monkeypatch.setattr("backend.exchanges.exness_adapter.requests.get", boom)
+    out = get_adapter("exness").health()
+    assert out["ok"] is False and out["reachable"] is False
+    assert "dns" in out["detail"]
+
+
+def test_health_reports_bridge_without_mt5(monkeypatch):
+    monkeypatch.setattr(settings, "EXNESS_BRIDGE_URL", "https://bridge.test")
+    monkeypatch.setattr(settings, "EXNESS_BRIDGE_TOKEN", "tok")
+    monkeypatch.setattr(
+        "backend.exchanges.exness_adapter.requests.get",
+        lambda *a, **k: SimpleNamespace(
+            status_code=200,
+            json=lambda: {"status": "ok", "mt5_available": False},
+        ),
+    )
+    out = get_adapter("exness").health()
+    assert out["reachable"] is True and out["ok"] is False
+    assert out["mt5_available"] is False
+
+
 # --------------------------------------------------------- bridge helpers
 
 def test_units_to_lots_uses_contract_size_and_step():
@@ -248,6 +291,8 @@ def test_bridge_closes_matching_magic_position(monkeypatch):
     out = bridge._close_positions(fake, body)
 
     assert out["ok"] is True and out["closed_volume_units"] == pytest.approx(20000)
+    assert out["close_price"] == pytest.approx(1.0999)
+    assert out["filled_price"] == pytest.approx(1.0999)
     request = fake.requests[0]
     assert request["position"] == 555
     assert request["type"] == fake.ORDER_TYPE_SELL

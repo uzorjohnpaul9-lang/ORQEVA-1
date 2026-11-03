@@ -455,6 +455,7 @@ def _close_positions(mt: Any, body: CloseBody) -> dict[str, Any]:
 
     remaining = want_lots
     closed_lots = 0.0
+    closed_notional = 0.0
     tickets: list[str] = []
     for position in positions:
         if remaining <= 1e-9:
@@ -497,18 +498,22 @@ def _close_positions(mt: Any, body: CloseBody) -> dict[str, Any]:
             reason = getattr(result, "comment", "") if result else "no result"
             code = getattr(result, "retcode", "?") if result else "?"
             raise BridgeError(f"MT5 rejected close [{code}]: {reason}")
+        fill_price = float(getattr(result, "price", 0) or price)
         closed_lots += volume
+        closed_notional += fill_price * volume
         remaining -= volume
         tickets.append(str(getattr(result, "order", 0) or getattr(result, "deal", 0) or ""))
 
     if closed_lots <= 0:
         raise BridgeError("no closable volume was found on the broker position")
 
+    close_price = round(closed_notional / closed_lots, 8) if closed_lots else None
     return {
         "ok": True,
         "broker_order_id": tickets[-1] if tickets else "",
         "broker_status": "FILLED",
-        "filled_price": None,
+        "filled_price": close_price,
+        "close_price": close_price,
         "protective": "none",
         "closed_volume_units": round(closed_lots * contract, 8),
         "tickets": tickets,

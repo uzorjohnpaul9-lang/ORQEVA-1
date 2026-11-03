@@ -32,6 +32,11 @@ class BaseAdapter(ABC):
         """Account snapshot. Raises on failure; caller handles."""
         return self._account(api_key, api_secret, is_paper)
 
+    def health(self) -> dict[str, Any]:
+        """Lightweight venue reachability probe. Override when the venue has one."""
+        return {"ok": True, "reachable": None, "mt5_available": None,
+                "detail": "health check not supported by this adapter"}
+
     def place_order(self, api_key: str, api_secret: str, is_paper: bool, *,
                     symbol: str, side: str, quantity: float,
                     order_type: str = "market", limit_price: float | None = None,

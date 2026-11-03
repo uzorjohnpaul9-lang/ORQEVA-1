@@ -25,10 +25,24 @@ const STATUS_VARIANT: Record<string, "green" | "red" | "blue" | "yellow" | "gray
   error: "red",
 };
 
+interface BridgeStatus {
+  checked: boolean;
+  reachable?: boolean;
+  mt5_available?: boolean;
+  last_checked?: string | null;
+  last_error?: string | null;
+  down_connections?: number;
+}
+
+interface HealthPayload {
+  broker_bridge?: BridgeStatus;
+}
+
 export default function AutoTradePage() {
   const { token, user } = useAuth();
   const canGoLive = ["premium", "vip"].includes((user?.tier || "free").toLowerCase());
   const [settings, setSettings] = useState<AutoTradeSettings | null>(null);
+  const [bridge, setBridge] = useState<BridgeStatus | null>(null);
   const [log, setLog] = useState<AutoTradeLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -38,12 +52,14 @@ export default function AutoTradePage() {
   const refresh = useCallback(async () => {
     if (!token) return;
     try {
-      const [s, l] = await Promise.all([
+      const [s, l, h] = await Promise.all([
         api<AutoTradeSettings>("/api/auto-trade/settings", { token }),
         api<{ entries: AutoTradeLogEntry[] }>("/api/auto-trade/log?limit=50", { token }),
+        api<HealthPayload>("/api/health", { timeoutMs: 8000 }).catch(() => null),
       ]);
       setSettings(s);
       setLog(l.entries || []);
+      setBridge(h?.broker_bridge ?? null);
       setError(null);
     } catch {
       setError("Could not load auto-trade settings");
@@ -99,6 +115,22 @@ export default function AutoTradePage() {
 
       {error && <p className="text-sm text-red">{error}</p>}
       {notice && <p className="text-sm text-green">{notice}</p>}
+
+      {settings?.route === "live" && bridge?.checked && bridge.reachable === false && (
+        <Card className="border-yellow/40 bg-yellow-dim">
+          <div className="flex items-start gap-3">
+            <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-yellow" />
+            <div>
+              <p className="text-sm font-medium text-text-primary">Live broker bridge offline</p>
+              <p className="text-xs text-text-secondary mt-1">
+                Live auto-trade is paused and live orders are being skipped.
+                {bridge.last_error ? ` Reason: ${bridge.last_error}.` : ""} Check the MT5
+                bridge and tunnel on the VPS.
+              </p>
+            </div>
+          </div>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <StatCard label="Status" value={settings?.enabled ? "Active" : "Off"} />

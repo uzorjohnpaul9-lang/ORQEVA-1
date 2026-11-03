@@ -117,6 +117,13 @@ async def run_scheduled_scan() -> dict:
 
     try:
         db = SupabaseDB(await get_service_client())
+        try:
+            # A dead bridge pauses every live order; alert on the transition
+            # instead of waiting for the next auto-trade skip.
+            from backend.services import broker_health_service
+            broker_health = await broker_health_service.check_and_alert(db)
+        except Exception:  # pragma: no cover - defensive
+            broker_health = {}
         alerts = await check_event_alerts(db)
         out = await engine_service.run_scan(db, cooldown_hours=_cooldown_hours())
         try:
@@ -178,6 +185,7 @@ async def run_scheduled_scan() -> dict:
         summary["dropped_invalid"] = out.get("dropped_invalid", 0)
         summary["resolved"] = resolved
         summary["trades_reconciled"] = reconciled
+        summary["broker_health"] = broker_health
         summary["event_alerts"] = alerts
         summary["deferred_alerts"] = deferred
         summary["weekly_digest"] = digest

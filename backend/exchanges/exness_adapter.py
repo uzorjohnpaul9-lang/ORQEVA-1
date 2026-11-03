@@ -107,6 +107,35 @@ class ExnessAdapter(BaseAdapter):
         except Exception as e:
             return self._net_unavailable(e)
 
+    def health(self) -> dict[str, Any]:
+        """Unauthenticated bridge liveness probe.
+
+        Operationally the bridge being unreachable is different from an MT5
+        login failure: the former pauses every live order for every user, so the
+        scheduler alerts on it instead of waiting for the next skipped signal.
+        """
+        try:
+            url, _headers = self._endpoint()
+        except Exception as e:
+            return {"ok": False, "reachable": False, "mt5_available": None,
+                    "detail": str(e)[:200]}
+        try:
+            r = requests.get(f"{url}/health", timeout=5)
+            try:
+                body = r.json()
+            except ValueError:
+                body = {}
+            reachable = r.status_code == 200 and body.get("status") == "ok"
+            return {
+                "ok": reachable and bool(body.get("mt5_available")),
+                "reachable": reachable,
+                "mt5_available": bool(body.get("mt5_available")),
+                "detail": None if reachable else f"bridge HTTP {r.status_code}",
+            }
+        except Exception as e:
+            return {"ok": False, "reachable": False, "mt5_available": None,
+                    "detail": str(e)[:200]}
+
     def _account(self, api_key: str, api_secret: str, is_paper: bool) -> dict[str, Any]:
         body = self._post("/account", self._session(api_key, api_secret))
         if not body.get("ok"):

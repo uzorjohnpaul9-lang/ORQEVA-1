@@ -61,14 +61,17 @@ Check locally: `curl http://127.0.0.1:8100/health` ->
 ## 3. Expose it to Railway
 
 The bridge must not listen on a public interface. Use a Cloudflare Tunnel (the
-same pattern as `LOCAL-RUN.md`), preferably a **named** tunnel so the URL does
-not change on restart:
+same pattern as `LOCAL-RUN.md`). A quick tunnel is fine for development but
+prints a **new** `https://<random>.trycloudflare.com` URL every time
+`cloudflared` starts:
 
 ```bat
 cloudflared tunnel --url http://127.0.0.1:8100
 ```
 
-Then set these on the Railway backend service and redeploy:
+Read the URL from that console, or from the redirected log
+(`logs\cloudflared.err.log`) when running it as a background process. Then set
+these on the Railway backend service and redeploy:
 
 ```
 EXNESS_BRIDGE_URL=https://<tunnel-hostname>
@@ -77,6 +80,36 @@ EXNESS_BRIDGE_TOKEN=<same secret as MT5_BRIDGE_TOKEN>
 
 Optional: `EXNESS_MT5_SERVER` if you want bare-login credentials to default to
 one server.
+
+### Keep-alive + URL sync (recommended for quick tunnels)
+
+`deploy/bridge-stack.ps1` starts MT5, the uvicorn bridge and cloudflared if they
+are missing, watches them, reads the current tunnel URL, and updates Railway
+(and redeploys) only when that URL changes:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File deploy\bridge-stack.ps1
+```
+
+Install it to start at logon so it survives reboots:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File deploy\install-bridge-task.ps1 -StartNow
+```
+
+The installer registers a per-user Scheduled Task. If Task Scheduler is locked
+down (common on managed machines), it falls back to a hidden `.vbs` launcher in
+the user's Startup folder.
+
+The watchdog writes `logs\bridge-watchdog.log` and `logs\bridge-stack.json`.
+It needs the user-level `MT5_BRIDGE_TOKEN` and the Railway CLI login, which is
+why it runs in the user session rather than as a Windows service.
+
+For a URL that never changes, use a **named** tunnel with a domain in your
+Cloudflare account (for example `mt5.example.com`) and set
+`EXNESS_BRIDGE_URL` once. The current account has no Cloudflare zones, so a
+named tunnel needs a domain added first. Without one, the watchdog is the free
+alternative.
 
 ## 4. Connect an account
 
@@ -106,6 +139,20 @@ same and leave the server field empty.
   filtered). On hedging accounts this avoids leaving an offsetting duplicate
   position behind.
 
+## 5b. Manual close
+
+`scripts/manual_close.py` closes a live trade at the broker and records the
+actual fill (the bridge now returns `close_price`). Run it with the backend's
+production environment so the encrypted credentials decrypt:
+
+```powershell
+railway run --service ORQEVA-1 -- python scripts/manual_close.py <trade_id>
+```
+
+Add `--dry-run` to check the trade/connection without sending an order, or
+`--exit-price` when the broker position is already gone and no fill can be read.
+The local trade is only marked closed after the broker confirms the close.
+
 ## 6. Troubleshooting
 
 | Bridge message | Meaning / fix |
@@ -124,8 +171,11 @@ same and leave the server field empty.
 - One MT5 terminal can be logged into one account at a time. The bridge
   serialises requests and logs in per call, so concurrent users queue behind a
   single lock; expect 1-3 s per order while the market is open.
-- The VPS must stay online. If the bridge is down, auto-trade logs
-  `broker rejected order` / `network` failures and no position is opened.
+- The VPS must stay online. If the bridge is down, live orders are skipped
+  (`could not read live account equity`) and the scheduler alerts the affected
+  user in-app / on Telegram when the bridge goes down and when it recovers.
+  `/api/health` exposes a `broker_bridge` summary, and the Auto-Trade page shows
+  an offline banner.
 - Investor (read-only) passwords validate but cannot trade: use the trading
   password.
 - The bridge is intentionally not part of the Docker/Railway image: it needs

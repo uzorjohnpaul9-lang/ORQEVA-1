@@ -121,6 +121,7 @@ app.include_router(track_record.router)
 async def health():
     """Cheap liveness probe: no DB/VPN calls, safe for tight uptime monitors."""
     from backend.payments.registry import configured_gateways
+    from backend.services import broker_health_service
 
     last = scheduler.get_last_scan()
     return {
@@ -131,6 +132,7 @@ async def health():
             "last_scan_at": (last or {}).get("at"),
             "last_scan_signals": (last or {}).get("signals_generated"),
         },
+        "broker_bridge": broker_health_service.status(),
         "gateways": [g["provider"] for g in configured_gateways()],
     }
 
