@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { Plus, Search, Star, X } from "lucide-react";
 import { api } from "@/lib/api";
+import { DEFAULT_WATCHLIST, INSTRUMENTS, type Instrument } from "@/lib/instruments";
 import { useAuth } from "@/lib/auth";
 import { useSignalsFeed } from "@/lib/signalsFeed";
 import { Card, CardHeader, CardTitle } from "@/components/ui/Card";
@@ -112,7 +114,40 @@ export default function SignalsPage() {
   const [toast, setToast] = useState<string>("");
   const [explain, setExplain] = useState<string>("");
   const [explainBusy, setExplainBusy] = useState(false);
+  const [watchlist, setWatchlist] = useState<string[] | null>(null);
+  const [search, setSearch] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
   const seenRef = useRef<Set<string>>(new Set());
+  const loadedKey = useRef<string | null>(null);
+  const storageKey = `orqeva:signal-watchlist:${user?.id ?? "guest"}`;
+
+  // Watchlist is kept per user in this browser so the page starts with a
+  // small, focused set instead of every instrument the engines can scan.
+  useEffect(() => {
+    let next = [...DEFAULT_WATCHLIST];
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          next = parsed.map((s) => String(s).toUpperCase()).filter(Boolean);
+        }
+      }
+    } catch {
+      /* storage unavailable: fall back to the defaults */
+    }
+    loadedKey.current = storageKey;
+    setWatchlist(next);
+  }, [storageKey]);
+
+  useEffect(() => {
+    if (!watchlist || loadedKey.current !== storageKey) return;
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify(watchlist));
+    } catch {
+      /* ignore quota / private-mode failures */
+    }
+  }, [watchlist, storageKey]);
 
   useEffect(() => {
     if (!token) return;
@@ -174,18 +209,60 @@ export default function SignalsPage() {
     }
   }, [token, selected]);
 
+  const watched = useMemo(
+    () => new Set((watchlist ?? []).map((s) => s.toUpperCase())),
+    [watchlist]
+  );
+
+  const catalog = useMemo(() => {
+    const map = new Map<string, Instrument>();
+    for (const i of INSTRUMENTS) map.set(i.symbol, i);
+    // Include anything the engines emitted that is newer than this catalogue.
+    for (const s of signals) {
+      const sym = s.symbol.toUpperCase();
+      if (!map.has(sym)) map.set(sym, { symbol: sym, market: s.market });
+    }
+    return Array.from(map.values());
+  }, [signals]);
+
+  const searchResults = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return catalog
+      .filter((i) => !watched.has(i.symbol))
+      .filter(
+        (i) =>
+          !q ||
+          i.symbol.toLowerCase().includes(q) ||
+          (i.name ?? "").toLowerCase().includes(q) ||
+          i.market.includes(q)
+      )
+      .slice(0, 40);
+  }, [catalog, watched, search]);
+
+  const addToWatchlist = useCallback((symbol: string) => {
+    const sym = symbol.toUpperCase();
+    setWatchlist((prev) => ((prev ?? []).includes(sym) ? prev : [...(prev ?? []), sym]));
+    setSearch("");
+  }, []);
+
+  const removeFromWatchlist = useCallback((symbol: string) => {
+    const sym = symbol.toUpperCase();
+    setWatchlist((prev) => (prev ?? []).filter((s) => s.toUpperCase() !== sym));
+  }, []);
+
   const filtered = useMemo(() => {
     const seen = new Set<string>();
     return signals.filter((s) => {
       if (seen.has(s.id)) return false;
       seen.add(s.id);
       return (
+        watched.has(s.symbol.toUpperCase()) &&
         (market === "all" || s.market === market) &&
         (status === "all" || s.status === status) &&
         (cat === "all" || (s.category ?? "").toLowerCase() === cat)
       );
     });
-  }, [signals, market, status, cat]);
+  }, [signals, watched, market, status, cat]);
 
   const catCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -231,6 +308,105 @@ export default function SignalsPage() {
         </Card>
       )}
 
+      <Card>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Star className="h-4 w-4 text-yellow" fill="currentColor" />
+            <h2 className="text-sm font-semibold text-text-primary">Your watchlist</h2>
+            <span className="text-xs text-text-muted">
+              {watchlist?.length ?? 0} instrument{(watchlist?.length ?? 0) === 1 ? "" : "s"}
+            </span>
+          </div>
+          <div className="relative z-20 w-full sm:w-80">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
+            <input
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setSearchOpen(true);
+              }}
+              onFocus={() => setSearchOpen(true)}
+              placeholder="Search all instruments to add…"
+              aria-label="Search all instruments"
+              className="relative z-20 w-full rounded-lg border border-border bg-bg-tertiary py-2 pl-9 pr-3 text-sm text-text-primary placeholder-text-muted outline-none transition-colors focus:border-green/50 focus:ring-1 focus:ring-green/20"
+            />
+            {searchOpen && (
+              <>
+                <button
+                  type="button"
+                  aria-label="Close instrument search"
+                  className="fixed inset-0 z-10 cursor-default"
+                  onClick={() => setSearchOpen(false)}
+                />
+                <div className="absolute left-0 right-0 z-20 mt-1 max-h-72 overflow-y-auto rounded-lg border border-border bg-bg-secondary shadow-xl shadow-black/30">
+                  {searchResults.length === 0 ? (
+                    <p className="px-3 py-2.5 text-xs text-text-muted">
+                      {search.trim()
+                        ? `No instruments match “${search.trim()}”.`
+                        : "Every available instrument is already on your watchlist."}
+                    </p>
+                  ) : (
+                    searchResults.map((i) => (
+                      <button
+                        key={i.symbol}
+                        type="button"
+                        onClick={() => addToWatchlist(i.symbol)}
+                        className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition-colors hover:bg-hover"
+                      >
+                        <span className="min-w-0">
+                          <span className="block text-sm font-medium text-text-primary">{i.symbol}</span>
+                          {i.name && i.name !== i.symbol && (
+                            <span className="block truncate text-xs text-text-muted">{i.name}</span>
+                          )}
+                        </span>
+                        <span className="flex shrink-0 items-center gap-2">
+                          <Badge variant={marketVariant(i.market)}>{i.market}</Badge>
+                          <Plus className="h-4 w-4 text-green" />
+                        </span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
+        {watchlist && watchlist.length > 0 ? (
+          <div className="mt-4 flex flex-wrap gap-2">
+            {watchlist.map((sym) => {
+              const inst = catalog.find((i) => i.symbol === sym);
+              return (
+                <span
+                  key={sym}
+                  className="inline-flex items-center gap-2 rounded-full border border-border bg-bg-tertiary py-1 pl-3 pr-1.5"
+                >
+                  <Star className="h-3 w-3 text-yellow" fill="currentColor" />
+                  <span className="text-xs font-medium text-text-primary">{sym}</span>
+                  {inst && (
+                    <span className="text-[10px] uppercase tracking-wide text-text-muted">
+                      {inst.market}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => removeFromWatchlist(sym)}
+                    aria-label={`Remove ${sym} from watchlist`}
+                    className="rounded-full p-0.5 text-text-muted transition-colors hover:bg-red/10 hover:text-red"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </span>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="mt-4 text-sm text-text-muted">
+            Your watchlist is empty. Use the search box above to add the pairs you want to follow.
+          </p>
+        )}
+      </Card>
+
       <div className="flex flex-wrap items-center gap-2">
         {MARKETS.map((m) => (
           <button
@@ -267,17 +443,23 @@ export default function SignalsPage() {
             {c === "all" ? "ALL TYPES" : `${c.toUpperCase()}${catCounts[c] ? ` ${catCounts[c]}` : ""}`}
           </button>
         ))}
-        <span className="ml-auto text-xs text-text-muted">{filtered.length} signals</span>
+        <span className="ml-auto text-xs text-text-muted">{filtered.length} watchlist signals</span>
       </div>
 
-      {loading && signals.length === 0 ? (
+      {(loading && signals.length === 0) || watchlist === null ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {Array.from({ length: 6 }).map((_, i) => <SignalCardSkeleton key={i} />)}
         </div>
       ) : (
       <Stagger className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {filtered.length === 0 && (
-          <Card><p className="text-sm text-text-muted">No signals yet. Run an engine scan or wait for the live feed.</p></Card>
+          <Card>
+            <p className="text-sm text-text-muted">
+              {!watchlist || watchlist.length === 0
+                ? "Add instruments to your watchlist to see their signals."
+                : "No signals match your watchlist and filters yet. Add more instruments or wait for the next engine scan."}
+            </p>
+          </Card>
         )}
         {filtered.map((s) => {
           const eff = s.effective_confidence ?? s.confidence;
