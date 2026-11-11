@@ -17,7 +17,7 @@ export const metadata: Metadata = {
 
 const rules = [
   "Entry, stop and target are fixed when a signal is published — never adjusted after the fact.",
-  "A signal resolves when it hits target, hits invalidation, or reaches its 72-hour expiry.",
+  "A signal resolves when it hits target, hits invalidation, its confidence decays below 50%, or it reaches the 72-hour expiry.",
   "Only bars that open after publication are used, so the bar containing the signal cannot leak pre-signal price action.",
   "If one bar spans both target and invalidation, the stop is assumed to fill first — the conservative outcome.",
   "R-multiple is (exit − entry) ÷ (entry − stop), so results are comparable across markets.",

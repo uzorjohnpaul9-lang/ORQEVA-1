@@ -62,9 +62,12 @@ def _engine_signal_to_db(signal, market: str, strategy: str, tier: str = "free",
 async def recent_signal_keys(
     db: SupabaseDB, hours: int, symbols: list[str] | None = None
 ) -> set[tuple[str, str, str]]:
-    """(symbol, market, direction) tuples emitted within the cooldown window.
+    """(symbol, market, direction) tuples still blocking a re-issue.
 
-    ``symbols`` narrows the query server-side. Without it PostgREST's
+    Expired and cancelled rows, plus active rows whose confidence has already
+    decayed below the validity floor, do not block a fresh signal. That lets the
+    scanner replace an invalid setup immediately instead of waiting out the
+    cooldown. ``symbols`` narrows the query server-side. Without it PostgREST's
     1000-row cap silently truncates the window - a busy table has thousands of
     rows in 24h - so the cooldown misses signals and duplicates get published.
     The rows are paged through for the same reason.
@@ -86,7 +89,7 @@ async def recent_signal_keys(
         chunk = await db.fetch_all(
             SIGNALS,
             where=where,
-            columns="symbol,market,direction",
+            columns="symbol,market,direction,status,confidence,created_at",
             limit=page_size,
             offset=offset,
         )
@@ -94,7 +97,21 @@ async def recent_signal_keys(
         if len(chunk) < page_size:
             break
         offset += page_size
-    return {(r.get("symbol"), r.get("market"), r.get("direction")) for r in rows}
+
+    def _blocks_reissue(row: dict) -> bool:
+        status = (row.get("status") or "active").lower()
+        if status in ("expired", "cancelled"):
+            return False
+        confidence = row.get("confidence")
+        if status == "active" and confidence is not None:
+            return signal_service.is_signal_valid(confidence, row.get("created_at"))
+        return True
+
+    return {
+        (r.get("symbol"), r.get("market"), r.get("direction"))
+        for r in rows
+        if _blocks_reissue(r)
+    }
 
 
 async def run_scan(db: SupabaseDB, *, cooldown_hours: int = 0) -> dict:

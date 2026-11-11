@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Plus, Search, Star, X } from "lucide-react";
+import { Bell, BellOff, Plus, Search, Star, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { DEFAULT_WATCHLIST, INSTRUMENTS, type Instrument } from "@/lib/instruments";
 import { useAuth } from "@/lib/auth";
@@ -14,11 +14,17 @@ import { Button } from "@/components/ui/Button";
 import { SignalPulse } from "@/components/ui/SignalPulse";
 import { Stagger, StaggerItem } from "@/components/motion/Reveal";
 import { RichText } from "@/components/learn/RichText";
+import { TelegramAlertsModal } from "@/components/signals/TelegramAlertsModal";
 import { tierLabel } from "@/lib/plans";
-import type { AccuracyStats, CalendarEventContext, Signal } from "@/lib/types";
+import type {
+  AccuracyStats,
+  CalendarEventContext,
+  Preferences,
+  Signal,
+} from "@/lib/types";
 
 const MARKETS = ["all", "stock", "forex", "crypto", "commodity"] as const;
-const STATUSES = ["active", "expired", "all"] as const;
+const STATUSES = ["active", "history", "all"] as const;
 
 function categoryVariant(cat: string): "green" | "yellow" | "purple" | "blue" | "gray" {
   if (cat === "meme") return "purple";
@@ -73,6 +79,57 @@ function ageLabel(hours: number | null | undefined): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+function validityLabel(s: Signal): string {
+  if (s.status === "expired") {
+    return s.invalidation_reason === "confidence_decay" ? "Confidence < 50%" : "Expired";
+  }
+  if (s.status === "cancelled") return "Cancelled";
+  if (s.status === "closed") return s.outcome ? `Closed ${s.outcome.toUpperCase()}` : "Closed";
+  if (s.valid === false) return "No longer valid";
+  if (!s.valid_until) return "Valid";
+  const until = new Date(s.valid_until).getTime();
+  if (!Number.isFinite(until)) return "Valid";
+  const ms = until - Date.now();
+  if (ms <= 0) return "Expiring";
+  const hours = ms / 3_600_000;
+  if (hours < 1) return `Valid ${Math.max(1, Math.round(hours * 60))}m`;
+  if (hours < 24) return `Valid ${Math.floor(hours)}h`;
+  return `Valid ${Math.floor(hours / 24)}d`;
+}
+
+function validityVariant(s: Signal): "green" | "yellow" | "red" | "gray" {
+  if (s.status === "expired" || s.status === "cancelled" || s.status === "closed") return "gray";
+  if (s.valid === false) return "red";
+  if (!s.valid_until) return "green";
+  const until = new Date(s.valid_until).getTime();
+  if (!Number.isFinite(until)) return "green";
+  const hours = (until - Date.now()) / 3_600_000;
+  return hours <= 1 ? "yellow" : "green";
+}
+
+function validityDetail(s: Signal): string {
+  if (s.status === "expired") {
+    if (s.invalidation_reason === "confidence_decay") {
+      return "Confidence decayed below 50%. The setup is no longer live; the scanner will issue a new signal only if current conditions qualify.";
+    }
+    return "The 72-hour validity window ended without hitting target or invalidation.";
+  }
+  if (s.status === "cancelled") return "This signal was withdrawn before it resolved.";
+  if (s.status === "closed") return "This signal reached its target or invalidation and is kept for the record.";
+  if (s.valid === false) {
+    return "Confidence is below 50%. This signal is no longer actionable and will move to History on the next resolver tick.";
+  }
+  if (s.valid_until) {
+    return `Live until ${new Date(s.valid_until).toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    })}, unless target or invalidation is hit first.`;
+  }
+  return "Live while confidence stays at or above 50%.";
+}
+
 function confColor(c: number): string {
   return c >= 0.8 ? "#00D68F" : c >= 0.6 ? "#FFBE0B" : "#FF4757";
 }
@@ -115,9 +172,24 @@ export default function SignalsPage() {
   const [watchlist, setWatchlist] = useState<string[] | null>(null);
   const [search, setSearch] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
+  const [prefs, setPrefs] = useState<Preferences | null>(null);
+  const [alertsOpen, setAlertsOpen] = useState(false);
+  const [focusSymbol, setFocusSymbol] = useState<string | null>(null);
+  const [pairBusy, setPairBusy] = useState<Set<string>>(new Set());
   const seenRef = useRef<Set<string>>(new Set());
   const loadedKey = useRef<string | null>(null);
+  const pairSavingRef = useRef(false);
   const storageKey = `orqeva:signal-watchlist:${user?.id ?? "guest"}`;
+
+  useEffect(() => {
+    if (!token) {
+      setPrefs(null);
+      return;
+    }
+    api<Preferences>("/api/preferences", { token })
+      .then(setPrefs)
+      .catch(() => {});
+  }, [token]);
 
   // Watchlist is kept per user in this browser so the page starts with a
   // small, focused set instead of every instrument the engines can scan.
@@ -248,15 +320,101 @@ export default function SignalsPage() {
     setWatchlist((prev) => (prev ?? []).filter((s) => s.toUpperCase() !== sym));
   }, []);
 
+  const subscribed = useMemo(
+    () => new Set((prefs?.watchlist ?? []).map((s) => s.toUpperCase())),
+    [prefs]
+  );
+
+  const setPair = useCallback(
+    async (symbol: string, subscribe: boolean) => {
+      if (!token || !prefs || pairSavingRef.current) return;
+      const sym = symbol.toUpperCase();
+      const current = prefs.watchlist ?? [];
+      const already = current.some((w) => w.toUpperCase() === sym);
+      if (already === subscribe) return;
+      pairSavingRef.current = true;
+      const next = subscribe
+        ? [...current, sym]
+        : current.filter((w) => w.toUpperCase() !== sym);
+      const body: Record<string, unknown> = { watchlist: next };
+      if (subscribe && !prefs.telegram_signals) body.telegram_signals = true;
+      const previous = prefs;
+      setPrefs({
+        ...prefs,
+        watchlist: next,
+        ...(body.telegram_signals ? { telegram_signals: true } : {}),
+      });
+      setPairBusy((prev) => new Set(prev).add(sym));
+      try {
+        const updated = await api<Preferences>("/api/preferences", {
+          method: "PUT",
+          token,
+          body,
+        });
+        setPrefs((prev) =>
+          prev
+            ? {
+                ...prev,
+                ...updated,
+                telegram_linked: prev.telegram_linked,
+                telegram_chat_id: prev.telegram_chat_id,
+              }
+            : updated
+        );
+        setToast(
+          subscribe
+            ? `Telegram alerts on for ${sym}`
+            : `Telegram alerts off for ${sym}`
+        );
+        setTimeout(() => setToast(""), 4000);
+      } catch {
+        setPrefs(previous);
+        setToast(`Could not update Telegram alerts for ${sym}`);
+        setTimeout(() => setToast(""), 4000);
+      } finally {
+        pairSavingRef.current = false;
+        setPairBusy((prev) => {
+          const copy = new Set(prev);
+          copy.delete(sym);
+          return copy;
+        });
+      }
+    },
+    [token, prefs]
+  );
+
+  const onBellClick = useCallback(
+    (symbol: string) => {
+      if (!prefs) return;
+      if (!prefs.telegram_linked) {
+        setFocusSymbol(symbol.toUpperCase());
+        setAlertsOpen(true);
+        return;
+      }
+      setPair(symbol, !subscribed.has(symbol.toUpperCase()));
+    },
+    [prefs, subscribed, setPair]
+  );
+
+  const openAlerts = useCallback(() => {
+    setFocusSymbol(null);
+    setAlertsOpen(true);
+  }, []);
+
   const filtered = useMemo(() => {
     const seen = new Set<string>();
     return signals.filter((s) => {
       if (seen.has(s.id)) return false;
       seen.add(s.id);
+      const statusMatch =
+        status === "all" ||
+        (status === "active"
+          ? s.status === "active" && s.valid !== false
+          : s.status !== "active");
       return (
         watched.has(s.symbol.toUpperCase()) &&
         (market === "all" || s.market === market) &&
-        (status === "all" || s.status === status)
+        statusMatch
       );
     });
   }, [signals, watched, market, status]);
@@ -268,9 +426,19 @@ export default function SignalsPage() {
           <h1 className="text-2xl font-bold">AI Signals</h1>
           {live && <SignalPulse size={26} rings={2} />}
         </div>
-        <Badge variant={live ? "green" : "gray"} dot>
-          {live ? "LIVE FEED" : "FEED OFFLINE"}
-        </Badge>
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" size="sm" onClick={openAlerts}>
+            <Bell className="h-3.5 w-3.5" /> Telegram alerts
+            {subscribed.size > 0 && (
+              <span className="rounded-full bg-green/15 px-1.5 text-[10px] font-medium text-green">
+                {subscribed.size}
+              </span>
+            )}
+          </Button>
+          <Badge variant={live ? "green" : "gray"} dot>
+            {live ? "LIVE FEED" : "FEED OFFLINE"}
+          </Badge>
+        </div>
       </div>
 
       {toast && (
@@ -416,11 +584,15 @@ export default function SignalsPage() {
               status === st ? "bg-blue text-white" : "bg-bg-tertiary text-text-secondary hover:text-text-primary"
             }`}
           >
-            {st.toUpperCase()}
+            {st === "history" ? "HISTORY" : st.toUpperCase()}
           </button>
         ))}
         <span className="ml-auto text-xs text-text-muted">{filtered.length} watchlist signals</span>
       </div>
+      <p className="text-xs text-text-muted">
+        A signal stays live while confidence is at least 50% (72h maximum). Expired setups move to
+        History and are replaced only if the market qualifies again.
+      </p>
 
       {(loading && signals.length === 0) || watchlist === null ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -440,6 +612,9 @@ export default function SignalsPage() {
         {filtered.map((s) => {
           const eff = s.effective_confidence ?? s.confidence;
           const ctx = eventCtx(s);
+          const sym = s.symbol.toUpperCase();
+          const alertsOn = subscribed.has(sym);
+          const busy = pairBusy.has(sym);
           return (
             <StaggerItem key={s.id}>
             <Card className={`hover:border-border-light transition-colors ${s.locked ? "" : "cursor-pointer"}`} >
@@ -473,6 +648,40 @@ export default function SignalsPage() {
                     )}
                   </div>
                   <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onBellClick(s.symbol);
+                      }}
+                      disabled={!prefs || busy || pairBusy.size > 0}
+                      aria-pressed={alertsOn}
+                      aria-label={
+                        alertsOn
+                          ? `Turn off Telegram alerts for ${sym}`
+                          : `Turn on Telegram alerts for ${sym}`
+                      }
+                      title={
+                        !prefs
+                          ? "Loading alert settings"
+                          : prefs.telegram_linked
+                            ? alertsOn
+                              ? "Telegram alerts on - click to turn off"
+                              : "Telegram alerts off - click to turn on"
+                            : "Set up Telegram alerts"
+                      }
+                      className={`rounded-lg border p-1.5 transition-colors disabled:opacity-40 ${
+                        alertsOn
+                          ? "border-green/40 bg-green/10 text-green"
+                          : "border-border bg-bg-tertiary text-text-muted hover:border-border-light hover:text-text-primary"
+                      }`}
+                    >
+                      {alertsOn ? (
+                        <Bell className="h-4 w-4" fill="currentColor" />
+                      ) : (
+                        <BellOff className="h-4 w-4" />
+                      )}
+                    </button>
                     {s.locked && <Badge variant="purple">LOCKED</Badge>}
                     <Badge variant={s.direction === "buy" ? "green" : "red"} dot>
                       {s.direction.toUpperCase()}
@@ -513,7 +722,7 @@ export default function SignalsPage() {
                   </div>
                 )}
 
-                <div className="mt-3 flex items-center justify-between">
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-text-muted">Confidence</span>
                     <div className="w-20 h-1.5 bg-bg-tertiary rounded-full overflow-hidden">
@@ -529,9 +738,12 @@ export default function SignalsPage() {
                       </span>
                     )}
                   </div>
-                  <Badge variant={s.tier_required === "free" ? "gray" : s.tier_required === "premium" ? "yellow" : "purple"}>
-                    {s.tier_required}
-                  </Badge>
+                  <div className="flex flex-wrap items-center justify-end gap-1.5">
+                    <Badge variant={validityVariant(s)}>{validityLabel(s)}</Badge>
+                    <Badge variant={s.tier_required === "free" ? "gray" : s.tier_required === "premium" ? "yellow" : "purple"}>
+                      {s.tier_required}
+                    </Badge>
+                  </div>
                 </div>
                 {!s.locked && (
                   <div className="mt-3 flex gap-2">
@@ -672,10 +884,32 @@ export default function SignalsPage() {
               {selected.category && selected.category !== selected.market && (
                 <Badge variant={categoryVariant(selected.category)}>{selected.category}</Badge>
               )}
-              <Badge variant={selected.status === "active" ? "green" : "gray"}>{selected.status}</Badge>
+              <Badge variant={validityVariant(selected)}>
+                {selected.status === "active"
+                  ? selected.valid === false
+                    ? "INVALID"
+                    : "ACTIVE"
+                  : selected.status.toUpperCase()}
+              </Badge>
               <Badge variant={selected.tier_required === "free" ? "gray" : selected.tier_required === "premium" ? "yellow" : "purple"}>
                 {selected.tier_required}
               </Badge>
+            </div>
+
+            <div
+              className={`rounded-lg p-3 text-xs ${
+                selected.status === "active" && selected.valid === false
+                  ? "bg-red-dim text-red"
+                  : "bg-bg-tertiary text-text-secondary"
+              }`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-medium">{validityLabel(selected)}</span>
+                {selected.status === "active" && selected.valid !== false && (
+                  <span className="text-text-muted">Confidence ≥ 50%</span>
+                )}
+              </div>
+              <p className="mt-1 text-text-muted">{validityDetail(selected)}</p>
             </div>
 
             <div className="grid grid-cols-2 gap-3 text-sm">
@@ -732,7 +966,10 @@ export default function SignalsPage() {
                   {((selected.effective_confidence ?? selected.confidence) * 100).toFixed(0)}%
                 </span>
               </div>
-              <p className="text-xs text-text-muted mt-2">Confidence decays with a 12-hour half-life from generation time.</p>
+              <p className="text-xs text-text-muted mt-2">
+                Confidence decays with a 12-hour half-life. Below 50% the signal is invalid and
+                moves to History.
+              </p>
             </div>
 
             {selected.indicators && Object.keys(selected.indicators).length > 0 && (
@@ -787,6 +1024,22 @@ export default function SignalsPage() {
           </div>
         )}
       </Modal>
+
+      <TelegramAlertsModal
+        open={alertsOpen}
+        onClose={() => setAlertsOpen(false)}
+        prefs={prefs}
+        token={token}
+        tier={user?.tier}
+        focusSymbol={focusSymbol}
+        pairBusy={pairBusy}
+        onPrefsChange={setPrefs}
+        onSetPair={setPair}
+        onNotice={(message) => {
+          setToast(message);
+          setTimeout(() => setToast(""), 5000);
+        }}
+      />
     </div>
   );
 }

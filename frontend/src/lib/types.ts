@@ -8,6 +8,27 @@ export interface User {
   created_at: string;
 }
 
+/** Per-user notification preferences returned by /api/preferences. */
+export interface Preferences {
+  telegram_signals: boolean;
+  telegram_tp_sl: boolean;
+  telegram_market_analysis: boolean;
+  telegram_risk_alerts: boolean;
+  telegram_system_alerts: boolean;
+  email_notifications: boolean;
+  web_notifications: boolean;
+  default_market: string;
+  risk_tolerance: string;
+  theme: string;
+  /** Symbols subscribed to per-pair Telegram signal alerts (opt-in). */
+  watchlist: string[];
+  directions: string[];
+  min_confidence: number;
+  telegram_weekly_digest: boolean;
+  telegram_chat_id?: string | null;
+  telegram_linked?: boolean;
+}
+
 export interface Signal {
   id: string;
   symbol: string;
@@ -26,6 +47,10 @@ export interface Signal {
   category?: string | null;
   /** Resolved outcome once the signal closes: tp | sl | expired | breakeven. */
   outcome?: string | null;
+  /** False once confidence has decayed below the validity floor or the signal resolved. */
+  valid?: boolean;
+  valid_until?: string | null;
+  invalidation_reason?: "confidence_decay" | "time_expiry" | "cancelled" | null;
   exit_price?: number | null;
   resolved_at?: string | null;
   r_multiple?: number | null;

@@ -102,7 +102,7 @@ export default function HelpPage() {
             <p>Head to <Link href="/trading" className="text-green hover:underline">Trading</Link>, pick a symbol and place an order with Route set to <b>Paper</b>. No real money moves.</p>
           </Step>
           <Step n={5} title="Connect alerts">
-            <p>Set up Telegram alerts under <Link href="/settings" className="text-green hover:underline">Settings</Link> so you never miss a signal (see the Telegram section below).</p>
+            <p>Open <Link href="/signals" className="text-green hover:underline">AI Signals</Link> and flip the bell on any signal card to set up Telegram alerts for that pair (see the Telegram section below).</p>
           </Step>
         </ol>
       </Card>
@@ -240,11 +240,11 @@ export default function HelpPage() {
           <Step n={2} title="Get your chat ID">
             <p>Send any message to the bot, then message <b>@userinfobot</b> on Telegram â€” it replies with your numeric chat ID.</p>
           </Step>
-          <Step n={3} title="Link in Settings">
-            <p>Paste the ID under Settings â†’ Telegram and press <b>Link</b>, then <b>Send Test Message</b> to confirm.</p>
+          <Step n={3} title="Link from AI Signals">
+            <p>Flip the bell on any <Link href="/signals" className="text-green hover:underline">AI Signals</Link> card, paste the ID in the Telegram alerts panel and press <b>Link</b>, then <b>Send test</b> to confirm.</p>
           </Step>
-          <Step n={4} title="Pick your categories">
-            <p>Toggle signal alerts, TP/SL notifications, market analysis, risk alerts and system messages independently.</p>
+          <Step n={4} title="Pick your pairs and categories">
+            <p>Each bell subscribes or unsubscribes that pair. In the same panel you can toggle signal alerts, TP/SL notifications, market analysis, risk alerts and system messages independently.</p>
           </Step>
         </ol>
         <p className="text-xs text-text-muted mt-3">

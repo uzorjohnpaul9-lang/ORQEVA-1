@@ -43,9 +43,13 @@ def _serialize(signal: dict, with_decay: bool = True) -> dict:
     data["category"] = _category(signal.get("market"), signal.get("symbol"))
     data["locked"] = bool(signal.get("locked"))
     if with_decay:
-        eff, age = signal_service.apply_decay(signal.get("confidence"), signal.get("created_at"))
-        data["effective_confidence"] = eff
-        data["age_hours"] = age
+        validity = signal_service.signal_validity(
+            signal.get("confidence"),
+            signal.get("created_at"),
+            status=signal.get("status"),
+            resolved_at=signal.get("resolved_at"),
+        )
+        data.update(validity)
     return data
 
 

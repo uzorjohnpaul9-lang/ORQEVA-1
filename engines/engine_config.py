@@ -43,7 +43,7 @@ class IndicatorConfig:
     ema_weight: float = 0.20
     momentum_weight: float = 0.10
     # Min score to emit signal
-    min_signal_score: float = 0.40
+    min_signal_score: float = 0.50
     # Market-specific tolerances (overridden per engine)
     bollinger_tolerance_high: float = 1.03
     bollinger_tolerance_low: float = 0.97
@@ -67,7 +67,7 @@ class StockEngineConfig:
         rsi_period=14, rsi_oversold=35, rsi_overbought=65,
         macd_fast=12, macd_slow=26, macd_signal=9,
         bollinger_period=20, bollinger_std=2.0,
-        momentum_period=5, min_signal_score=0.45,
+        momentum_period=5, min_signal_score=0.50,
     ))
     risk: EngineRiskParams = field(default_factory=lambda: EngineRiskParams(
         max_position_size=0.10,     # 10% per stock
@@ -103,7 +103,7 @@ class ForexEngineConfig:
         rsi_period=14, rsi_oversold=35, rsi_overbought=65,
         macd_fast=12, macd_slow=26, macd_signal=9,
         bollinger_period=20, bollinger_std=2.0,
-        momentum_period=5, min_signal_score=0.40,
+        momentum_period=5, min_signal_score=0.50,
         # Forex uses tighter Bollinger tolerance
         bollinger_tolerance_high=1.001,   # 0.1%
         bollinger_tolerance_low=0.999,
@@ -141,7 +141,7 @@ class CryptoEngineConfig:
         rsi_period=14, rsi_oversold=35, rsi_overbought=65,
         macd_fast=12, macd_slow=26, macd_signal=9,
         bollinger_period=20, bollinger_std=2.0,
-        momentum_period=5, min_signal_score=0.40,
+        momentum_period=5, min_signal_score=0.50,
         # Crypto uses wider tolerance (volatile market)
         bollinger_tolerance_high=1.02,    # 2%
         bollinger_tolerance_low=0.98,
@@ -190,7 +190,7 @@ class CryptoAltEngineConfig:
         rsi_period=14, rsi_oversold=30, rsi_overbought=70,
         macd_fast=12, macd_slow=26, macd_signal=9,
         bollinger_period=20, bollinger_std=2.5,
-        momentum_period=5, min_signal_score=0.45,
+        momentum_period=5, min_signal_score=0.50,
         # Alts are volatile: wider bands, stronger momentum needed
         bollinger_tolerance_high=1.03,    # 3%
         bollinger_tolerance_low=0.97,
@@ -231,7 +231,7 @@ class CommodityEngineConfig:
         rsi_period=14, rsi_oversold=35, rsi_overbought=65,
         macd_fast=12, macd_slow=26, macd_signal=9,
         bollinger_period=20, bollinger_std=2.0,
-        momentum_period=5, min_signal_score=0.42,
+        momentum_period=5, min_signal_score=0.50,
         bollinger_tolerance_high=1.015,   # 1.5%
         bollinger_tolerance_low=0.985,
         momentum_threshold=0.01,          # 1%

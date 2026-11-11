@@ -19,7 +19,10 @@ param(
     [string]$RepoRoot = "",
     [string]$Service = "ORQEVA-1",
     [string]$Environment = "production",
+    [string]$Project = "7b165071-f006-4c3a-8707-1260983cee58",
     [int]$CheckSeconds = 30,
+    [int]$RailwayTimeoutSeconds = 90,
+    [int]$HeartbeatSeconds = 600,
     [switch]$NoRailway,
     [switch]$Once
 )
@@ -38,11 +41,20 @@ $cfErr = Join-Path $logs "cloudflared.err.log"
 $cloudflared = "C:\Program Files (x86)\cloudflared\cloudflared.exe"
 $mt5Path = "C:\Program Files\MetaTrader 5\terminal64.exe"
 
+$railwayCmd = (Get-Command railway.cmd -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+$nodeExe = (Get-Command node.exe -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+$railwayJs = $null
+if ($railwayCmd) {
+    $railwayJs = Join-Path (Split-Path $railwayCmd) "node_modules\@railway\cli\bin\railway.js"
+}
+
 $mutex = New-Object System.Threading.Mutex($false, "Global\ORQEVA-Bridge-Stack")
 if (-not $mutex.WaitOne(0)) {
     Write-Host "another bridge watchdog is already running"
     exit 0
 }
+
+$script:lastHeartbeat = [datetime]::MinValue
 
 function Log([string]$message) {
     $line = "$(Get-Date -Format o) $message"
@@ -50,9 +62,65 @@ function Log([string]$message) {
     Add-Content -Path $watchLog -Value $line -Encoding UTF8
 }
 
+function Write-Heartbeat([string]$status) {
+    if (((Get-Date) - $script:lastHeartbeat).TotalSeconds -lt $HeartbeatSeconds) { return }
+    $script:lastHeartbeat = Get-Date
+    Log "heartbeat $status"
+}
+
+function Invoke-Railway {
+    param(
+        [string[]]$Arguments,
+        [int]$TimeoutSeconds = $RailwayTimeoutSeconds
+    )
+    if (-not $nodeExe -or -not $railwayJs -or -not (Test-Path $railwayJs)) {
+        return [pscustomobject]@{ ExitCode = -1; StdOut = ""; StdErr = "node or railway.js not found"; TimedOut = $false }
+    }
+    $quoted = $Arguments | ForEach-Object {
+        if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
+    }
+    $argLine = '"' + $railwayJs + '" ' + (@($quoted) -join ' ')
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $nodeExe
+    $psi.Arguments = $argLine
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $p = New-Object System.Diagnostics.Process
+    $p.StartInfo = $psi
+    try {
+        [void]$p.Start()
+        $stdoutTask = $p.StandardOutput.ReadToEndAsync()
+        $stderrTask = $p.StandardError.ReadToEndAsync()
+        if (-not $p.WaitForExit($TimeoutSeconds * 1000)) {
+            & taskkill.exe /PID $p.Id /T /F 2>&1 | Out-Null
+            return [pscustomobject]@{ ExitCode = -1; StdOut = ""; StdErr = "timed out after ${TimeoutSeconds}s"; TimedOut = $true }
+        }
+        $p.WaitForExit()
+        $stdout = [string]$stdoutTask.Result
+        $stderr = [string]$stderrTask.Result
+        return [pscustomobject]@{ ExitCode = $p.ExitCode; StdOut = $stdout; StdErr = $stderr; TimedOut = $false }
+    } catch {
+        return [pscustomobject]@{ ExitCode = -1; StdOut = ""; StdErr = $_.Exception.Message; TimedOut = $false }
+    } finally {
+        $p.Dispose()
+    }
+}
+
 function Test-Bridge {
     try {
         $r = Invoke-RestMethod -Uri "http://127.0.0.1:8100/health" -TimeoutSec 5
+        return [bool]($r.status -eq "ok")
+    } catch {
+        return $false
+    }
+}
+
+function Test-TunnelHealth([string]$url) {
+    if (-not $url) { return $false }
+    try {
+        $r = Invoke-RestMethod -Uri "$url/health" -TimeoutSec 15
         return [bool]($r.status -eq "ok")
     } catch {
         return $false
@@ -91,7 +159,9 @@ function Start-Bridge {
 
 function Get-TunnelUrl {
     if (-not (Test-Path $cfErr)) { return $null }
-    $matches = Select-String -Path $cfErr -Pattern "https://[a-z0-9-]+\.trycloudflare\.com" -AllMatches
+    $lines = Get-Content -Path $cfErr -Tail 200 -ErrorAction SilentlyContinue
+    if (-not $lines) { return $null }
+    $matches = $lines | Select-String -Pattern "https://(?!api\.)[a-z0-9-]+\.trycloudflare\.com" -AllMatches
     if (-not $matches) { return $null }
     $all = @($matches | ForEach-Object { $_.Matches } | ForEach-Object { $_.Value })
     if ($all.Count -eq 0) { return $null }
@@ -104,7 +174,8 @@ function Start-Tunnel {
     Log "starting cloudflared quick tunnel"
     Remove-Item $cfErr, $cfOut -ErrorAction SilentlyContinue
     Start-Process -FilePath $cloudflared `
-        -ArgumentList "tunnel", "--no-autoupdate", "--url", "http://127.0.0.1:8100" `
+        -ArgumentList @("tunnel", "--no-autoupdate", "--protocol", "http2",
+                        "--edge-ip-version", "4", "--url", "http://127.0.0.1:8100") `
         -WorkingDirectory $RepoRoot -WindowStyle Hidden `
         -RedirectStandardOutput $cfOut -RedirectStandardError $cfErr | Out-Null
     for ($i = 0; $i -lt 40; $i++) {
@@ -117,70 +188,110 @@ function Start-Tunnel {
 }
 
 function Get-RailwayUrl {
+    $res = Invoke-Railway @("variables", "--service", $Service, "--environment", $Environment,
+                            "--project", $Project, "--json") 60
+    if ($res.ExitCode -ne 0) {
+        $detail = ([string]$res.StdErr).Trim()
+        if (-not $detail) { $detail = ([string]$res.StdOut).Trim() }
+        Log "Railway read failed (exit=$($res.ExitCode)): $detail"
+        return $null
+    }
     try {
-        $json = & railway variables --service $Service --environment $Environment --json 2>$null
-        if ($LASTEXITCODE -ne 0 -or -not $json) { return $null }
-        return ($json | ConvertFrom-Json).EXNESS_BRIDGE_URL
+        return (([string]$res.StdOut) | ConvertFrom-Json).EXNESS_BRIDGE_URL
     } catch {
+        Log "Railway read parse failed"
         return $null
     }
 }
 
 function Sync-Railway([string]$url) {
-    if ($NoRailway -or -not $url) { return }
+    if ($NoRailway -or -not $url) { return $false }
     $state = $null
     if (Test-Path $statePath) {
         try { $state = Get-Content $statePath -Raw | ConvertFrom-Json } catch { $state = $null }
     }
-    if ($state -and $state.last_url -eq $url) { return }
-    if ((Get-RailwayUrl) -eq $url) {
-        @{ last_url = $url; synced_at = (Get-Date).ToString("o") } | ConvertTo-Json | Set-Content $statePath
-        return
+    if ($state -and $state.last_url -eq $url -and $state.redeployed_at) {
+        $age = (Get-Date) - [datetime]$state.redeployed_at
+        if ($age.TotalMinutes -lt 10) { return $true }
     }
-    Log "updating Railway EXNESS_BRIDGE_URL"
-    $ok = $false
-    for ($i = 0; $i -lt 3 -and -not $ok; $i++) {
-        try {
-            & railway variables --service $Service --environment $Environment `
-                --set "EXNESS_BRIDGE_URL=$url" 2>&1 | Out-Null
-            if ($LASTEXITCODE -eq 0) { $ok = $true } else { Start-Sleep -Seconds 5 }
-        } catch {
-            Start-Sleep -Seconds 5
+    $current = Get-RailwayUrl
+    if (-not $current) { return $false }
+    $needsRedeploy = ($state -eq $null) -or ($state.last_url -ne $url) -or (-not $state.redeployed_at)
+    if ($current -eq $url -and -not $needsRedeploy) {
+        @{ last_url = $url; synced_at = (Get-Date).ToString("o"); redeployed_at = $state.redeployed_at } |
+            ConvertTo-Json | Set-Content $statePath
+        return $true
+    }
+    if ($current -ne $url) {
+        Log "updating Railway EXNESS_BRIDGE_URL"
+        $set = Invoke-Railway @("variable", "set", "EXNESS_BRIDGE_URL=$url", "--service", $Service,
+                                "--environment", $Environment, "--project", $Project, "--skip-deploys") $RailwayTimeoutSeconds
+        if ($set.ExitCode -ne 0) {
+            $detail = ([string]$set.StdErr).Trim()
+            if (-not $detail) { $detail = ([string]$set.StdOut).Trim() }
+            Log "Railway variable update failed (exit=$($set.ExitCode)): $detail"
+            return $false
         }
+        $needsRedeploy = $true
     }
-    if (-not $ok) { Log "Railway variable update failed"; return }
-    Log "redeploying Railway backend"
-    try { & railway redeploy --service $Service --yes 2>&1 | Out-Null } catch { }
-    @{ last_url = $url; synced_at = (Get-Date).ToString("o") } | ConvertTo-Json | Set-Content $statePath
-    Log "Railway updated to $url"
+    if ($needsRedeploy) {
+        Log "redeploying Railway backend"
+        $dep = Invoke-Railway @("redeploy", "--service", $Service, "--environment", $Environment,
+                                "--project", $Project, "--yes") 180
+        if ($dep.ExitCode -ne 0) {
+            $detail = ([string]$dep.StdErr).Trim()
+            if (-not $detail) { $detail = ([string]$dep.StdOut).Trim() }
+            Log "Railway redeploy failed (exit=$($dep.ExitCode)): $detail"
+            return $false
+        }
+        $now = (Get-Date).ToString("o")
+        @{ last_url = $url; synced_at = $now; redeployed_at = $now } |
+            ConvertTo-Json | Set-Content $statePath
+        Log "Railway updated to $url"
+    }
+    return $true
 }
 
 try {
-    Log "watchdog starting (repo=$RepoRoot service=$Service)"
+    Log "watchdog starting (repo=$RepoRoot service=$Service project=$Project)"
     Start-Mt5
-    [void](Start-Bridge)
+    $bridgeOk = Start-Bridge
     $url = Start-Tunnel
-    Sync-Railway $url
+    [void](Sync-Railway $url)
+    Write-Heartbeat "bridge=$bridgeOk tunnel=$url"
 
     if ($Once) { Log "single pass complete"; exit 0 }
 
+    $tunnelFailures = 0
     while ($true) {
         Start-Sleep -Seconds $CheckSeconds
-        if (-not (Get-Process terminal64 -ErrorAction SilentlyContinue)) {
-            Start-Mt5
-        }
-        if (-not (Test-Bridge)) {
+        $bridgeOk = Test-Bridge
+        if (-not $bridgeOk) {
             Log "bridge health check failed"
-            [void](Start-Bridge)
+            $bridgeOk = Start-Bridge
         }
         if (-not (Get-Process cloudflared -ErrorAction SilentlyContinue)) {
             Log "cloudflared is not running"
             $url = Start-Tunnel
-            Sync-Railway $url
+            $tunnelFailures = 0
         } else {
             $url = Get-TunnelUrl
-            if ($url) { Sync-Railway $url }
+            if (-not $url -or -not (Test-TunnelHealth $url)) {
+                $tunnelFailures++
+                Log "tunnel health check failed ($tunnelFailures): $url"
+                if ($tunnelFailures -ge 2) {
+                    Log "restarting cloudflared"
+                    Stop-Process -Name cloudflared -Force -ErrorAction SilentlyContinue
+                    Start-Sleep -Seconds 2
+                    $url = Start-Tunnel
+                    $tunnelFailures = 0
+                }
+            } else {
+                $tunnelFailures = 0
+            }
         }
+        if ($url) { [void](Sync-Railway $url) }
+        Write-Heartbeat "bridge=$bridgeOk tunnel=$url"
     }
 } finally {
     $mutex.ReleaseMutex()

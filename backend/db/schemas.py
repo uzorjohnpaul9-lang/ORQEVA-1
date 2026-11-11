@@ -130,7 +130,7 @@ class PreferencesUpdate(BaseModel):
     default_market: str | None = Field(None, pattern="^(all|stock|forex|crypto|commodity)$")
     risk_tolerance: str | None = Field(None, pattern="^(conservative|moderate|aggressive)$")
     theme: str | None = Field(None, pattern="^(dark|light)$")
-    watchlist: list[str] | None = Field(None, max_length=50)
+    watchlist: list[str] | None = Field(None, max_length=100)
     directions: list[str] | None = None
     min_confidence: float | None = Field(None, ge=0, le=1)
     telegram_weekly_digest: bool | None = None

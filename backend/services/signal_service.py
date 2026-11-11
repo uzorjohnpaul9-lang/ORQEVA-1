@@ -1,3 +1,5 @@
+import math
+import os
 from datetime import datetime, timedelta, timezone
 
 from backend.db.models import SIGNALS, TRADES, gen_uuid
@@ -214,14 +216,98 @@ async def get_signal(db: SupabaseDB, signal_id: str) -> dict | None:
 DECAY_HALF_LIFE_HOURS = 12.0
 
 
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+# A live signal stops being valid when its decayed confidence falls below this
+# floor. The minimum validity window keeps a signal issued exactly at the floor
+# from expiring on the first resolver tick.
+VALIDITY_MIN_CONFIDENCE = _env_float("SIGNAL_VALIDITY_MIN_CONFIDENCE", 0.50)
+VALIDITY_GRACE_HOURS = max(0.0, _env_float("SIGNAL_VALIDITY_GRACE_HOURS", 1.0))
+MAX_SIGNAL_AGE_HOURS = max(1.0, _env_float("SIGNAL_MAX_AGE_HOURS", 72.0))
+
+
 def apply_decay(confidence: float, created_at) -> tuple[float, float]:
     """Return (effective_confidence, age_hours) with exponential time decay."""
+    confidence = float(confidence or 0.0)
     if created_at is None:
         return confidence, 0.0
     created = parse_dt(created_at)
     age_hours = max(0.0, (datetime.now(timezone.utc) - created).total_seconds() / 3600)
     effective = confidence * (0.5 ** (age_hours / DECAY_HALF_LIFE_HOURS))
     return round(effective, 4), round(age_hours, 2)
+
+
+def valid_until(confidence: float, created_at) -> datetime | None:
+    """When the signal stops being valid if price never resolves it first."""
+    if created_at is None:
+        return None
+    confidence = float(confidence or 0.0)
+    created = parse_dt(created_at)
+    if confidence <= VALIDITY_MIN_CONFIDENCE:
+        hours = VALIDITY_GRACE_HOURS
+    else:
+        hours = DECAY_HALF_LIFE_HOURS * math.log2(confidence / VALIDITY_MIN_CONFIDENCE)
+        hours = max(hours, VALIDITY_GRACE_HOURS)
+    return created + timedelta(hours=min(hours, MAX_SIGNAL_AGE_HOURS))
+
+
+def is_signal_valid(confidence: float, created_at) -> bool:
+    """True while the signal is still inside its confidence-decay window."""
+    effective, age = apply_decay(confidence, created_at)
+    if age <= VALIDITY_GRACE_HOURS:
+        return True
+    return effective >= VALIDITY_MIN_CONFIDENCE
+
+
+def signal_validity(confidence: float, created_at, status: str | None = None,
+                    resolved_at=None) -> dict:
+    """Validity view shared by the API and the outcome resolver."""
+    effective, age = apply_decay(confidence, created_at)
+    state = (status or "active").lower()
+    deadline = valid_until(confidence, created_at)
+    reason: str | None = None
+    valid = True
+
+    if state == "expired":
+        valid = False
+        if created_at and resolved_at:
+            created = parse_dt(created_at)
+            resolved = parse_dt(resolved_at)
+            life_hours = max(0.0, (resolved - created).total_seconds() / 3600)
+            reason = (
+                "confidence_decay"
+                if life_hours < MAX_SIGNAL_AGE_HOURS - 0.05
+                else "time_expiry"
+            )
+        else:
+            reason = (
+                "confidence_decay"
+                if effective < VALIDITY_MIN_CONFIDENCE
+                else "time_expiry"
+            )
+    elif state == "cancelled":
+        valid = False
+        reason = "cancelled"
+    elif state != "active":
+        valid = False
+    elif not is_signal_valid(confidence, created_at):
+        valid = False
+        reason = "confidence_decay"
+
+    return {
+        "valid": valid,
+        "effective_confidence": effective,
+        "age_hours": age,
+        "invalidation_reason": reason,
+        "valid_until": (
+            deadline.isoformat().replace("+00:00", "Z") if deadline else None
+        ),
+    }
 
 
 async def accuracy_stats(db: SupabaseDB) -> dict:

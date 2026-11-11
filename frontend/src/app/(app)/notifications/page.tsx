@@ -116,8 +116,8 @@ export default function NotificationsPage() {
         </div>
       )}
 
-      <Link href="/settings" className="inline-block text-xs text-text-secondary hover:text-text-primary hover:underline">
-        Manage Telegram delivery in Settings →
+      <Link href="/signals" className="inline-block text-xs text-text-secondary hover:text-text-primary hover:underline">
+        Manage Telegram alerts in AI Signals →
       </Link>
 
       <NotificationSheet notif={detail} onClose={() => setDetail(null)} token={token} />

@@ -19,14 +19,17 @@ from datetime import datetime, timedelta, timezone
 
 from backend.db.models import SIGNALS
 from backend.db.supabase import SupabaseDB, now_iso, parse_dt
+from backend.services import signal_service
 
 log = logging.getLogger("outcomes")
 
-DEFAULT_MAX_AGE_HOURS = 72  # signals older than this expire if untouched
+# Signals expire early when their decayed confidence falls below the validity
+# floor; max_age_hours remains the absolute ceiling.
+DEFAULT_MAX_AGE_HOURS = int(signal_service.MAX_SIGNAL_AGE_HOURS)
 DEFAULT_LIMIT = 5000
 # Resolution provenance. Bump the version whenever the rules below change so a
 # public track record can explain why two cohorts were scored differently.
-RESOLUTION_VERSION = "2026-10-29.1"
+RESOLUTION_VERSION = "2026-11-11.1"
 DEFAULT_BAR_INTERVAL = os.getenv("OUTCOME_BAR_INTERVAL", "1h")
 FALLBACK_BAR_INTERVAL = "1day"
 
@@ -216,7 +219,7 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
             where={"status": "active"},
             order="created_at.asc",
             limit=limit,
-            columns="id,symbol,market,direction,entry_price,stop_loss,take_profit,created_at",
+            columns="id,symbol,market,direction,confidence,entry_price,stop_loss,take_profit,created_at",
         )
     except Exception as e:  # pragma: no cover - defensive
         log.warning("resolve_active_signals fetch failed: %s", str(e)[:120])
@@ -269,7 +272,12 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
                 }
             else:
                 created_dt = _as_utc(parse_dt(created)) if created else None
-                if created_dt is not None and created_dt < cutoff:
+                confidence = s.get("confidence")
+                decayed = (
+                    confidence is not None
+                    and not signal_service.is_signal_valid(confidence, created)
+                )
+                if decayed or (created_dt is not None and created_dt < cutoff):
                     last = _f(bars[-1].get("close")) if bars else None
                     update = {
                         "status": "expired",
@@ -305,6 +313,9 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
         counts["errors"] = errors[:10]
     if slow:
         counts["slowest"] = sorted(slow, key=lambda x: x["seconds"], reverse=True)[:8]
+    if any(counts.get(k) for k in ("tp", "sl", "expired")):
+        from backend.middleware.cache import cache
+        cache.clear()
     log.info("outcome resolver: %s", {k: v for k, v in counts.items() if k != "errors"})
     return counts
 

@@ -163,9 +163,12 @@ async def broadcast_signals(db: SupabaseDB, signals: list[dict]) -> int:
             bucket.extend(deferred)
             if len(bucket) > _MAX_PENDING:
                 del bucket[: len(bucket) - _MAX_PENDING]
-        deliver = _take_released_alerts(user["id"], user_tier) + [
-            s for s in matched if signal_service.is_released(s, user_tier)
-        ]
+        # Re-check filters on alerts that were queued before the user changed
+        # their subscriptions, so unsubscribing a pair cancels its pending alert.
+        deliver = [
+            s for s in _take_released_alerts(user["id"], user_tier)
+            if prefs_service.matches_filters(prefs, s)
+        ] + [s for s in matched if signal_service.is_released(s, user_tier)]
         if not deliver:
             continue
         text = "<b>Engine scan</b>\n" + "\n\n".join(format_signal_alert(s) for s in deliver)

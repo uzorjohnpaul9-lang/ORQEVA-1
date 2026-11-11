@@ -30,7 +30,7 @@ HELP_TEXT = (
     "Commands:\n"
     "/status - account + active filters\n"
     "/signals - latest signals for your tier\n"
-    "/watch SYM,SYM - set watchlist (no args clears)\n"
+    "/watch SYM,SYM - choose alert pairs (no args clears)\n"
     "/directions buy,sell - filter by side (no args clears)\n"
     "/minconf 0.6 - minimum confidence 0-1\n"
     "/digest on|off - weekly performance digest\n"
@@ -79,18 +79,18 @@ async def dispatch_command(
     if user is None:
         return (
             "This chat isn't linked to a TradeAI account yet.\n"
-            "Open the web app \u2192 Settings \u2192 Telegram and paste this chat id: "
+            "Open the web app \u2192 AI Signals \u2192 Telegram alerts and paste this chat id: "
             f"<code>{chat_id}</code>"
         )
 
     if command == "status":
         prefs = await prefs_service.get_or_create(db, user["id"])
-        watch = ", ".join(prefs.get("watchlist") or []) or "all symbols"
+        watch = ", ".join(prefs.get("watchlist") or []) or "none (pair alerts off)"
         dirs = ", ".join(prefs.get("directions") or []) or "both sides"
         return (
             f"<b>{user.get('username') or 'You'}</b> \u00b7 {user.get('tier', 'free')}\n"
             f"Signal alerts: {'on' if prefs.get('telegram_signals') else 'off'}\n"
-            f"Watchlist: {watch}\n"
+            f"Alert pairs: {watch}\n"
             f"Directions: {dirs}\n"
             f"Min confidence: {float(prefs.get('min_confidence') or 0):.2f}\n"
             f"Weekly digest: {'on' if prefs.get('telegram_weekly_digest') else 'off'}"
@@ -112,8 +112,8 @@ async def dispatch_command(
     if command == "watch":
         await prefs_service.update(db, user["id"], {"watchlist": [] if not args else args})
         prefs = await prefs_service.get_or_create(db, user["id"])
-        watch = ", ".join(prefs.get("watchlist") or []) or "all symbols"
-        return f"Watchlist set: {watch}"
+        watch = ", ".join(prefs.get("watchlist") or []) or "none (pair alerts off)"
+        return f"Alert pairs set: {watch}"
 
     if command == "directions":
         await prefs_service.update(db, user["id"], {"directions": [] if not args else args})

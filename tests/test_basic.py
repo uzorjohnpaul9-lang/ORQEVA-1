@@ -683,10 +683,10 @@ class _FakePrefsDB:
 class TestSignalFilters(unittest.TestCase):
     """Phase C: watchlist / direction / min-confidence filters."""
 
-    def test_empty_filters_pass_everything(self):
+    def test_empty_watchlist_means_no_pairs(self):
         from backend.services.preferences_service import matches_filters
         prefs = {"watchlist": [], "directions": [], "min_confidence": 0}
-        self.assertTrue(matches_filters(prefs, {"symbol": "BTC", "direction": "buy", "confidence": 0.1}))
+        self.assertFalse(matches_filters(prefs, {"symbol": "BTC", "direction": "buy", "confidence": 0.1}))
 
     def test_watchlist_and_direction_and_confidence(self):
         from backend.services.preferences_service import matches_filters
@@ -699,7 +699,7 @@ class TestSignalFilters(unittest.TestCase):
 
     def test_missing_confidence_not_disqualifying(self):
         from backend.services.preferences_service import matches_filters
-        prefs = {"watchlist": [], "directions": [], "min_confidence": 0.9}
+        prefs = {"watchlist": ["X"], "directions": [], "min_confidence": 0.9}
         self.assertTrue(matches_filters(prefs, {"symbol": "X", "direction": "buy"}))
 
     def test_normalizers(self):
@@ -765,7 +765,7 @@ class TestTelegramCommands(unittest.TestCase):
         # status reflects state and tier
         out = asyncio.run(dispatch_command(db, user, "status", "", "c"))
         self.assertIn("free", out)
-        self.assertIn("Watchlist", out)
+        self.assertIn("Alert pairs", out)
 
         # unknown command
         out = asyncio.run(dispatch_command(db, user, "wat", "", "c"))

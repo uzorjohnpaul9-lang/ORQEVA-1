@@ -29,7 +29,7 @@ _DEFAULTS = {
     "telegram_weekly_digest": False,
 }
 
-MAX_WATCHLIST = 50
+MAX_WATCHLIST = 100
 VALID_DIRECTIONS = {"buy", "sell"}
 
 
@@ -109,14 +109,17 @@ async def update(db: SupabaseDB, user_id: str, changes: dict) -> dict:
 def matches_filters(prefs: dict, signal: dict) -> bool:
     """True when a signal passes a user's watchlist/direction/confidence filters.
 
-    Empty watchlist or directions means "no restriction". A missing signal
-    direction/confidence does not disqualify the signal.
+    Signal alerts are opt-in per pair: an empty watchlist means the user is
+    subscribed to no pairs, so nothing matches. Empty directions means "no
+    direction restriction". A missing signal direction/confidence does not
+    disqualify the signal.
     """
     watchlist = prefs.get("watchlist") or []
-    if watchlist:
-        allowed = {str(w).upper() for w in watchlist}
-        if str(signal.get("symbol") or "").upper() not in allowed:
-            return False
+    if not watchlist:
+        return False
+    allowed = {str(w).upper() for w in watchlist}
+    if str(signal.get("symbol") or "").upper() not in allowed:
+        return False
 
     directions = prefs.get("directions") or []
     if directions:
