@@ -19,7 +19,6 @@ import type { AccuracyStats, CalendarEventContext, Signal } from "@/lib/types";
 
 const MARKETS = ["all", "stock", "forex", "crypto", "commodity"] as const;
 const STATUSES = ["active", "expired", "all"] as const;
-const CATEGORIES = ["all", "meme", "hot", "major", "alt"] as const;
 
 function categoryVariant(cat: string): "green" | "yellow" | "purple" | "blue" | "gray" {
   if (cat === "meme") return "purple";
@@ -108,7 +107,6 @@ export default function SignalsPage() {
   const [accuracy, setAccuracy] = useState<AccuracyStats | null>(null);
   const [market, setMarket] = useState<(typeof MARKETS)[number]>("all");
   const [status, setStatus] = useState<(typeof STATUSES)[number]>("active");
-  const [cat, setCat] = useState<(typeof CATEGORIES)[number]>("all");
   const [selected, setSelected] = useState<Signal | null>(null);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<string>("");
@@ -258,20 +256,10 @@ export default function SignalsPage() {
       return (
         watched.has(s.symbol.toUpperCase()) &&
         (market === "all" || s.market === market) &&
-        (status === "all" || s.status === status) &&
-        (cat === "all" || (s.category ?? "").toLowerCase() === cat)
+        (status === "all" || s.status === status)
       );
     });
-  }, [signals, watched, market, status, cat]);
-
-  const catCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const s of signals) {
-      const c = (s.category ?? "").toLowerCase();
-      if (c) counts[c] = (counts[c] ?? 0) + 1;
-    }
-    return counts;
-  }, [signals]);
+  }, [signals, watched, market, status]);
 
   return (
     <div className="space-y-6">
@@ -429,18 +417,6 @@ export default function SignalsPage() {
             }`}
           >
             {st.toUpperCase()}
-          </button>
-        ))}
-        <span className="w-px h-5 bg-border mx-1" />
-        {CATEGORIES.map((c) => (
-          <button
-            key={c}
-            onClick={() => setCat(c)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-              cat === c ? "bg-purple text-white" : "bg-bg-tertiary text-text-secondary hover:text-text-primary"
-            }`}
-          >
-            {c === "all" ? "ALL TYPES" : `${c.toUpperCase()}${catCounts[c] ? ` ${catCounts[c]}` : ""}`}
           </button>
         ))}
         <span className="ml-auto text-xs text-text-muted">{filtered.length} watchlist signals</span>
