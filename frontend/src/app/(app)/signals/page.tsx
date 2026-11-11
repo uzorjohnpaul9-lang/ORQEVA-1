@@ -662,7 +662,7 @@ export default function SignalsPage() {
       <Modal open={!!selected} onClose={() => setSelected(null)} title={selected ? `${selected.symbol} — Signal Details` : ""}>
         {selected && (
           <div className="space-y-4">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Badge variant={selected.direction === "buy" ? "green" : "red"} dot>
                 {selected.direction.toUpperCase()}
               </Badge>
@@ -679,21 +679,21 @@ export default function SignalsPage() {
             </div>
 
             <div className="grid grid-cols-2 gap-3 text-sm">
-              <div className="bg-bg-tertiary rounded-lg p-3">
+              <div className="min-w-0 bg-bg-tertiary rounded-lg p-3">
                 <p className="text-xs text-text-muted">Entry Price</p>
-                <p className="font-mono font-medium mt-1">{fmt(selected.entry_price)}</p>
+                <p className="mt-1 break-words font-mono font-medium">{fmt(selected.entry_price)}</p>
               </div>
-              <div className="bg-bg-tertiary rounded-lg p-3">
+              <div className="min-w-0 bg-bg-tertiary rounded-lg p-3">
                 <p className="text-xs text-text-muted">Strategy</p>
-                <p className="font-medium mt-1">{selected.strategy ?? "—"}</p>
+                <p className="mt-1 break-words font-medium">{selected.strategy ?? "—"}</p>
               </div>
-              <div className="bg-bg-tertiary rounded-lg p-3">
+              <div className="min-w-0 bg-bg-tertiary rounded-lg p-3">
                 <p className="text-xs text-text-muted">Stop Loss</p>
-                <p className="font-mono font-medium mt-1 text-red-400">{fmt(selected.stop_loss)}</p>
+                <p className="mt-1 break-words font-mono font-medium text-red-400">{fmt(selected.stop_loss)}</p>
               </div>
-              <div className="bg-bg-tertiary rounded-lg p-3">
+              <div className="min-w-0 bg-bg-tertiary rounded-lg p-3">
                 <p className="text-xs text-text-muted">Take Profit</p>
-                <p className="font-mono font-medium mt-1 text-green">{fmt(selected.take_profit)}</p>
+                <p className="mt-1 break-words font-mono font-medium text-green">{fmt(selected.take_profit)}</p>
               </div>
             </div>
 
@@ -738,14 +738,14 @@ export default function SignalsPage() {
             {selected.indicators && Object.keys(selected.indicators).length > 0 && (
               <div>
                 <p className="text-xs text-text-muted uppercase mb-2">Indicators at generation</p>
-                <div className="grid grid-cols-2 gap-2 text-xs font-mono bg-bg-tertiary rounded-lg p-3">
+                <div className="grid grid-cols-1 gap-2 text-xs font-mono bg-bg-tertiary rounded-lg p-3 sm:grid-cols-2">
                   {Object.entries(selected.indicators)
                     .filter(([k]) => k !== "event_context")
                     .slice(0, 12)
                     .map(([k, v]) => (
-                    <div key={k} className="flex justify-between gap-2">
-                      <span className="text-text-muted">{k}</span>
-                      <span>
+                    <div key={k} className="flex min-w-0 items-start justify-between gap-2">
+                      <span className="shrink-0 text-text-muted">{k}</span>
+                      <span className="min-w-0 break-words text-right">
                         {k === "sentiment" && v && typeof v === "object"
                           ? (() => {
                               const s = v as { available?: boolean; modifier?: number; tag?: string | null };
