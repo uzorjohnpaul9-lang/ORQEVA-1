@@ -84,11 +84,11 @@ class StockEngine(BaseEngine):
         if self._data_client:
             try:
                 from alpaca.data.requests import StockBarsRequest
-                from alpaca.data.timeframe import TimeFrame
+                from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 
                 request = StockBarsRequest(
                     symbol_or_symbols=[symbol],
-                    timeframe=TimeFrame(1, "Day"),
+                    timeframe=TimeFrame(1, TimeFrameUnit.Day),
                     start=datetime.now() - timedelta(days=lookback + 10),
                 )
                 bars = self._data_client.get_stock_bars(request)
