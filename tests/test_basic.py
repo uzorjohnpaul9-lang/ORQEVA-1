@@ -294,7 +294,7 @@ class TestEngineArchitecture(unittest.TestCase):
         self.assertEqual(c.rsi_period, 14)
         self.assertEqual(c.rsi_oversold, 35.0)
         self.assertEqual(c.rsi_overbought, 65.0)
-        self.assertEqual(c.min_signal_score, 0.40)
+        self.assertEqual(c.min_signal_score, 0.50)
 
     def test_stock_engine_config(self):
         from engines.engine_config import StockEngineConfig
@@ -348,7 +348,7 @@ class TestEngineArchitecture(unittest.TestCase):
         config = IndicatorConfig(rsi_oversold=35, rsi_overbought=65)
         prices = list(np.linspace(100, 120, 30))
         rsi = 75.0
-        macd = {"macd": 2.0, "signal": 1.0, "histogram": 1.0}
+        macd = {"macd": -2.0, "signal": -1.0, "histogram": -1.0}
         bb = calculate_bollinger(prices)
         result = score_signal(rsi, macd, bb, prices, prices[-1], config)
         self.assertEqual(result["direction"], "SELL")

@@ -255,7 +255,11 @@ async def test_live_route_surfaces_warning_and_notifies(client, monkeypatch):
     async def _price(market, symbol):
         return 50000.0
 
+    async def _equity(conn, ttl=None):
+        return 100000.0
+
     monkeypatch.setattr("backend.api.trading.live_price", _price)
+    monkeypatch.setattr("backend.api.trading.broker_account_value", _equity)
     r = await client.post("/api/trading/orders", headers=H, json={
         "symbol": "BTCUSDT", "market": "crypto", "side": "buy",
         "quantity": 0.01, "route": "live",

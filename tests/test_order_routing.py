@@ -179,7 +179,11 @@ def fixed_live_price(monkeypatch):
     async def _price(market, symbol):
         return 50000.0
 
+    async def _equity(conn, ttl=None):
+        return 100000.0
+
     monkeypatch.setattr("backend.api.trading.live_price", _price)
+    monkeypatch.setattr("backend.api.trading.broker_account_value", _equity)
 
 
 async def test_live_route_without_connection_403(client):
