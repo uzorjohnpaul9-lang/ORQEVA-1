@@ -3,6 +3,8 @@
 .env.local
 .env.production
 .env.backup-*
+# Public build-time config (publishable key only) is intentionally tracked.
+!frontend/.env.production
 
 # Local scratch
 temp/
