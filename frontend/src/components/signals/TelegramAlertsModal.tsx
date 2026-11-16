@@ -342,6 +342,14 @@ export function TelegramAlertsModal({
                   );
                 })}
               </div>
+            ) : prefs.telegram_signals ? (
+              <div className="mt-3 flex items-start gap-2 rounded-lg border border-yellow/40 bg-yellow-dim px-3 py-3 text-xs text-yellow">
+                <BellOff className="mt-0.5 h-4 w-4 shrink-0" />
+                <p>
+                  Signal alerts are on, but you follow no pairs — you won&apos;t
+                  receive signal messages. Flip a bell on a signal card to add one.
+                </p>
+              </div>
             ) : (
               <p className="mt-3 rounded-lg border border-dashed border-border px-3 py-4 text-center text-xs text-text-muted">
                 No pairs yet. Flip a bell on a signal card to start.
