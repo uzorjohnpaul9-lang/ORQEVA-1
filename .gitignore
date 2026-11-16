@@ -8,6 +8,7 @@
 
 # Local scratch
 temp/
+supabase/.temp/
 
 # Python
 __pycache__/
