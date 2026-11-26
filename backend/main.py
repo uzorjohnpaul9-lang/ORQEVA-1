@@ -46,6 +46,10 @@ if settings.sentry_active:
         import warnings
 
         warnings.warn("SENTRY_DSN is set but sentry-sdk is not installed - run pip install sentry-sdk")
+    except Exception as e:
+        import warnings
+
+        warnings.warn(f"Sentry init failed - continuing without it: {e}")
 
 
 @asynccontextmanager
