@@ -182,6 +182,94 @@ async def broadcast_signals(db: SupabaseDB, signals: list[dict]) -> int:
     return sent
 
 
+_REASON_LABELS = {
+    "confidence_decay": "confidence fell below 50%",
+    "time_expiry": "72-hour window ended",
+    "cancelled": "signal was cancelled",
+}
+
+_EXPIRY_ALERT_DEFAULT_MAX = 8
+
+
+def _expiry_alert_limit() -> int:
+    try:
+        return max(1, int(os.getenv("EXPIRY_ALERT_MAX_ITEMS", str(_EXPIRY_ALERT_DEFAULT_MAX))))
+    except ValueError:
+        return _EXPIRY_ALERT_DEFAULT_MAX
+
+
+def format_signal_expired(sig: dict) -> str:
+    """Render a single expired-signal notice."""
+    direction = (sig.get("direction") or "").upper()
+    arrow = "\u2197" if direction == "BUY" else "\u2198"
+    reason = _REASON_LABELS.get(
+        str(sig.get("invalidation_reason") or ""), "no longer valid"
+    )
+    lines = [
+        f"{arrow} <b>{sig.get('symbol', '?')}</b> ({sig.get('market', '?')}) {direction}".rstrip(),
+        f"Signal expired: {reason}.",
+    ]
+    exit_price = sig.get("exit_price")
+    if exit_price is not None:
+        lines.append(f"Last price: {exit_price}")
+    lines.append("We'll alert you if a new setup qualifies.")
+    return "\n".join(lines)
+
+
+def format_expired_signals(signals: list[dict]) -> str:
+    """One Telegram message per user, capped so a mass expiry stays readable."""
+    limit = _expiry_alert_limit()
+    shown = signals[:limit]
+    extra = len(signals) - len(shown)
+    text = "<b>Signals expired</b>\n\n" + "\n\n".join(
+        format_signal_expired(s) for s in shown
+    )
+    if extra > 0:
+        text += f"\n\nand {extra} more"
+    return text
+
+
+async def broadcast_expired_signals(db: SupabaseDB, signals: list[dict]) -> int:
+    """DM each opted-in user the watched signals that just expired.
+
+    Same watchlist/direction/confidence/market gating as the new-signal fan-out:
+    a user is only told about pairs on their own watchlist. Returns messages sent.
+    """
+    expired = [s for s in signals if s]
+    if not expired:
+        return 0
+    sent = 0
+    users = await db.fetch_all(USERS, where={"is_active": True})
+    for user in users:
+        if not user.get("telegram_chat_id"):
+            continue
+        prefs = await prefs_service.get_or_create(db, user["id"])
+        if not prefs.get(_PREF_FIELD["signals"]):
+            continue
+        user_tier = user.get("tier", "free")
+        if "signals" not in _TIER_ALLOWED.get(user_tier, {"signals", "system"}):
+            continue
+        market = prefs.get("default_market", "all")
+        matched = [
+            s for s in expired
+            if (market == "all" or s.get("market") == market)
+            and prefs_service.matches_filters(prefs, s)
+        ]
+        if not matched:
+            continue
+        text = format_expired_signals(matched)
+        ok, detail = await asyncio.to_thread(
+            _post_message, _bot_token(user_tier), user["telegram_chat_id"], text
+        )
+        if ok:
+            sent += 1
+        elif detail != "no_bot_token":
+            logger.warning(
+                f"Telegram expiry alert to {user.get('email')} failed: {detail}"
+            )
+    return sent
+
+
 def format_weekly_digest(stats: dict, *, period_days: int = 7) -> str:
     """Render the weekly performance digest. Pure; tolerant of partial stats."""
     overall = stats.get("overall") or {}

@@ -115,3 +115,90 @@ async def test_resolver_expires_signals_below_the_confidence_floor(monkeypatch):
     assert db.updates[0]["status"] == "expired"
     assert db.updates[0]["outcome"] == "expired"
     assert db.updates[0]["resolution_version"] == outcome_service.RESOLUTION_VERSION
+
+
+def _expiring_row(**overrides):
+    row = {
+        "id": "sig-1",
+        "symbol": "EUR/USD",
+        "market": "forex",
+        "direction": "buy",
+        "confidence": 0.60,
+        "entry_price": 1.10,
+        "stop_loss": 1.09,
+        "take_profit": 1.12,
+        "created_at": _ago(20),
+    }
+    row.update(overrides)
+    return row
+
+
+def _patch_resolver(monkeypatch):
+    async def fake_bars(*args, **kwargs):
+        return [], "1h"
+
+    async def fake_close(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(outcome_service, "_fetch_bars_with_fallback", fake_bars)
+    monkeypatch.setattr(
+        "backend.services.order_executor.close_signal_trades", fake_close
+    )
+
+
+async def test_resolver_notifies_expiry_when_requested(monkeypatch):
+    db = _ResolveDB(_expiring_row())
+    _patch_resolver(monkeypatch)
+    calls = []
+
+    async def fake_broadcast(db_, signals):
+        calls.append(signals)
+        return 1
+
+    monkeypatch.setattr(
+        "backend.services.telegram_service.broadcast_expired_signals", fake_broadcast
+    )
+
+    counts = await outcome_service.resolve_active_signals(db, notify_expired=True)
+
+    assert counts["expired"] == 1
+    assert counts["expired_notified"] == 1
+    assert len(calls) == 1
+    expired = calls[0][0]
+    assert expired["symbol"] == "EUR/USD"
+    assert expired["invalidation_reason"] == "confidence_decay"
+    assert expired["exit_price"] is None
+
+
+async def test_resolver_sends_no_expiry_dm_by_default(monkeypatch):
+    db = _ResolveDB(_expiring_row())
+    _patch_resolver(monkeypatch)
+
+    async def unexpected(*args, **kwargs):
+        raise AssertionError("expiry DMs must not fire on a manual/default pass")
+
+    monkeypatch.setattr(
+        "backend.services.telegram_service.broadcast_expired_signals", unexpected
+    )
+
+    counts = await outcome_service.resolve_active_signals(db)
+
+    assert counts["expired"] == 1
+    assert "expired_notified" not in counts
+
+
+async def test_resolver_survives_expiry_notify_failure(monkeypatch):
+    db = _ResolveDB(_expiring_row())
+    _patch_resolver(monkeypatch)
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("telegram down")
+
+    monkeypatch.setattr(
+        "backend.services.telegram_service.broadcast_expired_signals", boom
+    )
+
+    counts = await outcome_service.resolve_active_signals(db, notify_expired=True)
+
+    assert counts["expired"] == 1
+    assert counts["expired_notified"] == 0

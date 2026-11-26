@@ -206,12 +206,17 @@ async def _fetch_bars_with_fallback(market: str, symbol: str, max_age_hours: int
 async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT_MAX_AGE_HOURS,
                                  limit: int = DEFAULT_LIMIT,
                                  budget_seconds: int = DEFAULT_BUDGET_SECONDS,
-                                 fetch_timeout: int = DEFAULT_BAR_FETCH_TIMEOUT) -> dict:
+                                 fetch_timeout: int = DEFAULT_BAR_FETCH_TIMEOUT,
+                                 notify_expired: bool = False) -> dict:
     """Resolve/expire active signals. Returns counts by outcome.
 
     Bar feeds are fetched on a worker thread (``asyncio.to_thread``) so the
     synchronous HTTP calls never block the event loop, and the whole pass is
     bounded by ``budget_seconds`` so a slow provider cannot stall the caller.
+
+    ``notify_expired`` is set by the scheduled scanner so watchlist subscribers
+    get a Telegram notice when one of their pairs expires. Manual admin passes
+    leave it off, so pressing "resolve" never messages users.
     """
     try:
         rows = await db.fetch_all(
@@ -228,6 +233,7 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
     cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
     counts = {"tp": 0, "sl": 0, "expired": 0, "skipped": 0, "budget_exhausted": False}
     bar_cache: dict[tuple[str, str], tuple[list[dict], str]] = {}
+    expired_batch: list[dict] = []
     errors: list[str] = []
     slow: list[dict] = []
     deadline = time.monotonic() + budget_seconds
@@ -258,6 +264,7 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
 
             hit = evaluate(direction, entry, sl, tp, bars, created)
             update: dict | None = None
+            expiry_reason: str | None = None
 
             if hit:
                 outcome, exit_price = hit
@@ -289,6 +296,10 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
                         "resolution_version": RESOLUTION_VERSION,
                     }
                     outcome = "expired"
+                    expiry_reason = signal_service.signal_validity(
+                        confidence, created, status="expired",
+                        resolved_at=update["resolved_at"],
+                    ).get("invalidation_reason")
 
             if update is None:
                 counts["skipped"] += 1
@@ -306,6 +317,17 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
             except Exception as e:  # pragma: no cover - defensive
                 log.warning("signal trade close failed for %s: %s", s.get("symbol"), str(e)[:120])
             counts[outcome] += 1
+            if outcome == "expired" and notify_expired:
+                expired_batch.append({
+                    "symbol": symbol,
+                    "market": market,
+                    "direction": direction,
+                    "confidence": confidence,
+                    "created_at": created,
+                    "resolved_at": update.get("resolved_at"),
+                    "exit_price": update.get("exit_price"),
+                    "invalidation_reason": expiry_reason,
+                })
         except Exception as e:  # pragma: no cover - defensive
             errors.append(f"{s.get('symbol')}: {str(e)[:100]}")
 
@@ -313,6 +335,16 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
         counts["errors"] = errors[:10]
     if slow:
         counts["slowest"] = sorted(slow, key=lambda x: x["seconds"], reverse=True)[:8]
+    if notify_expired:
+        counts["expired_notified"] = 0
+        if expired_batch:
+            try:
+                from backend.services import telegram_service
+                counts["expired_notified"] = await telegram_service.broadcast_expired_signals(
+                    db, expired_batch
+                )
+            except Exception as e:  # pragma: no cover - defensive
+                log.warning("expiry Telegram fan-out failed: %s", str(e)[:150])
     if any(counts.get(k) for k in ("tp", "sl", "expired")):
         from backend.middleware.cache import cache
         cache.clear()

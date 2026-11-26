@@ -136,7 +136,9 @@ async def run_scheduled_scan() -> dict:
             # Hard ceiling so a stalled provider can never wedge the tick loop.
             budget = int(os.getenv("OUTCOME_RESOLVE_BUDGET_SECONDS", "240"))
             resolved = await asyncio.wait_for(
-                outcome_service.resolve_active_signals(db, budget_seconds=budget),
+                outcome_service.resolve_active_signals(
+                    db, budget_seconds=budget, notify_expired=True
+                ),
                 timeout=budget + 60,
             )
         except Exception as e:  # pragma: no cover - defensive
