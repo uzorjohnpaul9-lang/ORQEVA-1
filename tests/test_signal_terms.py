@@ -1,7 +1,14 @@
 """Holding-horizon taxonomy, term-aware validity, cooldown and gating."""
 from datetime import datetime, timedelta, timezone
 
-from backend.services import engine_service, preferences_service, signal_service, signal_terms, telegram_service
+from backend.services import (
+    engine_service,
+    notification_service,
+    preferences_service,
+    signal_service,
+    signal_terms,
+    telegram_service,
+)
 
 
 def _ago(minutes: float) -> str:
@@ -119,3 +126,27 @@ def test_telegram_signal_gate_blocks_free_users_from_fast_signals():
     assert telegram_service._can_receive_signal("premium", fast) is False
     assert telegram_service._can_receive_signal("free", fast) is False
     assert telegram_service._can_receive_signal("free", {"tier_required": "free"}) is True
+
+
+async def test_in_app_fanout_respects_signal_tier(monkeypatch):
+    users = [{"id": "free-1", "tier": "free"}, {"id": "vip-1", "tier": "vip"}]
+    created: list[tuple[str, str]] = []
+
+    async def fake_create(db, user_id, ntype, title, message, **kwargs):
+        created.append((user_id, title))
+
+    async def noop(*args, **kwargs):
+        return None
+
+    for name in ("queue_channel_signals", "flush_channel_signals", "broadcast_signals"):
+        monkeypatch.setattr(telegram_service, name, noop)
+    monkeypatch.setattr(notification_service, "create", fake_create)
+
+    await engine_service._fan_out(
+        _FakeDB(users),
+        {},
+        [{"symbol": "BTC/USD", "direction": "buy", "market": "crypto",
+          "confidence": 0.7, "strategy": "Fast", "tier_required": "vip"}],
+        [],
+    )
+    assert created == [("vip-1", "buy signal: BTC/USD")]

@@ -11,6 +11,8 @@ from engines.price_levels import round_price, valid_levels
 
 log = logging.getLogger(__name__)
 
+_NOTIFY_TIER_RANK = {"free": 0, "premium": 1, "vip": 2}
+
 # (bucket, module, class, strategy, tier, db_market, term, timeframe)
 # bucket = result grouping; db_market = value stored in signals.market
 _ENGINE_SPECS = [
@@ -370,7 +372,11 @@ async def _fan_out(db: SupabaseDB, results: dict, saved: list[dict], errors: lis
         concurrency = max(1, int(os.getenv("NOTIFY_FANOUT_CONCURRENCY", "20")))
 
         async def _notify_user(u: dict) -> None:
+            user_rank = _NOTIFY_TIER_RANK.get((u.get("tier") or "free").lower(), 0)
             for s in top:
+                required = (s.get("tier_required") or s.get("tier") or "free").lower()
+                if user_rank < _NOTIFY_TIER_RANK.get(required, 0):
+                    continue
                 await notif_service.create(
                     db, u["id"], "signal",
                     f"{s.get('direction')} signal: {s.get('symbol')}",
