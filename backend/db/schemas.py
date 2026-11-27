@@ -47,6 +47,12 @@ class SignalResponse(BaseModel):
     strategy: str | None
     status: str
     tier_required: str
+    term: str = "very_long"
+    timeframe: str | None = None
+    resolution_interval: str | None = None
+    horizon: str | None = None
+    term_label: str | None = None
+    paper_only: bool = False
     category: str | None = None
     outcome: str | None = None
     exit_price: float | None = None
@@ -113,6 +119,7 @@ class PreferencesResponse(BaseModel):
     watchlist: list[str] = []
     directions: list[str] = []
     min_confidence: float = 0.0
+    terms: list[str] = []
     telegram_weekly_digest: bool = False
 
     class Config:
@@ -133,6 +140,7 @@ class PreferencesUpdate(BaseModel):
     watchlist: list[str] | None = Field(None, max_length=100)
     directions: list[str] | None = None
     min_confidence: float | None = Field(None, ge=0, le=1)
+    terms: list[str] | None = None
     telegram_weekly_digest: bool | None = None
 
 
@@ -163,6 +171,7 @@ class AutoTradeSettings(BaseModel):
     markets: list[str] = Field(default_factory=lambda: ["forex", "crypto", "stock", "commodity"])
     per_trade_risk_pct: float = Field(1.0, ge=0.1, le=10.0)
     min_confidence: float = Field(0.0, ge=0.0, le=1.0)
+    terms: list[str] = Field(default_factory=list)
 
 
 class AutoTradeLogResponse(BaseModel):

@@ -12,7 +12,7 @@ import requests
 
 from backend.db.models import USERS
 from backend.db.supabase import SupabaseDB
-from backend.services import preferences_service as prefs_service
+from backend.services import preferences_service as prefs_service, signal_terms
 from backend.services import signal_service
 
 logger = logging.getLogger(__name__)
@@ -28,6 +28,20 @@ _PREF_FIELD = {
 }
 
 # Tier gating: free tier does not receive trade-level alerts
+_SIGNAL_TIER_RANK = {"free": 0, "premium": 1, "vip": 2}
+
+
+def _can_receive_signal(user_tier: str | None, signal: dict) -> bool:
+    """Gate individual signals, not just categories.
+
+    Free/premium users must never receive a VIP fast-lane scalp through a
+    channel or DM, even though they are allowed the "signals" category.
+    """
+    required = (signal.get("tier_required") or signal.get("tier") or "free").lower()
+    user = (user_tier or "free").lower()
+    return _SIGNAL_TIER_RANK.get(user, -1) >= _SIGNAL_TIER_RANK.get(required, 99)
+
+
 _TIER_ALLOWED = {
     "free": {"signals", "system"},
     "premium": CATEGORIES,
@@ -154,6 +168,7 @@ async def broadcast_signals(db: SupabaseDB, signals: list[dict]) -> int:
             s for s in fresh
             if (market == "all" or s.get("market") == market)
             and prefs_service.matches_filters(prefs, s)
+            and _can_receive_signal(user_tier, s)
         ]
         # Latency ladder: hold signals still inside this user's window, then
         # deliver anything (including earlier deferrals) that has come due.
@@ -202,11 +217,17 @@ def format_signal_expired(sig: dict) -> str:
     """Render a single expired-signal notice."""
     direction = (sig.get("direction") or "").upper()
     arrow = "\u2197" if direction == "BUY" else "\u2198"
-    reason = _REASON_LABELS.get(
-        str(sig.get("invalidation_reason") or ""), "no longer valid"
-    )
+    reason_key = str(sig.get("invalidation_reason") or "")
+    horizon = signal_terms.horizon_label(sig.get("term"))
+    if reason_key == "time_expiry":
+        reason = f"{horizon} target window ended"
+    elif reason_key == "confidence_decay":
+        reason = "confidence fell below the term's validity floor"
+    else:
+        reason = _REASON_LABELS.get(reason_key, "no longer valid")
     lines = [
         f"{arrow} <b>{sig.get('symbol', '?')}</b> ({sig.get('market', '?')}) {direction}".rstrip(),
+        f"Horizon: {horizon}",
         f"Signal expired: {reason}.",
     ]
     exit_price = sig.get("exit_price")
@@ -254,6 +275,7 @@ async def broadcast_expired_signals(db: SupabaseDB, signals: list[dict]) -> int:
             s for s in expired
             if (market == "all" or s.get("market") == market)
             and prefs_service.matches_filters(prefs, s)
+            and _can_receive_signal(user_tier, s)
         ]
         if not matched:
             continue
@@ -565,6 +587,10 @@ def format_signal_alert(sig: dict) -> str:
     if levels:
         lines.append(" | ".join(levels))
     lines.append(f"Confidence: {conf:.0f}% | Strategy: {sig.get('strategy', 'ai')}")
+    term = signal_terms.normalize_term(sig.get("term"))
+    lines.append(f"Horizon: {signal_terms.horizon_label(term)} ({signal_terms.label(term)})")
+    if signal_terms.paper_only(term):
+        lines.append("Execution: paper only")
     sent = (sig.get("indicators") or {}).get("sentiment") or {}
     if isinstance(sent, dict) and sent.get("tag"):
         adj = float(sent.get("modifier") or 0) * 100

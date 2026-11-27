@@ -299,9 +299,14 @@ def get_movers(use_cache: bool = True) -> list[dict[str, Any]]:
     return result
 
 
-def get_bars(market: str, symbol: str, interval: str = "1day", outputsize: int = 30) -> dict[str, Any]:
-    """OHLC series for charts. Cached longer than quotes."""
-    cache_key = f"mkt:bars:{market}:{symbol}:{interval}:{outputsize}"
+def get_bars(market: str, symbol: str, interval: str = "1day", outputsize: int = 30,
+             ttl: int | None = None) -> dict[str, Any]:
+    """OHLC series for charts. Cached longer than quotes.
+
+    ``ttl`` lets the fast lane keep 1m bars fresh (seconds) while charts keep
+    their longer cache.
+    """
+    cache_key = f"mkt:bars:{market}:{symbol}:{interval}:{outputsize}:{ttl if ttl is not None else BARS_TTL}"
     cached = cache.get(cache_key)
     if cached is not None:
         return cached
@@ -331,7 +336,7 @@ def get_bars(market: str, symbol: str, interval: str = "1day", outputsize: int =
             result = _td_bars(symbol, interval, outputsize)
 
     if "bars" in result:
-        cache.set(cache_key, result, ttl=BARS_TTL)
+        cache.set(cache_key, result, ttl=BARS_TTL if ttl is None else ttl)
     return result
 
 

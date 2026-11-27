@@ -6,20 +6,26 @@ from typing import Any
 
 from backend.db.models import SIGNALS, USERS
 from backend.db.supabase import SupabaseDB, now_iso
-from backend.services import signal_service
+from backend.services import signal_service, signal_terms
 from engines.price_levels import round_price, valid_levels
 
 log = logging.getLogger(__name__)
 
-# (bucket, module, class, strategy, tier, db_market)
+# (bucket, module, class, strategy, tier, db_market, term, timeframe)
 # bucket = result grouping; db_market = value stored in signals.market
 _ENGINE_SPECS = [
-    ("stock", "engines.stock_engine", "StockEngine", "Alpaca Breakout", "premium", "stock"),
-    ("forex", "engines.forex_engine", "ForexEngine", "Twelve Data Trend", "free", "forex"),
-    ("crypto", "engines.crypto_engine", "CryptoEngine", "Crypto Momentum", "vip", "crypto"),
-    ("crypto_alt", "engines.crypto_alt_engine", "CryptoAltEngine", "Meme Momentum", "vip", "crypto"),
-    ("commodity", "engines.commodity_engine", "CommodityEngine", "Commodity Trend", "premium", "commodity"),
+    ("stock", "engines.stock_engine", "StockEngine", "Alpaca Breakout", "premium", "stock", "very_long", "1day"),
+    ("forex", "engines.forex_engine", "ForexEngine", "Twelve Data Trend", "free", "forex", "very_long", "1day"),
+    ("crypto", "engines.crypto_engine", "CryptoEngine", "Crypto Momentum", "vip", "crypto", "very_long", "1day"),
+    ("crypto_alt", "engines.crypto_alt_engine", "CryptoAltEngine", "Meme Momentum", "vip", "crypto", "very_long", "1day"),
+    ("commodity", "engines.commodity_engine", "CommodityEngine", "Commodity Trend", "premium", "commodity", "very_long", "1day"),
 ]
+
+_FAST_SYMBOL_DEFAULTS = {
+    "crypto": ["BTC/USD", "ETH/USD", "SOL/USD", "BNB/USD"],
+    "forex": ["EUR/USD"],
+    "commodity": ["XAU/USD"],
+}
 
 
 def _empty_results() -> dict[str, list]:
@@ -27,7 +33,9 @@ def _empty_results() -> dict[str, list]:
 
 
 def _engine_signal_to_db(signal, market: str, strategy: str, tier: str = "free",
-                         event_context: dict | None = None) -> dict:
+                         event_context: dict | None = None,
+                         term: str = signal_terms.DEFAULT_TERM,
+                         timeframe: str | None = None) -> dict:
     indicators = dict(signal.metadata or {})
     data_source = indicators.pop("data_source", None) or "live"
     if event_context:
@@ -44,6 +52,11 @@ def _engine_signal_to_db(signal, market: str, strategy: str, tier: str = "free",
             f"invalid levels for {signal.symbol}: entry={entry} "
             f"sl={stop_loss} tp={take_profit}"
         )
+    term = signal_terms.normalize_term(getattr(signal, "term", None) or term)
+    timeframe = (
+        getattr(signal, "timeframe", None) or timeframe
+        or signal_terms.data_interval(term)
+    )
     return {
         "symbol": signal.symbol,
         "market": market,
@@ -56,13 +69,18 @@ def _engine_signal_to_db(signal, market: str, strategy: str, tier: str = "free",
         "tier": tier,
         "indicators": indicators,
         "data_source": data_source,
+        "term": term,
+        "timeframe": timeframe,
+        "resolution_interval": signal_terms.resolver_interval(term),
     }
 
 
 async def recent_signal_keys(
-    db: SupabaseDB, hours: int, symbols: list[str] | None = None
-) -> set[tuple[str, str, str]]:
-    """(symbol, market, direction) tuples still blocking a re-issue.
+    db: SupabaseDB, hours: int, symbols: list[str] | None = None,
+    term_cooldowns: dict[str, float] | None = None,
+    include_term: bool = False,
+) -> set[tuple]:
+    """Keys still blocking a re-issue.
 
     Expired and cancelled rows, plus active rows whose confidence has already
     decayed below the validity floor, do not block a fresh signal. That lets the
@@ -71,13 +89,18 @@ async def recent_signal_keys(
     1000-row cap silently truncates the window - a busy table has thousands of
     rows in 24h - so the cooldown misses signals and duplicates get published.
     The rows are paged through for the same reason.
+
+    ``term_cooldowns`` applies a per-term window (fast terms cooldown in
+    minutes). ``include_term`` returns (symbol, market, direction, term) so a
+    fast scalp does not suppress a swing call on the same pair.
     """
     from datetime import datetime, timedelta, timezone
 
     if symbols is not None and not symbols:
         return set()
 
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat().replace("+00:00", "Z")
+    max_hours = max([float(hours or 0), *(term_cooldowns or {}).values()])
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_hours)).isoformat().replace("+00:00", "Z")
     where: dict[str, Any] = {"created_at": {"op": "gte", "value": cutoff}}
     if symbols is not None:
         where["symbol"] = sorted(set(symbols))
@@ -85,14 +108,22 @@ async def recent_signal_keys(
     rows: list[dict] = []
     page_size = 1000
     offset = 0
+    columns = "symbol,market,direction,status,confidence,created_at,term"
     while True:
-        chunk = await db.fetch_all(
-            SIGNALS,
-            where=where,
-            columns="symbol,market,direction,status,confidence,created_at",
-            limit=page_size,
-            offset=offset,
-        )
+        try:
+            chunk = await db.fetch_all(
+                SIGNALS,
+                where=where,
+                columns=columns,
+                limit=page_size,
+                offset=offset,
+            )
+        except Exception:
+            if "term" not in columns:
+                raise
+            # The term migration has not been applied yet; legacy columns only.
+            columns = "symbol,market,direction,status,confidence,created_at"
+            continue
         rows.extend(chunk)
         if len(chunk) < page_size:
             break
@@ -102,16 +133,29 @@ async def recent_signal_keys(
         status = (row.get("status") or "active").lower()
         if status in ("expired", "cancelled"):
             return False
+        term = signal_terms.normalize_term(row.get("term"))
+        window = (term_cooldowns or {}).get(term, hours)
+        if window and window > 0:
+            try:
+                created = datetime.fromisoformat(str(row.get("created_at")).replace("Z", "+00:00"))
+                if (datetime.now(timezone.utc) - created).total_seconds() / 3600 > window:
+                    return False
+            except (TypeError, ValueError):
+                pass
         confidence = row.get("confidence")
         if status == "active" and confidence is not None:
-            return signal_service.is_signal_valid(confidence, row.get("created_at"))
+            return signal_service.is_signal_valid(confidence, row.get("created_at"), term=term)
         return True
 
-    return {
-        (r.get("symbol"), r.get("market"), r.get("direction"))
-        for r in rows
-        if _blocks_reissue(r)
-    }
+    keys = []
+    for r in rows:
+        if not _blocks_reissue(r):
+            continue
+        base = (r.get("symbol"), r.get("market"), r.get("direction"))
+        if include_term:
+            base = base + (signal_terms.normalize_term(r.get("term")),)
+        keys.append(base)
+    return set(keys)
 
 
 async def run_scan(db: SupabaseDB, *, cooldown_hours: int = 0) -> dict:
@@ -129,7 +173,7 @@ async def run_scan(db: SupabaseDB, *, cooldown_hours: int = 0) -> dict:
     except Exception:
         event_context = None
 
-    for bucket, mod_name, cls_name, strategy, tier, db_market in _ENGINE_SPECS:
+    for bucket, mod_name, cls_name, strategy, tier, db_market, term, timeframe in _ENGINE_SPECS:
         try:
             module = __import__(mod_name, fromlist=[cls_name])
             engine = getattr(module, cls_name)()
@@ -138,7 +182,8 @@ async def run_scan(db: SupabaseDB, *, cooldown_hours: int = 0) -> dict:
                 for signal in raw:
                     try:
                         row = _engine_signal_to_db(
-                            signal, db_market, strategy, tier, event_context
+                            signal, db_market, strategy, tier, event_context,
+                            term=term, timeframe=timeframe,
                         )
                     except ValueError as e:
                         dropped_invalid += 1
@@ -185,6 +230,101 @@ async def run_scan(db: SupabaseDB, *, cooldown_hours: int = 0) -> dict:
         "promoted_to_premium": promoted,
         "dropped_simulated": dropped_simulated,
         "dropped_invalid": dropped_invalid,
+        "errors": errors,
+        "saved": saved,
+    }
+
+
+async def run_fast_scan(db: SupabaseDB) -> dict:
+    """Run the 1m/5m fast lane once and publish VIP-only scalps.
+
+    Fast terms are deliberately separated from the swing scan: they use short
+    TTL bars, a cost-aware take-profit gate and per-term cooldowns. If the
+    fast lane errors it must never take the main scan down with it.
+    """
+    from engines.intraday_engine import IntradayEngine
+
+    terms_raw = os.getenv("FAST_SCAN_TERMS", ",".join(signal_terms.FAST_TERMS))
+    terms = []
+    for raw in terms_raw.split(","):
+        if signal_terms.is_valid_term(raw) and signal_terms.is_fast(raw):
+            term = signal_terms.normalize_term(raw)
+            if term not in terms:
+                terms.append(term)
+
+    errors: list[str] = []
+    rows: list[dict] = []
+    dropped_invalid = 0
+
+    for term in terms:
+        for market, default_symbols in _FAST_SYMBOL_DEFAULTS.items():
+            env_symbols = os.getenv(f"FAST_SCAN_{market.upper()}_SYMBOLS")
+            symbols = (
+                [s.strip() for s in env_symbols.split(",") if s.strip()]
+                if env_symbols else default_symbols
+            )
+            if not symbols:
+                continue
+            try:
+                engine = IntradayEngine(market=market, symbols=symbols, term=term)
+                if not await asyncio.to_thread(engine.is_market_hours):
+                    continue
+                raw_signals = await asyncio.to_thread(engine.run_cycle)
+                for signal in raw_signals:
+                    try:
+                        rows.append(_engine_signal_to_db(
+                            signal, market, f"Fast {signal_terms.label(term)}",
+                            signal_terms.min_tier(term), None,
+                            term=term, timeframe=signal_terms.data_interval(term),
+                        ))
+                    except ValueError as e:
+                        dropped_invalid += 1
+                        log.warning("dropped invalid fast signal: %s", e)
+            except Exception as e:
+                errors.append(f"fast {term} {market}: {str(e)[:150]}")
+
+    if rows:
+        symbols = sorted({r["symbol"] for r in rows})
+        seen = await recent_signal_keys(
+            db,
+            hours=0,
+            symbols=symbols,
+            term_cooldowns={t: signal_terms.cooldown_hours(t) for t in terms},
+            include_term=True,
+        )
+        rows = [
+            r for r in rows
+            if (r["symbol"], r["market"], r["direction"], r["term"]) not in seen
+        ]
+
+    dropped_simulated = sum(1 for r in rows if r.get("data_source") != "live")
+    rows = [r for r in rows if r.get("data_source") == "live"]
+
+    cap = max(1, int(os.getenv("FAST_MAX_SIGNALS_PER_SCAN", "6")))
+    dropped_capped = max(0, len(rows) - cap)
+    rows = rows[:cap]
+
+    saved: list[dict] = []
+    if rows:
+        saved = await signal_service.save_signals_batch(db, rows)
+        await _auto_trade(db, saved, errors)
+        fresh = {"fast": saved}
+        await _fan_out(db, fresh, saved, errors)
+
+    from backend.middleware.cache import cache
+    cache.clear()
+
+    return {
+        "signals_generated": len(saved),
+        "terms": terms,
+        "symbols": sorted({r["symbol"] for r in rows}),
+        "by_market": {
+            market: sum(1 for r in rows if r["market"] == market)
+            for market in _FAST_SYMBOL_DEFAULTS
+        },
+        "dropped_simulated": dropped_simulated,
+        "dropped_invalid": dropped_invalid,
+        "dropped_capped": dropped_capped,
         "errors": errors,
         "saved": saved,
     }

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from backend.db.models import SIGNALS, TRADES, gen_uuid
 from backend.db.supabase import SupabaseDB, now_iso, parse_dt
+from backend.services import signal_terms
 
 # Delivery latency ladder (the "Signal latency" promise in the pricing matrix):
 # a free user sees a signal five minutes after it is generated, premium after
@@ -46,14 +47,50 @@ def is_released(signal: dict, tier: str | None, now: datetime | None = None) -> 
 def _signal_row(s: dict) -> dict:
     row = dict(s)
     row.setdefault("status", "active")
+    row.setdefault("term", signal_terms.DEFAULT_TERM)
     row["direction"] = (row.get("direction") or "").lower()
     return row
+
+
+def _expires_at_iso(term: str, start=None) -> str:
+    """Absolute deadline for a term, stored on the row as expires_at."""
+    start_dt = parse_dt(start) if start else datetime.now(timezone.utc)
+    hours = signal_terms.max_age_hours(term)
+    return (start_dt + timedelta(hours=hours)).isoformat().replace("+00:00", "Z")
+
+
+async def _insert_signal(db: SupabaseDB, row: dict) -> dict:
+    try:
+        return await db.insert(SIGNALS, row)
+    except Exception:
+        legacy = _strip_term_columns([row])
+        return (await db.insert_many(SIGNALS, legacy))[0]
+
+
+async def _insert_signals(db: SupabaseDB, rows: list[dict]) -> list[dict]:
+    try:
+        return await db.insert_many(SIGNALS, rows)
+    except Exception:
+        return await db.insert_many(SIGNALS, _strip_term_columns(rows))
+
+
+def _strip_term_columns(rows: list[dict]) -> list[dict]:
+    """Fallback for a database that has not run the term migration yet."""
+    return [
+        {k: v for k, v in row.items()
+         if k not in ("term", "timeframe", "resolution_interval")}
+        for row in rows
+    ]
 
 
 async def save_signal(db: SupabaseDB, symbol: str, market: str, direction: str,
                       confidence: float, entry_price: float, stop_loss: float,
                       take_profit: float, strategy: str, tier: str = "free",
-                      indicators: dict | None = None, data_source: str = "live") -> dict:
+                      indicators: dict | None = None, data_source: str = "live",
+                      term: str = signal_terms.DEFAULT_TERM,
+                      timeframe: str | None = None) -> dict:
+    term = signal_terms.normalize_term(term)
+    created_at = now_iso()
     row = {
         "id": gen_uuid(),
         "user_id": None,
@@ -69,14 +106,20 @@ async def save_signal(db: SupabaseDB, symbol: str, market: str, direction: str,
         "tier_required": tier,
         "indicators": indicators,
         "data_source": data_source,
-        "created_at": now_iso(),
+        "term": term,
+        "timeframe": timeframe or signal_terms.data_interval(term),
+        "resolution_interval": signal_terms.resolver_interval(term),
+        "created_at": created_at,
+        "expires_at": _expires_at_iso(term, created_at),
     }
-    return await db.insert(SIGNALS, row)
+    return await _insert_signal(db, row)
 
 
 async def save_signals_batch(db: SupabaseDB, signals: list[dict]) -> list[dict]:
     rows = []
     for s in signals:
+        term = signal_terms.normalize_term(s.get("term"))
+        created_at = now_iso()
         rows.append({
             "id": gen_uuid(),
             "user_id": None,
@@ -92,14 +135,19 @@ async def save_signals_batch(db: SupabaseDB, signals: list[dict]) -> list[dict]:
             "tier_required": s.get("tier", "free"),
             "indicators": s.get("indicators"),
             "data_source": s.get("data_source") or "live",
-            "created_at": now_iso(),
+            "term": term,
+            "timeframe": s.get("timeframe") or signal_terms.data_interval(term),
+            "resolution_interval": s.get("resolution_interval") or signal_terms.resolver_interval(term),
+            "created_at": created_at,
+            "expires_at": _expires_at_iso(term, created_at),
         })
-    return await db.insert_many(SIGNALS, rows)
+    return await _insert_signals(db, rows)
 
 
 async def list_signals(db: SupabaseDB, market: str | None = None,
                        status: str | None = None, tier: str = "free",
-                       limit: int = 50, released_only: bool = True) -> list[dict]:
+                       limit: int = 50, released_only: bool = True,
+                       term: str | None = None) -> list[dict]:
     # Default-deny: an unrecognised tier must not see anything, otherwise a
     # corrupt/typo'd tier value silently unlocks every gated signal.
     allowed = _SEE_TIERS.get((tier or "").lower())
@@ -111,10 +159,19 @@ async def list_signals(db: SupabaseDB, market: str | None = None,
         where["market"] = market
     if status:
         where["status"] = status
+    if term:
+        where["term"] = signal_terms.normalize_term(term)
     if released_only:
         # Latency ladder: a tier only sees signals older than its own delay.
         where["created_at"] = {"op": "lte", "value": released_at_iso(tier)}
-    return await db.fetch_all(SIGNALS, where=where, order="created_at.desc", limit=limit)
+    try:
+        return await db.fetch_all(SIGNALS, where=where, order="created_at.desc", limit=limit)
+    except Exception:
+        if "term" not in where:
+            raise
+        # Pre-migration database: the term column does not exist yet.
+        where.pop("term", None)
+        return await db.fetch_all(SIGNALS, where=where, order="created_at.desc", limit=limit)
 
 
 def _teaser(signal: dict) -> dict:
@@ -134,7 +191,7 @@ def _teaser(signal: dict) -> dict:
 
 async def locked_teasers(db: SupabaseDB, market: str | None = None,
                          status: str | None = None, tier: str = "free",
-                         limit: int = 3) -> list[dict]:
+                         limit: int = 3, term: str | None = None) -> list[dict]:
     """Higher-tier signals the user cannot open yet, shown as locked teasers.
 
     The user's own latency window still applies so upcoming paid calls are not
@@ -155,7 +212,15 @@ async def locked_teasers(db: SupabaseDB, market: str | None = None,
         where["market"] = market
     if status:
         where["status"] = status
-    rows = await db.fetch_all(SIGNALS, where=where, order="created_at.desc", limit=limit)
+    if term:
+        where["term"] = signal_terms.normalize_term(term)
+    try:
+        rows = await db.fetch_all(SIGNALS, where=where, order="created_at.desc", limit=limit)
+    except Exception:
+        if "term" not in where:
+            raise
+        where.pop("term", None)
+        rows = await db.fetch_all(SIGNALS, where=where, order="created_at.desc", limit=limit)
     return [_teaser(r) for r in rows]
 
 
@@ -211,8 +276,8 @@ async def get_signal(db: SupabaseDB, signal_id: str) -> dict | None:
     return await db.fetch_one(SIGNALS, {"id": signal_id})
 
 
-# Confidence decay: exponential half-life of 12 hours.
-# A signal generated 12h ago is worth half its original confidence.
+# Confidence decay defaults are retained for callers that inspect the legacy
+# constants. Per-term behaviour comes from signal_terms.TermConfig.
 DECAY_HALF_LIFE_HOURS = 12.0
 
 
@@ -231,45 +296,49 @@ VALIDITY_GRACE_HOURS = max(0.0, _env_float("SIGNAL_VALIDITY_GRACE_HOURS", 1.0))
 MAX_SIGNAL_AGE_HOURS = max(1.0, _env_float("SIGNAL_MAX_AGE_HOURS", 72.0))
 
 
-def apply_decay(confidence: float, created_at) -> tuple[float, float]:
-    """Return (effective_confidence, age_hours) with exponential time decay."""
+def apply_decay(confidence: float, created_at, term: str | None = None) -> tuple[float, float]:
+    """Return (effective_confidence, age_hours) with term-aware time decay."""
     confidence = float(confidence or 0.0)
     if created_at is None:
         return confidence, 0.0
+    cfg = signal_terms.get(term)
     created = parse_dt(created_at)
     age_hours = max(0.0, (datetime.now(timezone.utc) - created).total_seconds() / 3600)
-    effective = confidence * (0.5 ** (age_hours / DECAY_HALF_LIFE_HOURS))
+    effective = confidence * (0.5 ** (age_hours / cfg.decay_half_life_hours))
     return round(effective, 4), round(age_hours, 2)
 
 
-def valid_until(confidence: float, created_at) -> datetime | None:
+def valid_until(confidence: float, created_at, term: str | None = None) -> datetime | None:
     """When the signal stops being valid if price never resolves it first."""
     if created_at is None:
         return None
+    cfg = signal_terms.get(term)
     confidence = float(confidence or 0.0)
     created = parse_dt(created_at)
-    if confidence <= VALIDITY_MIN_CONFIDENCE:
-        hours = VALIDITY_GRACE_HOURS
+    if confidence <= cfg.validity_floor:
+        hours = cfg.grace_hours
     else:
-        hours = DECAY_HALF_LIFE_HOURS * math.log2(confidence / VALIDITY_MIN_CONFIDENCE)
-        hours = max(hours, VALIDITY_GRACE_HOURS)
-    return created + timedelta(hours=min(hours, MAX_SIGNAL_AGE_HOURS))
+        hours = cfg.decay_half_life_hours * math.log2(confidence / cfg.validity_floor)
+        hours = max(hours, cfg.grace_hours)
+    return created + timedelta(hours=min(hours, cfg.max_age_hours))
 
 
-def is_signal_valid(confidence: float, created_at) -> bool:
-    """True while the signal is still inside its confidence-decay window."""
-    effective, age = apply_decay(confidence, created_at)
-    if age <= VALIDITY_GRACE_HOURS:
+def is_signal_valid(confidence: float, created_at, term: str | None = None) -> bool:
+    """True while the signal is still inside its term's decay window."""
+    cfg = signal_terms.get(term)
+    effective, age = apply_decay(confidence, created_at, term=term)
+    if age <= cfg.grace_hours:
         return True
-    return effective >= VALIDITY_MIN_CONFIDENCE
+    return effective >= cfg.validity_floor
 
 
 def signal_validity(confidence: float, created_at, status: str | None = None,
-                    resolved_at=None) -> dict:
+                    resolved_at=None, term: str | None = None) -> dict:
     """Validity view shared by the API and the outcome resolver."""
-    effective, age = apply_decay(confidence, created_at)
+    cfg = signal_terms.get(term)
+    effective, age = apply_decay(confidence, created_at, term=term)
     state = (status or "active").lower()
-    deadline = valid_until(confidence, created_at)
+    deadline = valid_until(confidence, created_at, term=term)
     reason: str | None = None
     valid = True
 
@@ -281,13 +350,13 @@ def signal_validity(confidence: float, created_at, status: str | None = None,
             life_hours = max(0.0, (resolved - created).total_seconds() / 3600)
             reason = (
                 "confidence_decay"
-                if life_hours < MAX_SIGNAL_AGE_HOURS - 0.05
+                if life_hours < cfg.max_age_hours - 0.05
                 else "time_expiry"
             )
         else:
             reason = (
                 "confidence_decay"
-                if effective < VALIDITY_MIN_CONFIDENCE
+                if effective < cfg.validity_floor
                 else "time_expiry"
             )
     elif state == "cancelled":
@@ -295,7 +364,7 @@ def signal_validity(confidence: float, created_at, status: str | None = None,
         reason = "cancelled"
     elif state != "active":
         valid = False
-    elif not is_signal_valid(confidence, created_at):
+    elif not is_signal_valid(confidence, created_at, term=term):
         valid = False
         reason = "confidence_decay"
 
@@ -307,6 +376,7 @@ def signal_validity(confidence: float, created_at, status: str | None = None,
         "valid_until": (
             deadline.isoformat().replace("+00:00", "Z") if deadline else None
         ),
+        "term": signal_terms.normalize_term(term),
     }
 
 

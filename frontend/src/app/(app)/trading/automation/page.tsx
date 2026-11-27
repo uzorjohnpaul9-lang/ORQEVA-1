@@ -18,6 +18,14 @@ const MARKET_CHIPS = [
   { market: "commodity", label: "Commodity", tier: "Premium" },
 ];
 
+const TERM_CHIPS = [
+  { term: "very_short", label: "5-15m", note: "VIP · paper only" },
+  { term: "short", label: "15-60m", note: "VIP · paper only" },
+  { term: "medium", label: "1-6h", note: "Premium+" },
+  { term: "long", label: "6-24h", note: "Premium+" },
+  { term: "very_long", label: "1-5d", note: "All plans" },
+];
+
 const STATUS_VARIANT: Record<string, "green" | "red" | "blue" | "yellow" | "gray"> = {
   placed: "green",
   skipped: "gray",
@@ -97,6 +105,16 @@ export default function AutoTradePage() {
     const has = settings.markets.includes(market);
     const markets = has ? settings.markets.filter((m) => m !== market) : [...settings.markets, market];
     save({ ...settings, markets });
+  }
+
+  function toggleTerm(term: string) {
+    if (!settings) return;
+    const current = settings.terms ?? [];
+    const has = current.includes(term);
+    save({
+      ...settings,
+      terms: has ? current.filter((t) => t !== term) : [...current, term],
+    });
   }
 
   const placed = log.filter((e) => e.status === "placed").length;
@@ -236,6 +254,37 @@ export default function AutoTradePage() {
                   <Link href="/billing" className="text-green underline">Plans</Link>.
                 </p>
               )}
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Horizons</CardTitle>
+              </CardHeader>
+              <div className="space-y-2">
+                {TERM_CHIPS.map((c) => {
+                  const active =
+                    !settings.terms?.length || settings.terms.includes(c.term);
+                  return (
+                    <button
+                      key={c.term}
+                      onClick={() => toggleTerm(c.term)}
+                      disabled={saving}
+                      className={`w-full flex items-center justify-between px-4 py-3 rounded-lg border text-sm transition-colors ${
+                        active
+                          ? "bg-green/10 border-green/40 text-text-primary"
+                          : "bg-bg-tertiary border-border text-text-secondary hover:bg-bg-hover"
+                      }`}
+                    >
+                      <span>{c.label}</span>
+                      <Badge variant={active ? "green" : "gray"}>{c.note}</Badge>
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-text-muted mt-3">
+                No selection means every horizon. Fast lanes (5-15m, 15-60m) always
+                execute on the paper ledger, never live.
+              </p>
             </Card>
           </div>
 

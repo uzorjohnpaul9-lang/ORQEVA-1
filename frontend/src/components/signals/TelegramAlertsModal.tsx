@@ -433,6 +433,44 @@ export function TelegramAlertsModal({
                   { value: "0.8", label: "80%+" },
                 ]}
               />
+              <div>
+                <span className="text-sm">Horizons</span>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {([
+                    ["very_short", "5-15m"],
+                    ["short", "15-60m"],
+                    ["medium", "1-6h"],
+                    ["long", "6-24h"],
+                    ["very_long", "1-5d"],
+                  ] as const).map(([key, label]) => {
+                    const selected = (prefs.terms ?? []).includes(key);
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => {
+                          const terms = prefs.terms ?? [];
+                          savePrefs({
+                            terms: selected
+                              ? terms.filter((x) => x !== key)
+                              : [...terms, key],
+                          });
+                        }}
+                        className={`rounded-md border px-3 py-1.5 text-xs transition-colors ${
+                          selected
+                            ? "border-purple bg-purple/15 text-purple"
+                            : "border-border bg-bg-tertiary text-text-secondary"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="mt-1 text-xs text-text-secondary">
+                  Unselected = all horizons. 5-15m and 15-60m alerts are VIP-only and paper-only.
+                </p>
+              </div>
             </div>
           </div>
 

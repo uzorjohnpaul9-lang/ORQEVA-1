@@ -11,7 +11,7 @@ from backend.db.models import SIGNALS, USERS
 from backend.db.schemas import SignalResponse
 from backend.db.supabase import SupabaseDB, get_service_client, now_iso, parse_dt
 from backend.auth import get_current_user, resolve_user_from_token
-from backend.services import signal_service
+from backend.services import signal_service, signal_terms
 from backend.middleware.rate_limiter import check_rate_limit
 from backend.middleware.cache import cache
 from engines.engine_config import HOT_COINS, LARGE_CRYPTO, MEME_COINS, MID_CRYPTO
@@ -39,15 +39,22 @@ def _category(market: str | None, symbol: str | None) -> str:
 
 
 def _serialize(signal: dict, with_decay: bool = True) -> dict:
+    term = signal_terms.normalize_term(signal.get("term"))
+    signal = {**signal, "term": term}
     data = SignalResponse.model_validate(signal).model_dump(mode="json")
     data["category"] = _category(signal.get("market"), signal.get("symbol"))
     data["locked"] = bool(signal.get("locked"))
+    data["term"] = term
+    data["horizon"] = signal_terms.horizon_label(term)
+    data["term_label"] = signal_terms.label(term)
+    data["paper_only"] = signal_terms.paper_only(term)
     if with_decay:
         validity = signal_service.signal_validity(
             signal.get("confidence"),
             signal.get("created_at"),
             status=signal.get("status"),
             resolved_at=signal.get("resolved_at"),
+            term=term,
         )
         data.update(validity)
     return data
@@ -68,24 +75,31 @@ def _tier_allowed(user: dict, tier_required: str | None) -> bool:
 async def list_signals(
     market: str | None = Query(None),
     status: str | None = Query(None),
+    term: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     db: SupabaseDB = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
     check_rate_limit(user["id"], user.get("tier", "free"))
 
-    cache_key = f"signals:{user.get('tier', 'free')}:{market}:{status}:{limit}"
+    if term is not None and not signal_terms.is_valid_term(term):
+        raise HTTPException(status_code=422, detail="Unknown signal term")
+    cache_key = f"signals:{user.get('tier', 'free')}:{market}:{status}:{term}:{limit}"
     cached = cache.get(cache_key)
     if cached is not None:
         return cached
 
     tier = user.get("tier", "free")
-    signals = await signal_service.list_signals(db, market=market, status=status, tier=tier, limit=limit)
+    signals = await signal_service.list_signals(
+        db, market=market, status=status, tier=tier, limit=limit, term=term,
+    )
     result = [_serialize(s) for s in signals]
 
     # Locked teasers: higher-tier signals shown blurred to drive the upgrade.
     if not user.get("is_admin"):
-        teasers = await signal_service.locked_teasers(db, market=market, status=status, tier=tier, limit=3)
+        teasers = await signal_service.locked_teasers(
+            db, market=market, status=status, tier=tier, limit=3, term=term,
+        )
         result.extend(_serialize(t) for t in teasers)
         result.sort(key=lambda r: r.get("created_at") or "", reverse=True)
 

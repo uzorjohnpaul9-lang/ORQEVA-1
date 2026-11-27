@@ -25,6 +25,15 @@ import type {
 
 const MARKETS = ["all", "stock", "forex", "crypto", "commodity"] as const;
 const STATUSES = ["active", "history", "all"] as const;
+const TERMS = ["all", "very_short", "short", "medium", "long", "very_long"] as const;
+const TERM_LABELS: Record<string, string> = {
+  all: "ALL TERMS",
+  very_short: "5-15M",
+  short: "15-60M",
+  medium: "1-6H",
+  long: "6-24H",
+  very_long: "1-5D",
+};
 
 function categoryVariant(cat: string): "green" | "yellow" | "purple" | "blue" | "gray" {
   if (cat === "meme") return "purple";
@@ -164,6 +173,7 @@ export default function SignalsPage() {
   const [accuracy, setAccuracy] = useState<AccuracyStats | null>(null);
   const [market, setMarket] = useState<(typeof MARKETS)[number]>("all");
   const [status, setStatus] = useState<(typeof STATUSES)[number]>("active");
+  const [term, setTerm] = useState<(typeof TERMS)[number]>("all");
   const [selected, setSelected] = useState<Signal | null>(null);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<string>("");
@@ -414,10 +424,11 @@ export default function SignalsPage() {
       return (
         watched.has(s.symbol.toUpperCase()) &&
         (market === "all" || s.market === market) &&
+        (term === "all" || (s.term ?? "very_long") === term) &&
         statusMatch
       );
     });
-  }, [signals, watched, market, status]);
+  }, [signals, watched, market, status, term]);
 
   return (
     <div className="space-y-6">
@@ -587,11 +598,24 @@ export default function SignalsPage() {
             {st === "history" ? "HISTORY" : st.toUpperCase()}
           </button>
         ))}
+        <span className="w-px h-5 bg-border mx-1" />
+        {TERMS.map((tm) => (
+          <button
+            key={tm}
+            onClick={() => setTerm(tm)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+              term === tm ? "bg-purple text-white" : "bg-bg-tertiary text-text-secondary hover:text-text-primary"
+            }`}
+          >
+            {TERM_LABELS[tm]}
+          </button>
+        ))}
         <span className="ml-auto text-xs text-text-muted">{filtered.length} watchlist signals</span>
       </div>
       <p className="text-xs text-text-muted">
-        A signal stays live while confidence is at least 50% (72h maximum). Expired setups move to
-        History and are replaced only if the market qualifies again.
+        Each signal carries a target horizon (5-15m, 15-60m, 1-6h, 6-24h or 1-5d). It stays live
+        while confidence is above its term floor; expired setups move to History and are replaced
+        only if the market qualifies again. Fast 5-15m signals are VIP-only and paper-only.
       </p>
 
       {(loading && signals.length === 0) || watchlist === null ? (
@@ -626,6 +650,11 @@ export default function SignalsPage() {
                       <Badge variant={marketVariant(s.market)}>
                         {s.market}
                       </Badge>
+                      {s.horizon && (
+                        <Badge variant={s.term === "very_short" || s.term === "short" ? "purple" : "blue"}>
+                          {s.horizon}
+                        </Badge>
+                      )}
                       {s.category && s.category !== s.market && (
                         <Badge variant={categoryVariant(s.category)}>{s.category}</Badge>
                       )}

@@ -24,6 +24,8 @@ export interface Preferences {
   watchlist: string[];
   directions: string[];
   min_confidence: number;
+  /** Holding-horizon filters; empty means all terms. */
+  terms: string[];
   telegram_weekly_digest: boolean;
   telegram_chat_id?: string | null;
   telegram_linked?: boolean;
@@ -43,6 +45,12 @@ export interface Signal {
   strategy: string | null;
   status: string;
   tier_required: string;
+  term?: "very_short" | "short" | "medium" | "long" | "very_long";
+  term_label?: string | null;
+  timeframe?: string | null;
+  resolution_interval?: string | null;
+  horizon?: string | null;
+  paper_only?: boolean;
   /** meme | hot | major | alt for crypto; else the market name. */
   category?: string | null;
   /** Resolved outcome once the signal closes: tp | sl | expired | breakeven. */
@@ -236,6 +244,7 @@ export interface AutoTradeSettings {
   markets: string[];
   per_trade_risk_pct: number;
   min_confidence: number;
+  terms: string[];
   updated_at?: string | null;
 }
 

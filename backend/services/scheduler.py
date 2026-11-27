@@ -19,7 +19,21 @@ def _cooldown_hours() -> int:
     return max(0, int(os.getenv("SCAN_COOLDOWN_HOURS", "4")))
 
 
+def _fast_enabled() -> bool:
+    # Opt-in until the term migration is applied and the lane is smoke-tested.
+    return os.getenv("FAST_SCAN_ENABLED", "0").lower() not in ("0", "false", "no")
+
+
+def _fast_interval_seconds() -> int:
+    return max(30, int(os.getenv("FAST_SCAN_INTERVAL_SECONDS", "120")))
+
+
+def _fast_resolve_interval_seconds() -> int:
+    return max(30, int(os.getenv("FAST_RESOLVE_INTERVAL_SECONDS", "60")))
+
+
 _last_scan: dict | None = None
+_last_fast_scan: dict | None = None
 _alerted_events: set[str] = set()
 _last_digest_date: str | None = None
 
@@ -27,6 +41,60 @@ _last_digest_date: str | None = None
 def get_last_scan() -> dict | None:
     """Most recent scheduler scan summary (for /api/admin/system). Single worker, in-memory."""
     return _last_scan
+
+
+def get_last_fast_scan() -> dict | None:
+    """Most recent fast-lane summary (for /api/admin/system)."""
+    return _last_fast_scan
+
+
+async def run_fast_tick(resolve_only: bool = False) -> dict:
+    """One fast-lane tick. Never raises."""
+    global _last_fast_scan
+    from backend.db.supabase import SupabaseDB, get_service_client, now_iso
+    from backend.services import engine_service, outcome_service, signal_terms
+
+    try:
+        db = SupabaseDB(await get_service_client())
+        out: dict = {"signals_generated": 0, "errors": [], "by_market": {}}
+        if not resolve_only:
+            out = await engine_service.run_fast_scan(db)
+        try:
+            budget = int(os.getenv("FAST_OUTCOME_RESOLVE_BUDGET_SECONDS", "45"))
+            resolved = await asyncio.wait_for(
+                outcome_service.resolve_active_signals(
+                    db, budget_seconds=budget, notify_expired=True,
+                    terms=signal_terms.FAST_TERMS,
+                ),
+                timeout=budget + 20,
+            )
+        except Exception as e:  # pragma: no cover - defensive
+            resolved = {"error": str(e)[:150]}
+        summary = {
+            "signals_generated": out.get("signals_generated", 0),
+            "terms": out.get("terms", []),
+            "by_market": out.get("by_market", {}),
+            "errors": out.get("errors", []),
+            "dropped_simulated": out.get("dropped_simulated", 0),
+            "dropped_invalid": out.get("dropped_invalid", 0),
+            "dropped_capped": out.get("dropped_capped", 0),
+            "resolved": resolved,
+            "at": now_iso(),
+        }
+        _last_fast_scan = summary
+        log.info(
+            "fast scan: %s signals %s, errors=%s, resolved=%s",
+            summary["signals_generated"], summary["by_market"],
+            summary["errors"], resolved,
+        )
+        return summary
+    except Exception as e:
+        log.exception("fast scan failed: %s", e)
+        _last_fast_scan = {
+            "signals_generated": 0, "by_market": {}, "errors": [str(e)[:150]],
+            "at": __import__("backend.db.supabase", fromlist=["now_iso"]).now_iso(),
+        }
+        return _last_fast_scan
 
 
 def should_send_digest(now, last_date: str | None, hour: int = 18) -> bool:
@@ -137,7 +205,8 @@ async def run_scheduled_scan() -> dict:
             budget = int(os.getenv("OUTCOME_RESOLVE_BUDGET_SECONDS", "240"))
             resolved = await asyncio.wait_for(
                 outcome_service.resolve_active_signals(
-                    db, budget_seconds=budget, notify_expired=True
+                    db, budget_seconds=budget, notify_expired=True,
+                    skip_fast=True,
                 ),
                 timeout=budget + 60,
             )
@@ -219,21 +288,50 @@ async def _loop():
         await run_scheduled_scan()
 
 
+async def _fast_loop():
+    scan_interval = _fast_interval_seconds()
+    resolve_interval = _fast_resolve_interval_seconds()
+    startup_delay = max(0, int(os.getenv("FAST_STARTUP_DELAY_SECONDS", "45")))
+    log.info(
+        "fast signal scheduler started (scan %ss, resolve %ss, first in %ss)",
+        scan_interval, resolve_interval, startup_delay,
+    )
+    await asyncio.sleep(startup_delay)
+    loop = asyncio.get_running_loop()
+    next_scan = loop.time()
+    next_resolve = loop.time()
+    while True:
+        now = loop.time()
+        if now >= next_scan:
+            next_scan = now + scan_interval
+            await run_fast_tick()
+        elif now >= next_resolve:
+            await run_fast_tick(resolve_only=True)
+        if now >= next_resolve:
+            next_resolve = now + resolve_interval
+        await asyncio.sleep(max(5, min(30, next_scan - loop.time(), next_resolve - loop.time())))
+
+
 _task: asyncio.Task | None = None
+_fast_task: asyncio.Task | None = None
 
 
 def start() -> None:
-    global _task
+    global _task, _fast_task
     if _enabled() and (_task is None or _task.done()):
         _task = asyncio.create_task(_loop(), name="engine-scheduler")
+    if _enabled() and _fast_enabled() and (_fast_task is None or _fast_task.done()):
+        _fast_task = asyncio.create_task(_fast_loop(), name="fast-signal-scheduler")
 
 
 async def stop() -> None:
-    global _task
-    if _task is not None and not _task.done():
-        _task.cancel()
-        try:
-            await asyncio.wait_for(asyncio.shield(_task), timeout=3)
-        except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
-            pass
+    global _task, _fast_task
+    for task in (_task, _fast_task):
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=3)
+            except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+                pass
     _task = None
+    _fast_task = None

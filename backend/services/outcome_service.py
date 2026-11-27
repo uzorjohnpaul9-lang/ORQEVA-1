@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 
 from backend.db.models import SIGNALS
 from backend.db.supabase import SupabaseDB, now_iso, parse_dt
-from backend.services import signal_service
+from backend.services import signal_service, signal_terms
 
 log = logging.getLogger("outcomes")
 
@@ -82,18 +82,19 @@ def _bars_for(market: str, symbol: str, interval: str = "1day",
     """OHLC bars (oldest-first) for a symbol. [] when unavailable."""
     try:
         from backend.services import market_service
-        data = market_service.get_bars(market, symbol, interval, outputsize)
+        ttl = 30 if interval in ("1min", "5min") else None
+        data = market_service.get_bars(market, symbol, interval, outputsize, ttl=ttl)
         return data.get("bars") or []
     except Exception as e:  # pragma: no cover - defensive
         log.warning("bars fetch failed for %s %s: %s", market, symbol, str(e)[:120])
         return []
 
 
-def _bar_outputsize(max_age_hours: int, interval: str) -> int:
+def _bar_outputsize(max_age_hours: float, interval: str) -> int:
     """Enough bars to cover the signal's whole life, capped by provider limits."""
-    per_hour = {"1h": 1, "30min": 2, "15min": 4, "5min": 12}.get(interval, 0)
+    per_hour = {"1min": 60, "5min": 12, "15min": 4, "30min": 2, "1h": 1}.get(interval, 0)
     if per_hour:
-        return max(48, min(200, int((max_age_hours + 24) * per_hour)))
+        return max(60, min(300, int((max_age_hours + 2) * per_hour)))
     return 200
 
 
@@ -177,37 +178,40 @@ async def _persist_outcome(db: SupabaseDB, update: dict, signal_id: str) -> None
         await db.update(SIGNALS, legacy, where={"id": signal_id})
 
 
-async def _fetch_bars_with_fallback(market: str, symbol: str, max_age_hours: int,
-                                    timeout: int) -> tuple[list[dict], str]:
-    """Intraday bars first, daily only as a flagged fallback."""
-    interval = DEFAULT_BAR_INTERVAL
-    try:
-        bars = await asyncio.wait_for(
-            asyncio.to_thread(_bars_for, market, symbol, interval,
-                              _bar_outputsize(max_age_hours, interval)),
-            timeout=timeout,
-        )
-    except Exception:
-        bars = []
-    if bars:
-        return bars, interval
-
-    interval = FALLBACK_BAR_INTERVAL
-    try:
-        bars = await asyncio.wait_for(
-            asyncio.to_thread(_bars_for, market, symbol, interval, 120),
-            timeout=timeout,
-        )
-    except Exception:
-        bars = []
-    return bars, interval
+async def _fetch_bars_with_fallback(market: str, symbol: str, max_age_hours: float,
+                                    timeout: int,
+                                    preferred_interval: str = DEFAULT_BAR_INTERVAL
+                                    ) -> tuple[list[dict], str]:
+    """Preferred interval first, then coarser bars only as a flagged fallback."""
+    if preferred_interval in ("1min", "5min"):
+        candidates = (preferred_interval, "5min", "1min", FALLBACK_BAR_INTERVAL)
+    else:
+        candidates = (preferred_interval, FALLBACK_BAR_INTERVAL)
+    intervals = []
+    for interval in candidates:
+        if interval not in intervals:
+            intervals.append(interval)
+    for interval in intervals:
+        try:
+            bars = await asyncio.wait_for(
+                asyncio.to_thread(_bars_for, market, symbol, interval,
+                                  _bar_outputsize(max_age_hours, interval)),
+                timeout=timeout,
+            )
+        except Exception:
+            bars = []
+        if bars:
+            return bars, interval
+    return [], preferred_interval
 
 
 async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT_MAX_AGE_HOURS,
                                  limit: int = DEFAULT_LIMIT,
                                  budget_seconds: int = DEFAULT_BUDGET_SECONDS,
                                  fetch_timeout: int = DEFAULT_BAR_FETCH_TIMEOUT,
-                                 notify_expired: bool = False) -> dict:
+                                 notify_expired: bool = False,
+                                 terms: tuple[str, ...] | list[str] | None = None,
+                                 skip_fast: bool = False) -> dict:
     """Resolve/expire active signals. Returns counts by outcome.
 
     Bar feeds are fetched on a worker thread (``asyncio.to_thread``) so the
@@ -218,21 +222,44 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
     get a Telegram notice when one of their pairs expires. Manual admin passes
     leave it off, so pressing "resolve" never messages users.
     """
+    columns = "id,symbol,market,direction,confidence,entry_price,stop_loss,take_profit,created_at,term,tier_required"
     try:
         rows = await db.fetch_all(
             SIGNALS,
             where={"status": "active"},
             order="created_at.asc",
             limit=limit,
-            columns="id,symbol,market,direction,confidence,entry_price,stop_loss,take_profit,created_at",
+            columns=columns,
         )
-    except Exception as e:  # pragma: no cover - defensive
-        log.warning("resolve_active_signals fetch failed: %s", str(e)[:120])
-        return {"tp": 0, "sl": 0, "expired": 0, "skipped": 0, "errors": [str(e)[:150]]}
+    except Exception:
+        try:
+            rows = await db.fetch_all(
+                SIGNALS,
+                where={"status": "active"},
+                order="created_at.asc",
+                limit=limit,
+                columns=columns.replace(",term", "").replace(",tier_required", ""),
+            )
+        except Exception as e:  # pragma: no cover - defensive
+            log.warning("resolve_active_signals fetch failed: %s", str(e)[:120])
+            return {"tp": 0, "sl": 0, "expired": 0, "skipped": 0, "errors": [str(e)[:150]]}
 
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+    wanted_terms = {
+        signal_terms.normalize_term(t) for t in (terms or [])
+    }
+    if wanted_terms:
+        rows = [
+            r for r in rows
+            if signal_terms.normalize_term(r.get("term")) in wanted_terms
+        ]
+    elif skip_fast:
+        rows = [
+            r for r in rows
+            if not signal_terms.is_fast(r.get("term"))
+        ]
+
     counts = {"tp": 0, "sl": 0, "expired": 0, "skipped": 0, "budget_exhausted": False}
-    bar_cache: dict[tuple[str, str], tuple[list[dict], str]] = {}
+    bar_cache: dict[tuple[str, str, str], tuple[list[dict], str]] = {}
     expired_batch: list[dict] = []
     errors: list[str] = []
     slow: list[dict] = []
@@ -245,11 +272,15 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
         try:
             market = s.get("market")
             symbol = s.get("symbol")
-            key = (market, symbol)
+            term = signal_terms.normalize_term(s.get("term"))
+            term_max_age = signal_terms.max_age_hours(term)
+            resolver_interval = signal_terms.resolver_interval(term)
+            key = (market, symbol, resolver_interval)
             if key not in bar_cache:
                 started = time.monotonic()
                 bar_cache[key] = await _fetch_bars_with_fallback(
-                    market, symbol, max_age_hours, fetch_timeout
+                    market, symbol, term_max_age, fetch_timeout,
+                    preferred_interval=resolver_interval,
                 )
                 elapsed = time.monotonic() - started
                 if elapsed >= 2.0:
@@ -282,9 +313,10 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
                 confidence = s.get("confidence")
                 decayed = (
                     confidence is not None
-                    and not signal_service.is_signal_valid(confidence, created)
+                    and not signal_service.is_signal_valid(confidence, created, term=term)
                 )
-                if decayed or (created_dt is not None and created_dt < cutoff):
+                term_cutoff = datetime.now(timezone.utc) - timedelta(hours=term_max_age)
+                if decayed or (created_dt is not None and created_dt < term_cutoff):
                     last = _f(bars[-1].get("close")) if bars else None
                     update = {
                         "status": "expired",
@@ -298,7 +330,7 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
                     outcome = "expired"
                     expiry_reason = signal_service.signal_validity(
                         confidence, created, status="expired",
-                        resolved_at=update["resolved_at"],
+                        resolved_at=update["resolved_at"], term=term,
                     ).get("invalidation_reason")
 
             if update is None:
@@ -327,6 +359,8 @@ async def resolve_active_signals(db: SupabaseDB, *, max_age_hours: int = DEFAULT
                     "resolved_at": update.get("resolved_at"),
                     "exit_price": update.get("exit_price"),
                     "invalidation_reason": expiry_reason,
+                    "term": term,
+                    "tier_required": s.get("tier_required") or "free",
                 })
         except Exception as e:  # pragma: no cover - defensive
             errors.append(f"{s.get('symbol')}: {str(e)[:100]}")

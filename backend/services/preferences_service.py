@@ -2,6 +2,7 @@
 
 from backend.db.models import USERS, USER_PREFERENCES, gen_uuid
 from backend.db.supabase import SupabaseDB, now_iso
+from backend.services import signal_terms
 
 EDITABLE = {
     "telegram_signals", "telegram_tp_sl", "telegram_market_analysis",
@@ -9,7 +10,8 @@ EDITABLE = {
     "email_notifications", "web_notifications",
     "default_market", "risk_tolerance", "theme",
     # Phase C: signal filters + digest
-    "watchlist", "directions", "min_confidence", "telegram_weekly_digest",
+    "watchlist", "directions", "min_confidence", "terms",
+    "telegram_weekly_digest",
 }
 
 _DEFAULTS = {
@@ -26,6 +28,7 @@ _DEFAULTS = {
     "watchlist": [],
     "directions": [],
     "min_confidence": 0.0,
+    "terms": [],
     "telegram_weekly_digest": False,
 }
 
@@ -60,6 +63,10 @@ def _norm_directions(value) -> list[str]:
     return out
 
 
+def _norm_terms(value) -> list[str]:
+    return signal_terms.normalize_terms(value)
+
+
 def _norm_min_confidence(value) -> float:
     try:
         conf = float(value)
@@ -77,6 +84,8 @@ def _sanitize(changes: dict) -> dict:
         out["directions"] = _norm_directions(out["directions"])
     if "min_confidence" in out:
         out["min_confidence"] = _norm_min_confidence(out["min_confidence"])
+    if "terms" in out:
+        out["terms"] = _norm_terms(out["terms"])
     return out
 
 
@@ -87,7 +96,13 @@ async def get_or_create(db: SupabaseDB, user_id: str) -> dict:
         try:
             prefs = await db.insert(USER_PREFERENCES, row)
         except Exception:
-            prefs = await db.fetch_one(USER_PREFERENCES, {"user_id": user_id}) or row
+            # The term migration may not have run yet; still create the
+            # preference row so filters keep working.
+            legacy = {k: v for k, v in row.items() if k != "terms"}
+            try:
+                prefs = await db.insert(USER_PREFERENCES, legacy)
+            except Exception:
+                prefs = await db.fetch_one(USER_PREFERENCES, {"user_id": user_id}) or row
     for k, v in _DEFAULTS.items():
         prefs.setdefault(k, v)
     return prefs
@@ -101,7 +116,14 @@ async def update(db: SupabaseDB, user_id: str, changes: dict) -> dict:
     prefs = await get_or_create(db, user_id)
     allowed = _sanitize({k: v for k, v in changes.items() if k in EDITABLE and v is not None})
     if prefs.get("id") and allowed:
-        await db.update(USER_PREFERENCES, allowed, where={"user_id": user_id})
+        try:
+            await db.update(USER_PREFERENCES, allowed, where={"user_id": user_id})
+        except Exception:
+            # Pre-migration databases have no terms column. Save every other
+            # preference instead of failing the whole update.
+            legacy = {k: v for k, v in allowed.items() if k != "terms"}
+            if legacy:
+                await db.update(USER_PREFERENCES, legacy, where={"user_id": user_id})
     prefs.update(allowed)
     return prefs
 
@@ -126,6 +148,10 @@ def matches_filters(prefs: dict, signal: dict) -> bool:
         allowed_dirs = {str(d).lower() for d in directions}
         if str(signal.get("direction") or "").lower() not in allowed_dirs:
             return False
+
+    terms = signal_terms.normalize_terms(prefs.get("terms"))
+    if terms and signal_terms.normalize_term(signal.get("term")) not in terms:
+        return False
 
     try:
         min_conf = float(prefs.get("min_confidence") or 0)

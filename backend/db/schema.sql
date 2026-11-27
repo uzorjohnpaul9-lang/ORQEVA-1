@@ -66,14 +66,19 @@ create table if not exists public.signals (
   tier             text not null default 'free' check (tier in ('free','premium','vip')),
   user_id          text references public.users (id) on delete cascade,
   created_at       timestamptz not null default timezone('utc', now()),
-  expires_at       timestamptz
+  expires_at       timestamptz,
+  term             text not null default 'very_long'
+                   check (term in ('very_short','short','medium','long','very_long')),
+  timeframe        text,
+  resolution_interval text
 );
 
 alter table public.signals enable row level security;
 
 create index if not exists signals_status_idx  on public.signals (status);
 create index if not exists signals_symbol_idx on public.signals (symbol);
-create index if not exists signals_created_idx on public.signals (created_at desc pasta);
+create index if not exists signals_created_idx on public.signals (created_at desc);
+create index if not exists signals_status_term_idx on public.signals (status, term);
 
 -- ---------------------------------------------------------------------------
 -- trades
@@ -130,6 +135,7 @@ create table if not exists public.user_preferences (
   watchlist            text[] not null default '{}',
   directions           text[] not null default '{}',
   min_confidence       numeric(4,3) not null default 0,
+  terms                text[] not null default '{}',
   telegram_weekly_digest boolean not null default false,
   demo_starting_balance numeric(18,8) not null default 100000,
   created_at           timestamptz not null default timezone('utc', now()),

@@ -22,7 +22,7 @@ from backend.db.models import (
 from backend.db.supabase import SupabaseDB, now_iso
 from backend.db.schemas import AutoTradeSettings
 from backend.services import notification_service as notif_service
-from backend.services import risk_service
+from backend.services import risk_service, signal_terms
 from backend.services import telegram_service
 from backend.services.order_executor import (
     active_connection,
@@ -77,7 +77,7 @@ async def get_or_create_settings(db: SupabaseDB, user_id: str) -> dict:
         return settings
     defaults = AutoTradeSettings().model_dump()
     try:
-        settings = await db.insert(AUTO_TRADE_SETTINGS, {
+        row = {
             "id": gen_uuid(),
             "user_id": user_id,
             "enabled": defaults["enabled"],
@@ -85,10 +85,22 @@ async def get_or_create_settings(db: SupabaseDB, user_id: str) -> dict:
             "markets": defaults["markets"],
             "per_trade_risk_pct": defaults["per_trade_risk_pct"],
             "min_confidence": defaults["min_confidence"],
+            "terms": defaults["terms"],
             "created_at": now_iso(),
             "updated_at": now_iso(),
-        })
-        return settings
+        }
+        try:
+            settings = await db.insert(AUTO_TRADE_SETTINGS, row)
+            return settings
+        except Exception:
+            legacy = {k: v for k, v in row.items() if k != "terms"}
+            try:
+                return await db.insert(AUTO_TRADE_SETTINGS, legacy)
+            except Exception:
+                winner = await db.fetch_one(AUTO_TRADE_SETTINGS, {"user_id": user_id})
+                if winner:
+                    return winner
+                return {**defaults, "user_id": user_id}
     except Exception:
         winner = await db.fetch_one(AUTO_TRADE_SETTINGS, {"user_id": user_id})
         if winner:
@@ -99,12 +111,14 @@ async def get_or_create_settings(db: SupabaseDB, user_id: str) -> dict:
 async def update_settings(db: SupabaseDB, user_id: str, data: AutoTradeSettings) -> dict:
     current = await get_or_create_settings(db, user_id)
     markets = [m for m in data.markets if m in MARKETS] or MARKETS
+    terms = signal_terms.normalize_terms(data.terms)
     changes = {
         "enabled": data.enabled,
         "route": data.route,
         "markets": markets,
         "per_trade_risk_pct": data.per_trade_risk_pct,
         "min_confidence": data.min_confidence,
+        "terms": terms,
         "updated_at": now_iso(),
     }
     try:
@@ -112,7 +126,13 @@ async def update_settings(db: SupabaseDB, user_id: str, data: AutoTradeSettings)
         if updated:
             return updated[0]
     except Exception:
-        pass
+        legacy = {k: v for k, v in changes.items() if k != "terms"}
+        try:
+            updated = await db.update(AUTO_TRADE_SETTINGS, legacy, where={"user_id": user_id})
+            if updated:
+                return updated[0]
+        except Exception:
+            pass
     return {**current, **changes}
 
 
@@ -130,6 +150,7 @@ def _view_settings(s: dict) -> dict:
         "markets": [m for m in markets if m in MARKETS],
         "per_trade_risk_pct": float(s.get("per_trade_risk_pct") or 1.0),
         "min_confidence": float(s.get("min_confidence") or 0.0),
+        "terms": signal_terms.normalize_terms(s.get("terms")),
         "updated_at": s.get("updated_at"),
     }
 
@@ -232,6 +253,11 @@ async def execute_for_signal(db: SupabaseDB, signal: dict, settings_rows: list[d
             if conf < float(s.get("min_confidence") or 0):
                 continue
 
+            term = signal_terms.normalize_term(signal.get("term"))
+            allowed_terms = signal_terms.normalize_terms(s.get("terms"))
+            if allowed_terms and term not in allowed_terms:
+                continue
+
             # Dedupe: a prior scan that placed/skipped/rejected this signal is authoritative.
             existing = await db.fetch_one(
                 AUTO_TRADE_LOG, {"user_id": s["user_id"], "signal_id": signal.get("id")}
@@ -240,6 +266,16 @@ async def execute_for_signal(db: SupabaseDB, signal: dict, settings_rows: list[d
                 continue
 
             route = s.get("route") or "paper"
+            # Fast scalps are paper-only by design: 1m/5m signals are a
+            # research/forward-test lane, never an unattended live order.
+            # The strategy prefix is a belt-and-braces check for rows saved
+            # before the term migration landed.
+            is_fast = (
+                signal_terms.paper_only(term)
+                or str(signal.get("strategy") or "").startswith("Fast ")
+            )
+            if is_fast:
+                route = "paper"
             if route == "live" and _TIER_RANK.get(user.get("tier") or "free", 0) < _LIVE_MIN_TIER_RANK:
                 await _log(db, user_id=s["user_id"], signal=signal, status="skipped",
                            route=route, reason="live routing requires a paid plan")
@@ -359,12 +395,13 @@ async def execute_for_signal(db: SupabaseDB, signal: dict, settings_rows: list[d
 async def _notify(db: SupabaseDB, user: dict, signal: dict, result: dict, route: str) -> None:
     desc = f"{signal.get('symbol')} {signal.get('direction')} @ {result.get('entry_price')}"
     ledger = "demo" if result.get("is_demo") else "live"
+    horizon = signal_terms.horizon_label(signal.get("term"))
     try:
         await notif_service.create(
             db, user["id"], "auto_trade",
             f"Auto order placed: {desc}",
             f"{route} route ({ledger} ledger) · {signal.get('strategy')} · "
-            f"via {result.get('venue') or 'paper'}",
+            f"{horizon} · via {result.get('venue') or 'paper'}",
         )
         await telegram_service.notify_user(
             db, user, "signals",

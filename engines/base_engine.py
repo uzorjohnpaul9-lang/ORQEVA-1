@@ -28,7 +28,8 @@ class Signal:
                  confidence: float, reason: str, target_price: float,
                  stop_loss: float, signal_type: str,
                  fees: float = 0.0, slippage: float = 0.0,
-                 metadata: Optional[Dict] = None):
+                 metadata: Optional[Dict] = None,
+                 term: str = "very_long", timeframe: Optional[str] = None):
         self.symbol = symbol
         self.direction = direction
         self.price = price
@@ -41,6 +42,8 @@ class Signal:
         self.slippage = slippage
         self.timestamp = datetime.now().isoformat()
         self.metadata = metadata or {}
+        self.term = term
+        self.timeframe = timeframe or (self.metadata.get("timeframe"))
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -55,6 +58,8 @@ class Signal:
             "timestamp": self.timestamp,
             "fees": self.fees,
             "slippage": self.slippage,
+            "term": self.term,
+            "timeframe": self.timeframe,
         }
 
 
