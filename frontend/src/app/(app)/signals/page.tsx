@@ -169,6 +169,10 @@ function SignalCardSkeleton() {
 export default function SignalsPage() {
   const { token, user } = useAuth();
   const { live, incoming } = useSignalsFeed();
+  const isVip = (user?.tier || "free").toLowerCase() === "vip";
+  const visibleTerms = isVip
+    ? TERMS
+    : TERMS.filter((tm) => tm !== "very_short" && tm !== "short");
   const [signals, setSignals] = useState<Signal[]>([]);
   const [accuracy, setAccuracy] = useState<AccuracyStats | null>(null);
   const [market, setMarket] = useState<(typeof MARKETS)[number]>("all");
@@ -416,19 +420,21 @@ export default function SignalsPage() {
     return signals.filter((s) => {
       if (seen.has(s.id)) return false;
       seen.add(s.id);
+      const isFast = s.term === "very_short" || s.term === "short";
+      if (isFast && !isVip) return false;
       const statusMatch =
         status === "all" ||
         (status === "active"
           ? s.status === "active" && s.valid !== false
           : s.status !== "active");
       return (
-        watched.has(s.symbol.toUpperCase()) &&
+        (watched.has(s.symbol.toUpperCase()) || (isVip && isFast)) &&
         (market === "all" || s.market === market) &&
         (term === "all" || (s.term ?? "very_long") === term) &&
         statusMatch
       );
     });
-  }, [signals, watched, market, status, term]);
+  }, [signals, watched, market, status, term, isVip]);
 
   return (
     <div className="space-y-6">
@@ -599,7 +605,7 @@ export default function SignalsPage() {
           </button>
         ))}
         <span className="w-px h-5 bg-border mx-1" />
-        {TERMS.map((tm) => (
+        {visibleTerms.map((tm) => (
           <button
             key={tm}
             onClick={() => setTerm(tm)}

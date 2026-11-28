@@ -150,3 +150,24 @@ async def test_in_app_fanout_respects_signal_tier(monkeypatch):
         [],
     )
     assert created == [("vip-1", "buy signal: BTC/USD")]
+
+
+async def test_non_vip_teasers_never_expose_fast_terms():
+    rows = [
+        {"symbol": "BTC/USD", "market": "crypto", "direction": "buy",
+         "confidence": 0.70, "tier_required": "vip", "created_at": _ago(1),
+         "term": "very_short"},
+        {"symbol": "ETH/USD", "market": "crypto", "direction": "buy",
+         "confidence": 0.70, "tier_required": "premium", "created_at": _ago(10),
+         "term": "medium"},
+    ]
+    db = _FakeDB(rows)
+    teasers = await signal_service.locked_teasers(db, tier="free")
+    assert [t["term"] for t in teasers] == ["medium"]
+    assert set(db.calls[-1]["where"]["term"]) == {"medium", "long", "very_long"}
+
+
+async def test_non_vip_cannot_request_fast_teasers():
+    db = _FakeDB([])
+    assert await signal_service.locked_teasers(db, tier="premium", term="short") == []
+    assert db.calls == []

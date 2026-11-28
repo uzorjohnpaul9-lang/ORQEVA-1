@@ -213,7 +213,14 @@ async def locked_teasers(db: SupabaseDB, market: str | None = None,
     if status:
         where["status"] = status
     if term:
-        where["term"] = signal_terms.normalize_term(term)
+        normalized = signal_terms.normalize_term(term)
+        if user_tier != "vip" and signal_terms.is_fast(normalized):
+            return []
+        where["term"] = normalized
+    elif user_tier != "vip":
+        # Fast terms are a VIP-only lane: do not leak even their metadata as a
+        # locked teaser to free/premium users.
+        where["term"] = [t for t in signal_terms.all_terms() if not signal_terms.is_fast(t)]
     try:
         rows = await db.fetch_all(SIGNALS, where=where, order="created_at.desc", limit=limit)
     except Exception:
@@ -221,6 +228,8 @@ async def locked_teasers(db: SupabaseDB, market: str | None = None,
             raise
         where.pop("term", None)
         rows = await db.fetch_all(SIGNALS, where=where, order="created_at.desc", limit=limit)
+    if user_tier != "vip":
+        rows = [r for r in rows if not signal_terms.is_fast(r.get("term"))]
     return [_teaser(r) for r in rows]
 
 
